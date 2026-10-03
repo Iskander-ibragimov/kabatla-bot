@@ -293,3 +293,120 @@ describe("migration 0002: word keys without the punctuation at the edges", () =>
     expect(await keys(l1)).toEqual([{ word: "?!", word_key: "?!" }]);
   });
 });
+
+describe("migration 0003: learners whose level has no open deck start at the nearest level the catalog has (ruling T16c)", () => {
+  const migration = () => env.TEST_MIGRATIONS.find((m) => m.name === "0003_start_level_for_stranded_users.sql")!;
+  const run = async () => { for (const q of migration().queries) await env.DB.prepare(q).run(); };
+  /** A user who finished onboarding at `level` (or is still on `step`), subscribed to nothing. */
+  async function userAt(tgId: number, level: number, step: string | null = null) {
+    const repo = new Repo(env.DB);
+    const id = await repo.insertUser({ tgId, chatId: tgId, lang: "ru", now: T });
+    await repo.updateUser(id, { level, onboardingStep: step });
+    return id;
+  }
+  const levelOf = async (id: number) => (await new Repo(env.DB).getUser(id))!.level;
+  const decksOf = (id: number) => new Repo(env.DB).userDeckIds(id);
+  const snapshot = async () => ({
+    users: (await env.DB.prepare("SELECT * FROM users ORDER BY id").all()).results,
+    subscriptions: (await env.DB.prepare("SELECT * FROM user_decks ORDER BY user_id, deck_id").all()).results,
+  });
+
+  it("is two statements: the deck is opened first, then the level is moved", () => {
+    expect(migration().queries.map((q) => q.trim().split(/\s+/).slice(0, 2).join(" "))).toEqual(["INSERT OR", "UPDATE users"]);
+  });
+
+  it("the owner's case: level 4, only level 1 published, nothing open → level 1 with level 1 open", async () => {
+    const ids = await seedLevels(env.DB, { 1: ["бер"] });
+    const owner = await userAt(1, 4);
+    await run();
+    expect(await levelOf(owner)).toBe(1);
+    expect(await decksOf(owner)).toEqual([ids[1]]);
+    const row = await env.DB.prepare("SELECT added_at FROM user_decks WHERE user_id = ?").bind(owner).first<{ added_at: number }>();
+    expect(Math.abs(row!.added_at - Date.now())).toBeLessThan(60_000);
+  });
+
+  it("the same learner after «Открыть пропущенные»: level 1, still one subscription row, with its date", async () => {
+    const ids = await seedLevels(env.DB, { 1: ["бер"] });
+    const owner = await userAt(1, 4);
+    await new Repo(env.DB).subscribe(owner, ids[1]!, T);
+    await run();
+    expect(await levelOf(owner)).toBe(1);
+    expect((await env.DB.prepare("SELECT deck_id, added_at FROM user_decks WHERE user_id = ?").bind(owner).all()).results).toEqual([{ deck_id: ids[1], added_at: T }]);
+  });
+
+  it("leaves alone a learner whose level is open, one in onboarding and one who finished every level", async () => {
+    const ids = await seedLevels(env.DB, { 1: ["бер"], 2: ["ике"] });
+    const repo = new Repo(env.DB);
+    const settled = await userAt(1, 2);
+    await repo.subscribe(settled, ids[2]!, T);
+    const onboarding = await userAt(2, 4, "tz");
+    const placing = await userAt(3, 1, "placement");
+    const done = await userAt(4, 21);
+    const before = await snapshot();
+    await run();
+    expect(await snapshot()).toEqual(before);
+    expect([await levelOf(settled), await levelOf(onboarding), await levelOf(placing), await levelOf(done)]).toEqual([2, 4, 1, 21]);
+    expect(await decksOf(onboarding)).toEqual([]);
+    expect(await decksOf(done)).toEqual([]);
+  });
+
+  it("changes nothing while the catalog has no levels", async () => {
+    const repo = new Repo(env.DB);
+    const stranded = await userAt(1, 4);
+    // A deck of the learner's own is not a level.
+    await repo.customDeck(stranded, T);
+    const before = await snapshot();
+    await run();
+    expect(await snapshot()).toEqual(before);
+    expect(await levelOf(stranded)).toBe(4);
+  });
+
+  it("applies the start-level rule: the highest level not above the learner's, else the lowest one", async () => {
+    const ids = await seedLevels(env.DB, { 1: ["бер"], 3: ["өч"] });
+    const between = await userAt(1, 2);
+    const above = await userAt(2, 10);
+    await run();
+    expect([await levelOf(between), await levelOf(above)]).toEqual([1, 3]);
+    expect(await decksOf(between)).toEqual([ids[1]]);
+    expect(await decksOf(above)).toEqual([ids[3]]);
+    // Only levels above the learner's exist: the lowest of them.
+    await env.DB.batch(["user_decks", "notes", "decks", "users"].map((t) => env.DB.prepare(`DELETE FROM ${t}`)));
+    const high = await seedLevels(env.DB, { 5: ["биш"], 8: ["сигез"] });
+    const below = await userAt(3, 2);
+    await run();
+    expect(await levelOf(below)).toBe(5);
+    expect(await decksOf(below)).toEqual([high[5]]);
+  });
+
+  it("opens the learner's own level when its deck exists but was never opened, and keeps the level", async () => {
+    const ids = await seedLevels(env.DB, { 1: ["бер"], 4: ["дүрт"] });
+    const owner = await userAt(1, 4);
+    await run();
+    expect(await levelOf(owner)).toBe(4);
+    expect(await decksOf(owner)).toEqual([ids[4]]);
+  });
+
+  it("touches neither cards, review history, own words nor other subscriptions, and a second run changes nothing", async () => {
+    const ids = await seedLevels(env.DB, { 1: ["бер", "ике"] });
+    const repo = new Repo(env.DB);
+    const owner = await userAt(1, 4);
+    const own = await repo.customDeck(owner, T);
+    const [ownNote] = await repo.insertNotes(own, [note("үзем")]);
+    const cardId = await repo.insertCard(owner, ownNote!, "tt_ru", { ...newMem(T), state: "review", reps: 1, due: T + DAY, scheduledDays: 1, stability: 1, difficulty: 5, lastReview: T });
+    await repo.batch([repo.insertLogStmt({ cardId, userId: owner, rating: 3, stateBefore: newMem(T), intervalBeforeDays: 0, intervalAfterMs: DAY, reviewedAt: T, wasNew: true, learnedNow: false, streakBefore: 0, lastStudyDayBefore: null })]);
+    const rest = async () => ({
+      cards: (await env.DB.prepare("SELECT * FROM cards").all()).results,
+      log: (await env.DB.prepare("SELECT * FROM review_log").all()).results,
+      notes: (await env.DB.prepare("SELECT * FROM notes").all()).results,
+      decks: (await env.DB.prepare("SELECT * FROM decks").all()).results,
+    });
+    const before = await rest();
+    await run();
+    expect(await rest()).toEqual(before);
+    expect(await levelOf(owner)).toBe(1);
+    expect((await decksOf(owner)).sort((a, b) => a - b)).toEqual([ids[1]!, own].sort((a, b) => a - b));
+    const once = await snapshot();
+    await run();
+    expect(await snapshot()).toEqual(once);
+  });
+});
