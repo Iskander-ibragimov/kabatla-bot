@@ -61,6 +61,8 @@ export const ru = {
   dupLine: (word: string, deck: string, linked: boolean) => `ℹ️ «${word}» уже учите в колоде «${deck}»${linked ? " — прикрепил ссылку 🔗, прогресс сохранён" : ""}.`,
   manualAsk: (word: string) => `🤖 Не получилось перевести «${word}» автоматически. Пришлите перевод сообщением — я создам карточку.`,
   notTranslated: (list: string) => `Не удалось перевести: ${list}. Пришлите их позже или по одному.`,
+  /** Answer to a typed line (a word or phrase) or a hand-typed translation that is longer than `max` characters. */
+  tooLong: (max: number) => `Слишком длинно: в одной строке может быть до ${max} символов. Пришлите текст короче.`,
   added: (words: string) => `✅ Добавлено в «Мои слова»: ${words}`,
   notAdded: "Не добавляю.",
   editAsk: (word: string) => `Пришлите свой перевод для «${word}»`,

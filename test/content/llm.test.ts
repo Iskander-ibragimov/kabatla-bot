@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { DECK_SYSTEM, LlmUnavailable, WORDS_SYSTEM, WordCardSchema, completeCards } from "../../src/content/llm";
+import { DECK_SYSTEM, LlmUnavailable, MAX, WORDS_SYSTEM, WordCardSchema, completeCards } from "../../src/content/llm";
 import { isTatarText } from "../../src/content/tatar";
 import { card, chat, client, fakeFetch, json, llmReturning } from "../helpers/llm";
 
@@ -84,7 +84,49 @@ describe("WordCardSchema", () => {
   });
 });
 
+describe("WordCardSchema: length limits", () => {
+  const tat = (n: number) => "ә".repeat(n);
+  const rus = (n: number) => "я".repeat(n);
+
+  it.each([
+    ["input", 200, rus], ["word", 80, tat], ["translation", 200, rus], ["exampleTt", 300, tat], ["exampleRu", 300, rus],
+  ] as const)("%s holds at most %i characters", (field, max, text) => {
+    expect(ok({ [field]: text(max) }), `${field} of ${max}`).toBe(true);
+    expect(ok({ [field]: text(max + 1) }), `${field} of ${max + 1}`).toBe(false);
+    // The spaces around a text are cut before it is measured.
+    expect(ok({ [field]: `  ${text(max)}  ` }), `${field} of ${max} with spaces around`).toBe(true);
+    // A model stuck in a loop: far over the limit.
+    expect(ok({ [field]: text(5000) })).toBe(false);
+  });
+
+  it("names the limits it checks", () => {
+    expect(MAX).toEqual({ input: 200, word: 80, translation: 200, example: 300 });
+  });
+
+  it("rejects a line break inside any field", () => {
+    const parts: Record<string, [string, string]> = {
+      input: ["эни", "әни"], word: ["хәерле", "иртә"], translation: ["мама", "мать"], exampleTt: ["Әни өйдә.", "Әти дә."], exampleRu: ["Мама дома.", "Папа тоже."],
+    };
+    for (const [field, [a, b]] of Object.entries(parts)) {
+      expect(ok({ [field]: `${a} ${b}` }), `${field} on one line`).toBe(true);
+      for (const br of ["\n", "\r", "\r\n", "\u2028", "\u2029", "\u0085", "\u000B", "\u000C"]) {
+        expect(ok({ [field]: `${a}${br}${b}` }), `${field} with ${JSON.stringify(br)}`).toBe(false);
+      }
+    }
+  });
+});
+
 describe("completeCards", () => {
+  it("drops a card with an over-long field and keeps the rest", async () => {
+    const loop = { ...card("сәер", "странный"), exampleTt: "Бу сәер. ".repeat(200) };
+    const f = llmReturning([card("матур", "красивый"), loop, { ...card("яшел", "зелёный"), translation: "зелёный, ".repeat(40) }, card("зур", "большой")]);
+    expect((await completeCards(client(f), "s", "u")).map((c) => c.word)).toEqual(["матур", "зур"]);
+  });
+  it("asks for at most 4 000 tokens of output", async () => {
+    const f = llmReturning([card("матур", "красивый")]);
+    await completeCards(client(f), "s", "u");
+    expect((JSON.parse(f.bodies[0]!) as { max_tokens?: number }).max_tokens).toBe(4000);
+  });
   it("drops the invalid cards and keeps the valid ones", async () => {
     const f = llmReturning([card("матур", "красивый"), { ...card("сәер", "странный"), exampleRu: "Бу сәер." }, "junk", null, card("яшел", "зелёный")]);
     expect((await completeCards(client(f), "s", "u")).map((c) => c.word)).toEqual(["матур", "яшел"]);

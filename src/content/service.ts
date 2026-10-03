@@ -1,7 +1,7 @@
 import { type NoteInput, type NoteRow, type Repo, type User, wordKey } from "../db/repo";
 import { consume, refund } from "../entitlements/service";
 import { type Entity, type WordLink, parseWordsAndLinks } from "./links";
-import { DECK_SYSTEM, type LlmClient, LlmUnavailable, WORDS_SYSTEM, type WordCard, completeCards } from "./llm";
+import { DECK_SYSTEM, type LlmClient, LlmUnavailable, MAX, WORDS_SYSTEM, type WordCard, completeCards } from "./llm";
 import { hasTatarLetters } from "./tatar";
 import { transcribe } from "./transcribe";
 
@@ -14,6 +14,7 @@ export interface Duplicate { word: string; deckTitle: string; linkAdded: boolean
 export type AddResult =
   | { kind: "ask-words"; url: string }
   | { kind: "empty" }
+  | { kind: "too-long"; max: number }
   | { kind: "duplicates-only"; duplicates: Duplicate[] }
   | { kind: "preview"; previewId: number; items: CardDraft[]; duplicates: Duplicate[]; manual: string[] }
   | { kind: "manual"; word: string; others: string[]; duplicates: Duplicate[] };
@@ -22,6 +23,21 @@ export type GenResult = { kind: "limit" } | { kind: "failed" } | { kind: "previe
 interface Deps { llm: LlmClient }
 interface PendingManual { word: string; url: string | null }
 interface PendingPreviewEdit { previewId: number }
+
+/** What a learner may type, in characters: a line with a word or phrase, and a translation given by hand. The same limits as for the model's fields. */
+export const MAX_TYPED = { line: MAX.word, translation: MAX.translation } as const;
+
+/** A translation typed by hand, put on one line; null when it is longer than MAX_TYPED.translation. */
+export function typedTranslation(text: string): string | null {
+  const translation = text.replace(/\s+/g, " ").trim();
+  return translation.length <= MAX_TYPED.translation ? translation : null;
+}
+/** For the methods that store a typed translation: the callers check the length first and ask for a shorter text. */
+function storedTranslation(text: string): string {
+  const translation = typedTranslation(text);
+  if (translation === null) throw new Error(`translation too long: over ${MAX_TYPED.translation} characters`);
+  return translation;
+}
 
 const PENDING_URL_MS = 10 * 60_000;
 const PREVIEW_TTL_MS = 24 * 3_600_000;
@@ -69,6 +85,7 @@ export class ContentService {
    * among the words the user already learns (a duplicate), in the catalog (a ready card, copied from a level that is not
    * open yet), and only then the model is asked, once for all the remaining lines. The model may restore the spelling or
    * give the Tatar word for a Russian line, so both lookups are repeated for the words it returned.
+   * A message with a line of more than MAX_TYPED.line characters is answered with `too-long`.
    */
   async prepareAdd(user: User, text: string, entities: Entity[]): Promise<AddResult> {
     const parsed = parseWordsAndLinks(text, entities);
@@ -78,6 +95,8 @@ export class ContentService {
       await this.repo.updateUser(user.id, { pendingUrl: parsed.orphanUrl, pendingUrlAt: this.now });
       return { kind: "ask-words", url: parsed.orphanUrl };
     }
+    // A longer line is not a word or a phrase. Nothing is looked up or stored, so a remembered link waits for the next message.
+    if (lines.some((l) => l.word.length > MAX_TYPED.line)) return { kind: "too-long", max: MAX_TYPED.line };
     if (user.pendingUrl && user.pendingUrlAt != null) {
       if (this.now - user.pendingUrlAt <= PENDING_URL_MS && lines.every((l) => !l.url)) for (const l of lines) l.url = user.pendingUrl;
       await this.repo.updateUser(user.id, { pendingUrl: null, pendingUrlAt: null });
@@ -155,13 +174,14 @@ export class ContentService {
     return byInput;
   }
 
-  /** Saves a card from a translation the user typed after AI was unavailable. */
-  async completeManual(user: User, translation: string): Promise<string | null> {
+  /** Saves a card from a translation the user typed after AI was unavailable. Throws on a translation that `typedTranslation` refuses. */
+  async completeManual(user: User, text: string): Promise<string | null> {
     const pending = user.pendingEdit ? (JSON.parse(user.pendingEdit) as { manual?: PendingManual }) : null;
     if (!pending?.manual) return null;
+    const translation = storedTranslation(text);
     const m = pending.manual;
     const deckId = await this.repo.customDeck(user.id, this.now);
-    await this.repo.insertNotes(deckId, [{ word: m.word, transcription: transcribe(m.word), pos: "", translation: translation.trim(), exampleTt: "", exampleRu: "", sourceUrl: m.url }]);
+    await this.repo.insertNotes(deckId, [{ word: m.word, transcription: transcribe(m.word), pos: "", translation, exampleTt: "", exampleRu: "", sourceUrl: m.url }]);
     await this.repo.updateUser(user.id, { pendingEdit: null });
     return m.word;
   }
@@ -174,15 +194,16 @@ export class ContentService {
     return items;
   }
 
-  /** Applies a typed translation to the preview being edited; returns the updated items and preview id. */
-  async editPreviewTranslation(user: User, translation: string): Promise<{ previewId: number; items: CardDraft[] }> {
+  /** Applies a typed translation to the preview being edited; returns the updated items and preview id. Throws on a translation that `typedTranslation` refuses. */
+  async editPreviewTranslation(user: User, text: string): Promise<{ previewId: number; items: CardDraft[] }> {
     const pending = user.pendingEdit ? (JSON.parse(user.pendingEdit) as { preview?: PendingPreviewEdit }) : null;
     if (!pending?.preview) throw new Error("no preview in edit");
+    const translation = storedTranslation(text);
     const id = pending.preview.previewId;
     const items = await this.repo.getPreview<CardDraft[]>(user.id, id, "add", this.now - PREVIEW_TTL_MS);
     if (!items?.length) throw new Error("preview expired");
     const edited = items[0]!;
-    edited.translation = translation.trim();
+    edited.translation = translation;
     edited.ai = false; // the translation is the user's now, there is nothing of the model's left to check
     await this.repo.updatePreview(id, items);
     await this.repo.updateUser(user.id, { pendingEdit: null });

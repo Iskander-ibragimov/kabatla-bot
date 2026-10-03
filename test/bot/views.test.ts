@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { renderGenPreview, renderOnboarding, renderSettings } from "../../src/bot/screens";
-import { formatLong, renderAddPreview, renderCard, renderDone, type CardView, type PreviewItem } from "../../src/bot/views";
+import { SHOWN, clip, formatLong, renderAddPreview, renderCard, renderDone, type CardView, type PreviewItem } from "../../src/bot/views";
 import type { User } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
 import { newMem } from "../../src/srs/fsrs";
+import { TELEGRAM_TEXT_LIMIT, visibleLength } from "../helpers/visible";
 
 const T = Date.UTC(2026, 8, 30, 6);
 const view = (over: Partial<CardView> = {}): CardView => ({
@@ -138,6 +139,75 @@ describe("views", () => {
       expect(text).not.toMatch(/<u>|<i>t|<b>x/);
     }
     expect(renderAddPreview([evil], 1, "ru").text).toContain("<blockquote><i>&lt;u&gt;q</i>\nr&amp;s</blockquote>");
+  });
+
+  it("clip cuts a text to the length with an ellipsis and leaves a shorter one alone", () => {
+    expect(clip("рәхмәт", 6)).toBe("рәхмәт");
+    expect(clip("рәхмәт", 5)).toBe("рәхм…");
+    expect(clip("зур рәхмәт", 5)).toBe("зур…");
+    expect(clip("", 5)).toBe("");
+    // Half of an emoji is not left at the cut.
+    expect(clip("аб😀вг", 4)).toBe("аб…");
+    for (const s of ["ә".repeat(500), "😀".repeat(50), "a b ".repeat(50)]) for (const max of [2, 7, 30]) expect(clip(s, max).length).toBeLessThanOrEqual(max);
+  });
+
+  it("a list preview shows at most the first characters of a long word, transcription and translation", () => {
+    expect(SHOWN).toMatchObject({ word: 30, transcription: 30, translation: 40 });
+    const fits = draft({ word: "ә".repeat(30), transcription: "ө".repeat(30), translation: "я".repeat(40) });
+    const long = draft({ word: "ә".repeat(31), transcription: "ө".repeat(31), translation: "я".repeat(41), ai: true });
+    const lines = renderAddPreview([fits, long], 1, "ru").text.split("\n");
+    expect(lines[1]).toBe(`• <b>${"ә".repeat(30)}</b> [${"ө".repeat(30)}] · <i>прил.</i> — ${"я".repeat(40)}`);
+    expect(lines[2]).toBe(`• <b>${"ә".repeat(29)}…</b> [${"ө".repeat(29)}…] · <i>прил.</i> — ${"я".repeat(39)}…`);
+    expect(renderGenPreview("тема", [long], 1, 1, "ru").text.split("\n")[2]).toBe(lines[2]);
+    // The text is cut before it is escaped, so no entity is broken at the cut.
+    const amp = renderAddPreview([draft({ translation: "я" + "&".repeat(60) }), draft()], 1, "ru").text;
+    expect(amp).toContain(` — я${"&amp;".repeat(38)}…\n`);
+    // A single card is shown whole; only a very long link host is cut.
+    const whole = renderAddPreview([{ ...long, sourceUrl: `https://${"a".repeat(60)}.example/x` }], 1, "ru").text;
+    expect(whole).toContain(`<b>${"ә".repeat(31)}</b>\n[${"ө".repeat(31)}] · <i>прил.</i>\n\n<b>${"я".repeat(41)}</b>`);
+    expect(whole).toContain(`\n🔗 ${"a".repeat(39)}…\n`);
+  });
+
+  describe("previews at the field maxima fit one Telegram message", () => {
+    // Every field as long as the schema and the input limits allow; «я» doubles in the transcription.
+    // «post» and «pron» have the longest names of a part of speech in Russian and in Tatar.
+    const worst = (i: number, pos = "post"): PreviewItem => ({
+      word: `${"яя ".repeat(26)}${String(i).padStart(2, "0")}`, transcription: `${"йайа́ ".repeat(26)}${String(i).padStart(2, "0")}`, pos,
+      translation: "я".repeat(200), exampleTt: "ә".repeat(300), exampleRu: "я".repeat(300), sourceUrl: `https://${"a".repeat(480)}.example/x`, ai: true,
+    });
+    const items = (n: number, lang: "ru" | "tt" = "ru") => Array.from({ length: n }, (_, i) => worst(i, lang === "ru" ? "post" : "pron"));
+    const unclipped = (n: number) => items(n).reduce((sum, i) => sum + i.word.length + i.transcription!.length + i.translation.length, 0);
+
+    it("uses the longest names of a part of speech", () => {
+      const codes = ["n", "v", "adj", "adv", "pron", "num", "post", "conj", "part", "intj", "phr"];
+      expect(Math.max(...codes.map((c) => ru.posName(c).length))).toBe(ru.posName("post").length);
+      expect(Math.max(...codes.map((c) => tt.posName(c).length))).toBe(tt.posName("pron").length);
+    });
+
+    it.each(["ru", "tt"] as const)("add preview of 20 words, %s", (lang) => {
+      expect(worst(0).word).toHaveLength(80);
+      expect(unclipped(20)).toBeGreaterThan(TELEGRAM_TEXT_LIMIT);
+      const text = renderAddPreview(items(20, lang), 1, lang).text;
+      expect(text.split("\n")).toHaveLength(23);
+      expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+    });
+    it.each(["ru", "tt"] as const)("deck preview of 30 words under a topic of 100 characters, %s", (lang) => {
+      const text = renderGenPreview("т".repeat(100), items(30, lang), 3, 1, lang).text;
+      expect(text.split("\n")).toHaveLength(35);
+      expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+    });
+    it.each(["ru", "tt"] as const)("a single card shown whole, %s", (lang) => {
+      const text = renderAddPreview(items(1, lang), 1, lang).text;
+      expect(text).toContain(`<i>${"ә".repeat(300)}</i>\n${"я".repeat(300)}`);
+      expect(visibleLength(text)).toBeLessThanOrEqual(1200);
+    });
+    it.each(["ru", "tt"] as const)("the card itself, %s", (lang) => {
+      const w = worst(0);
+      for (const direction of ["tt_ru", "ru_tt"] as const) {
+        const text = renderCard(view({ ...w, direction, sourceUrl: `https://${"a".repeat(500)}.ex` }), counts, iv, true, lang).text;
+        expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+      }
+    });
   });
 
   it("gen preview lists the words with transcription and part of speech and ends with the AI note", () => {

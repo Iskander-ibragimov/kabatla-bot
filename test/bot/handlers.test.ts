@@ -6,7 +6,8 @@ import { tt } from "../../src/i18n/tt";
 import { PLACEMENT } from "../../src/users/placement";
 import { countingDb } from "../helpers/countingDb";
 import { harness } from "../helpers/botHarness";
-import { seedLevels } from "../helpers/seed";
+import { note, seedLevels } from "../helpers/seed";
+import { TELEGRAM_TEXT_LIMIT, visibleLength } from "../helpers/visible";
 
 const T = Date.UTC(2026, 8, 30, 6);
 const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
@@ -205,6 +206,108 @@ describe("bot handlers", () => {
       { word: "сәяхәт", transcription: "сәйәхә́т", example_src: "ai" }, { word: "юл", transcription: "йул", example_src: "ai" }, { word: "билет", transcription: "биле́т", example_src: "ai" },
     ]);
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs").first()).toEqual({ n: 0 });
+  });
+
+  describe("long input", () => {
+    /** An 80-character phrase, different for every `i`; «я» doubles in the transcription. */
+    const phrase = (i: number) => `${"яя ".repeat(26)}${String(i).padStart(2, "0")}`;
+    /** A model that answers every line it is asked about with a card at the field maxima. */
+    const maximal = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const prompt = (JSON.parse(String(init?.body)) as { messages: { role: string; content: string }[] }).messages[1]!.content;
+      const cards = prompt.split("\n").slice(1).map((line) => ({
+        input: line, lang: "tt", word: line, pos: "post", translation: "я".repeat(200), exampleTt: "ә".repeat(300), exampleRu: "я".repeat(300),
+      }));
+      return json({ choices: [{ message: { content: JSON.stringify({ cards }) } }] });
+    }) as typeof fetch;
+    async function ready(lang: "ru" | "tt", f?: typeof fetch) {
+      const h = harness(env.DB, { now: T, fetch: f });
+      await h.text("/start");
+      const repo = new Repo(env.DB);
+      const u = (await repo.getUserByTg(42))!;
+      await repo.updateUser(u.id, { onboardingStep: null, lang });
+      return { h, repo, u };
+    }
+    /** An AI deck of the user under a 100-character topic, holding the phrases 0…n-1. */
+    async function ownDeck(repo: Repo, userId: number, n: number) {
+      const title = `🤖 ${"т".repeat(100)}`;
+      const deckId = await repo.insertDeck({ slug: null, kind: "ai", titleRu: title, titleTt: title, levelNo: null, coveragePct: null, ownerId: userId });
+      await repo.insertNotes(deckId, Array.from({ length: n }, (_, i) => note(phrase(i))));
+      await repo.subscribe(userId, deckId, T);
+    }
+    const LINK = `https://${"a".repeat(480)}.example/x`;
+    const message = (from: number, to: number) => [...Array.from({ length: to - from }, (_, i) => phrase(from + i)), LINK].join("\n");
+
+    it.each(["ru", "tt"] as const)("20 new phrases at the field maxima are answered in one message, %s", async (lang) => {
+      const { h } = await ready(lang, maximal);
+      await h.text(message(0, 20));
+      expect(h.lastText()).toContain((lang === "ru" ? ru : tt).foundN(20));
+      expect(h.lastText().split("\n").filter((l) => l.startsWith("• "))).toHaveLength(20);
+      expect(visibleLength(h.lastText())).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+    });
+
+    it.each(["ru", "tt"] as const)("19 known phrases that get the link and one new card shown whole fit one message, %s", async (lang) => {
+      const { h, repo, u } = await ready(lang, maximal);
+      await ownDeck(repo, u.id, 19);
+      await h.text(message(0, 20));
+      const text = h.lastText();
+      expect(text.split("\n").filter((l) => l.startsWith("ℹ️"))).toHaveLength(19);
+      expect(text).toContain("🔗,"); // the link was attached and the line says so
+      expect(text).toContain(`<i>${"ә".repeat(300)}</i>\n${"я".repeat(300)}`);
+      expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+    });
+
+    it.each(["ru", "tt"] as const)("20 known phrases, and 19 with one left for a manual translation, fit one message, %s", async (lang) => {
+      const { h, repo, u } = await ready(lang);
+      await ownDeck(repo, u.id, 20);
+      await h.text(message(0, 20));
+      expect(h.lastText().split("\n").filter((l) => l.startsWith("ℹ️"))).toHaveLength(20);
+      expect(visibleLength(h.lastText())).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+      await h.text(message(1, 21)); // the model is down: the one new phrase is asked for by hand
+      expect(h.lastText()).toContain((lang === "ru" ? ru : tt).manualAsk(phrase(20)));
+      expect(visibleLength(h.lastText())).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+    });
+
+    it("the model is down for 20 new phrases: the list of untranslated ones fits one message", async () => {
+      const { h } = await ready("tt");
+      await h.text(message(0, 20));
+      expect(h.lastText()).toContain(tt.manualAsk(phrase(0)));
+      expect(h.lastText()).toContain(`${"яя ".repeat(9)}яя…, `);
+      expect(visibleLength(h.lastText())).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+    });
+
+    it("a line of more than 80 characters is answered with a request for a shorter text, and the model is not asked", async () => {
+      let asked = 0;
+      const { h } = await ready("ru", (async () => { asked++; return json({}, 500); }) as typeof fetch);
+      await h.text(`матур\n${"сүз ".repeat(20)}я`);
+      expect(h.lastText()).toBe(ru.tooLong(80));
+      expect(asked).toBe(0);
+      expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM previews").first()).toEqual({ n: 0 });
+    });
+
+    it("a hand-typed translation of more than 200 characters is refused and a shorter one is still awaited", async () => {
+      const { h, repo, u } = await ready("ru");
+      await h.text("матур");
+      expect(h.lastText()).toBe(ru.manualAsk("матур"));
+      await h.text("я".repeat(201));
+      expect(h.lastText()).toBe(ru.tooLong(200));
+      expect((await repo.getUser(u.id))!.pendingEdit).not.toBeNull();
+      await h.text("красивый");
+      expect(h.lastText()).toBe(ru.added("<b>матур</b>"));
+      expect(await env.DB.prepare("SELECT word, translation FROM notes").all().then((r) => r.results)).toEqual([{ word: "матур", translation: "красивый" }]);
+    });
+
+    it("the same when a preview is being edited", async () => {
+      const { h, repo, u } = await ready("ru", maximal);
+      await h.text("зур");
+      await h.press(callbacks(h.lastMarkup())[1]!, 300); // ✏️
+      expect(h.lastText()).toBe(ru.editAsk("зур"));
+      await h.text("я".repeat(201));
+      expect(h.lastText()).toBe(ru.tooLong(200));
+      expect((await repo.getUser(u.id))!.pendingEdit).not.toBeNull();
+      await h.text("большой");
+      expect(h.lastText()).toContain("<b>большой</b>");
+      expect(h.lastText()).not.toContain(ru.aiNote);
+    });
   });
 
   it("D1 daily limit error answers with maintenance and does not throw", async () => {

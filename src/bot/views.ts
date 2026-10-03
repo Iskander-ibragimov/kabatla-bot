@@ -20,6 +20,21 @@ export function hostOf(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
 }
 
+/**
+ * How many characters of a text a line of a list shows. A Telegram message holds 4 096 characters, and a list has
+ * up to 30 lines (an AI deck) or 20 (own words, with the lines about duplicates and untranslated words around it).
+ * With these numbers such a message fits even when every field is as long as content/llm.ts (MAX) allows.
+ * A single card is shown whole.
+ */
+export const SHOWN = { word: 30, transcription: 30, translation: 40, deck: 24, host: 40 } as const;
+
+/** The text, or its beginning and «…» when it is longer than `max` characters. Call it before `esc`, never after. */
+export function clip(s: string, max: number): string {
+  if (s.length <= max) return s;
+  // A cut in the middle of a surrogate pair would leave half a character.
+  return `${s.slice(0, max - 1).replace(/[\uD800-\uDBFF]$/, "").trimEnd()}…`;
+}
+
 /** Human interval for the done screen: "10 мин", "11 дн.", "1,2 мес.". */
 export function formatLong(ms: number, lang: Lang): string {
   const t = dict(lang);
@@ -104,7 +119,7 @@ export function renderAddPreview(items: PreviewItem[], previewId: number, lang: 
     if (meta) text += `\n${meta}`;
     text += `\n\n<b>${esc(i.translation)}</b>`;
     if (i.exampleTt || i.exampleRu) text += `<blockquote><i>${esc(i.exampleTt)}</i>\n${esc(i.exampleRu)}</blockquote>`;
-    if (i.sourceUrl) text += `\n🔗 ${esc(hostOf(i.sourceUrl))}`;
+    if (i.sourceUrl) text += `\n🔗 ${esc(clip(hostOf(i.sourceUrl), SHOWN.host))}`;
     if (ai) text += `\n${t.aiNote}`;
     return { text, keyboard: [[btn(t.add, `add:ok:${previewId}`, "primary"), btn(t.edit, `add:edit:${previewId}`), btn(t.cancel, `add:no:${previewId}`)]] };
   }
@@ -113,8 +128,8 @@ export function renderAddPreview(items: PreviewItem[], previewId: number, lang: 
   return { text: lines.join("\n"), keyboard: [[btn(t.addAll(items.length), `add:ok:${previewId}`, "primary"), btn(t.cancel, `add:no:${previewId}`)]] };
 }
 
-/** One word of a list preview: «• <b>word</b> [transcription] · <i>part of speech</i> — translation». */
+/** One word of a list preview: «• <b>word</b> [transcription] · <i>part of speech</i> — translation», long texts cut to SHOWN. */
 export function previewLine(i: Pick<PreviewItem, "word" | "transcription" | "pos" | "translation">, lang: Lang): string {
-  const meta = wordMeta(i, lang);
-  return `• <b>${esc(i.word)}</b>${meta ? ` ${meta}` : ""} — ${esc(i.translation)}`;
+  const meta = wordMeta({ transcription: i.transcription && clip(i.transcription, SHOWN.transcription), pos: i.pos }, lang);
+  return `• <b>${esc(clip(i.word, SHOWN.word))}</b>${meta ? ` ${meta}` : ""} — ${esc(clip(i.translation, SHOWN.translation))}`;
 }

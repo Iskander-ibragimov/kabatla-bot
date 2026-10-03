@@ -10,12 +10,23 @@ export const POS_CODES = ["n", "v", "adj", "adv", "pron", "num", "post", "conj",
 /** A card as the model returns it: `input` echoes the user's line, `word` is the Tatar word the card is about. */
 export interface WordCard { input: string; lang: "tt" | "ru"; word: string; pos: string; translation: string; exampleTt: string; exampleRu: string }
 
+/**
+ * The longest a card field may be, in characters. A card is one Telegram message of at most 4 096 characters, and a
+ * preview shows up to 30 cards in one; a model caught in a repetition loop must not get into either.
+ */
+export const MAX = { input: 200, word: 80, translation: 200, example: 300 } as const;
+/** Cap on the model's answer. By a rough estimate a deck of 30 cards needs about 3 000 tokens; a runaway answer is cut here and fails as invalid JSON. */
+const MAX_TOKENS = 4000;
+
 const RUSSIAN_LETTER = /[А-Яа-яЁё]/;
 const CYRILLIC_LETTER = /[\u0400-\u04FF]/;
+/** Every character that starts a new line. A card field is one line: it stands inside a line of a list. */
+const LINE_BREAK = /[\n\r\u000B\u000C\u0085\u2028\u2029]/;
+const oneLine = (max: number) => z.string().trim().min(1).max(max).refine((s) => !LINE_BREAK.test(s), "must be one line");
 /** Russian text: has Cyrillic letters and none of ә ө ү җ ң һ. */
-const russian = z.string().trim().min(1).refine((s) => RUSSIAN_LETTER.test(s) && !hasTatarLetters(s), "must be Russian");
+const russian = (max: number) => oneLine(max).refine((s) => RUSSIAN_LETTER.test(s) && !hasTatarLetters(s), "must be Russian");
 /** Tatar text: letters of the Tatar Cyrillic alphabet only, so that no look-alike of another alphabet gets into a card. */
-const tatar = z.string().trim().min(1).refine((s) => isTatarText(s) && CYRILLIC_LETTER.test(s), "must be Tatar Cyrillic");
+const tatar = (max: number) => oneLine(max).refine((s) => isTatarText(s) && CYRILLIC_LETTER.test(s), "must be Tatar Cyrillic");
 /** A code of POS_CODES, or "" for anything else. */
 const pos = z.unknown().transform((v) => {
   const code = typeof v === "string" ? v.trim().toLowerCase() : "";
@@ -23,13 +34,13 @@ const pos = z.unknown().transform((v) => {
 });
 
 export const WordCardSchema: z.ZodType<WordCard> = z.object({
-  input: z.string().trim().min(1),
+  input: oneLine(MAX.input),
   lang: z.enum(["tt", "ru"]),
-  word: tatar,
+  word: tatar(MAX.word),
   pos,
-  translation: russian,
-  exampleTt: tatar,
-  exampleRu: russian,
+  translation: russian(MAX.translation),
+  exampleTt: tatar(MAX.example),
+  exampleRu: russian(MAX.example),
 }).refine((c) => c.exampleTt.toLowerCase() !== c.exampleRu.toLowerCase(), "exampleTt repeats exampleRu");
 
 export class LlmUnavailable extends Error {}
@@ -49,7 +60,7 @@ export class LlmClient {
           method: "POST",
           headers: { "content-type": "application/json", authorization: `Bearer ${p.apiKey}` },
           body: JSON.stringify({
-            model: p.model, temperature: 0.2, response_format: { type: "json_object" },
+            model: p.model, temperature: 0.2, max_tokens: MAX_TOKENS, response_format: { type: "json_object" },
             messages: [{ role: "system", content: system }, { role: "user", content: user }],
           }),
           signal: AbortSignal.timeout(Math.min(this.timeoutMs, left)),

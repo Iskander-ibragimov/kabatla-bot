@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { renderAddPreview, renderCard } from "../../src/bot/views";
 import { Repo, type User } from "../../src/db/repo";
 import { LlmClient } from "../../src/content/llm";
-import { ContentService } from "../../src/content/service";
+import { ContentService, MAX_TYPED, typedTranslation } from "../../src/content/service";
 import { transcribe } from "../../src/content/transcribe";
 import { consume } from "../../src/entitlements/service";
 import { ru } from "../../src/i18n/ru";
@@ -403,6 +403,52 @@ describe("content service: own words", () => {
     expect(renderAddPreview(edited.items, edited.previewId, "ru").text).not.toContain(ru.aiNote);
     await svc.confirmAdd(user, r.previewId);
     expect((await ownNotes(user.id)).map((n) => [n.word, n.translation])).toEqual([["матур", "красивый, прекрасный"]]);
+  });
+
+  it("answers a line longer than 80 characters with too-long and touches nothing", async () => {
+    const { user } = await seedUser(env.DB, { now: T, words: 1, patch: { pendingUrl: "https://youtu.be/q", pendingUrlAt: T } });
+    const llm = llmReturning([card("матур", "красивый")]);
+    const db = countingDb(env.DB);
+    const svc = new ContentService(new Repo(db), { llm: client(llm) }, T);
+    const long = "сүз ".repeat(20) + "я"; // 81 characters
+    expect(long).toHaveLength(81);
+    expect(await svc.prepareAdd(user, long, [])).toEqual({ kind: "too-long", max: 80 });
+    expect(await svc.prepareAdd(user, `матур\n${long}\nзур`, [])).toEqual({ kind: "too-long", max: 80 });
+    expect(llm.urls).toEqual([]);
+    expect(db.calls).toBe(0); // the remembered link is still waiting for the words
+    // A stress mark is not a character of the line: 80 letters with one pass.
+    const fits = "сүз ".repeat(19) + `суз${STRESS}а`;
+    expect(fits.replace(STRESS, "")).toHaveLength(80);
+    expect((await svc.prepareAdd(user, fits, [])).kind).toBe("manual");
+    expect(userPrompt(llm)).toBe(`Lines:\n${fits.replace(STRESS, "")}`);
+  });
+
+  it("takes a typed translation of at most 200 characters, on one line", async () => {
+    expect(typedTranslation("  красивый,\n прекрасный  ")).toBe("красивый, прекрасный");
+    expect(typedTranslation("я".repeat(200))).toBe("я".repeat(200));
+    expect(typedTranslation("я".repeat(201))).toBeNull();
+    expect(MAX_TYPED).toEqual({ line: 80, translation: 200 });
+
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const svc = service(repo, failingLlm());
+    await svc.prepareAdd(user, "матур", []);
+    const waiting = await fresh(repo, user);
+    await expect(svc.completeManual(waiting, "я".repeat(201))).rejects.toThrow(/too long/);
+    // Nothing is saved and the bot still waits for the translation.
+    expect(await ownNotes(user.id)).toEqual([]);
+    expect((await fresh(repo, user)).pendingEdit).toBe(waiting.pendingEdit);
+    expect(await svc.completeManual(waiting, "красивый,\nпрекрасный")).toBe("матур");
+    expect((await ownNotes(user.id)).map((n) => n.translation)).toEqual(["красивый, прекрасный"]);
+
+    const ai = service(repo, llmReturning([card("зур", "большой")]));
+    const r = await preview(ai, await fresh(repo, user), "зур");
+    await ai.startEdit(user, r.previewId);
+    const editing = await fresh(repo, user);
+    await expect(ai.editPreviewTranslation(editing, "я".repeat(201))).rejects.toThrow(/too long/);
+    expect((await fresh(repo, user)).pendingEdit).toBe(editing.pendingEdit);
+    expect((await repo.getPreview<{ translation: string; ai: boolean }[]>(user.id, r.previewId, "add", 0))![0]).toMatchObject({ translation: "большой", ai: true });
+    const edited = await ai.editPreviewTranslation(editing, " большой,\r\nкрупный ");
+    expect(edited.items[0]).toMatchObject({ translation: "большой, крупный", ai: false });
   });
 
   it("20 lines cost one LLM request and at most 7 D1 calls", async () => {

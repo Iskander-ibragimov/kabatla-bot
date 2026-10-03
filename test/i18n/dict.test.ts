@@ -32,6 +32,7 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   dupLine: [["китап", "Минем сүзләр", false], ["китап", "Минем сүзләр", true]],
   manualAsk: [["китап"]],
   notTranslated: [["китап, вакыт"]],
+  tooLong: [[80], [200]],
   added: [["<b>китап</b>, <b>вакыт</b>"]],
   editAsk: [["китап"]],
   genWorking: [["сәяхәт"]],
@@ -120,6 +121,15 @@ describe("i18n dictionaries", () => {
 
   it("has the report answers", () => {
     for (const d of [ru, tt]) { expect(d.reportSent.length).toBeGreaterThan(3); expect(d.reportAlready.length).toBeGreaterThan(3); expect(d.reportSent.length).toBeLessThanOrEqual(200); expect(d.reportAlready.length).toBeLessThanOrEqual(200); }
+  });
+
+  it("asks for a shorter text and names the limit", () => {
+    expect(ru.tooLong(80)).toMatch(/длинн/i);
+    expect(ru.tooLong(80)).toContain("80");
+    expect(ru.tooLong(200)).toContain("200");
+    expect(tt.tooLong(80)).toContain("80");
+    expect(tt.tooLong(200)).toContain("200");
+    for (const d of [ru, tt]) expect(d.tooLong(200).length).toBeLessThanOrEqual(120);
   });
 
   it("has the note under an AI-made preview", () => {

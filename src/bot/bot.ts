@@ -3,7 +3,7 @@ import type { UserFromGetMe } from "grammy/types";
 import { isAdmin, adminStatsText } from "../admin/service";
 import { playVoice } from "../content/audio";
 import { LlmClient } from "../content/llm";
-import { ContentService } from "../content/service";
+import { ContentService, MAX_TYPED, typedTranslation } from "../content/service";
 import type { Repo, User } from "../db/repo";
 import { remaining } from "../entitlements/service";
 import type { Config } from "../env";
@@ -14,7 +14,7 @@ import { cumulative, levelsView } from "../stats/service";
 import type { TgApi } from "../tg/client";
 import { REMIND_TIMES, RETENTIONS, advanceOnboarding, getOrCreate, langFromTelegram, setSetting, startOnboarding } from "../users/service";
 import { learnKeyboard, renderGenPreview, renderLevels, renderOnboarding, renderSettings, renderStats } from "./screens";
-import { type Keyboard, type Rendered, esc, hostOf, renderAddPreview, renderCard, renderDone, renderLevelUp } from "./views";
+import { type Keyboard, type Rendered, SHOWN, clip, esc, hostOf, renderAddPreview, renderCard, renderDone, renderLevelUp } from "./views";
 
 export interface BotDeps {
   config: Config;
@@ -260,6 +260,8 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     }
     const svc = content();
     const pending = svc.pendingKind(ctx.user);
+    // The text is a translation typed by hand. One that is too long is not stored; the bot keeps waiting for a shorter one.
+    if (pending && typedTranslation(text) === null) { await ctx.reply(t.tooLong(MAX_TYPED.translation)); return; }
     if (pending === "manual") {
       const word = await svc.completeManual(ctx.user, text);
       if (word) { await send(ctx, { text: t.added(`<b>${esc(word)}</b>`), keyboard: learnKeyboard(ctx.user.lang) }); return; }
@@ -277,17 +279,19 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     deps.waitUntil((async () => {
       try {
         const res = await svc.prepareAdd(user, text, entities);
-        const dups = "duplicates" in res ? res.duplicates.map((d) => t.dupLine(esc(d.word), esc(d.deckTitle), d.linkAdded)) : [];
+        // Up to 20 lines about duplicates and untranslated words stand around the preview: each shows a cut text (SHOWN), so the message always fits.
+        const dups = "duplicates" in res ? res.duplicates.map((d) => t.dupLine(esc(clip(d.word, SHOWN.word)), esc(clip(d.deckTitle, SHOWN.deck)), d.linkAdded)) : [];
         const prefix = dups.length ? dups.join("\n") + "\n\n" : "";
+        const untranslated = (words: string[]) => (words.length ? "\n\n" + t.notTranslated(words.map((w) => esc(clip(w, SHOWN.word))).join(", ")) : "");
         let r: Rendered;
         if (res.kind === "ask-words") r = { text: t.askWords(esc(hostOf(res.url))), keyboard: [] };
         else if (res.kind === "empty") r = { text: t.helpAdd, keyboard: [] };
+        else if (res.kind === "too-long") r = { text: t.tooLong(res.max), keyboard: [] };
         else if (res.kind === "duplicates-only") r = { text: dups.join("\n"), keyboard: learnKeyboard(user.lang) };
-        else if (res.kind === "manual") r = { text: prefix + t.manualAsk(esc(res.word)) + (res.others.length ? "\n\n" + t.notTranslated(res.others.map(esc).join(", ")) : ""), keyboard: [] };
+        else if (res.kind === "manual") r = { text: prefix + t.manualAsk(esc(res.word)) + untranslated(res.others), keyboard: [] };
         else {
           const p = renderAddPreview(res.items, res.previewId, user.lang);
-          const tail = res.manual.length ? "\n\n" + t.notTranslated(res.manual.map(esc).join(", ")) : "";
-          r = { text: prefix + p.text + tail, keyboard: p.keyboard };
+          r = { text: prefix + p.text + untranslated(res.manual), keyboard: p.keyboard };
         }
         await editOrSend(ctx, m.message_id, r);
       } catch (e) {
