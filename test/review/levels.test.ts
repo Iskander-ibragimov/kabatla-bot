@@ -2,10 +2,9 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { ru } from "../../src/i18n/ru";
 import { LAST_LEVEL, ReviewService, type Screen } from "../../src/review/service";
-import { newMem } from "../../src/srs/fsrs";
-import { harness } from "../helpers/botHarness";
+import { easyButton, harness } from "../helpers/botHarness";
 import { countingDb } from "../helpers/countingDb";
-import { asCard, gradeShown } from "../helpers/review";
+import { asCard, gradeShown, gradedMem } from "../helpers/review";
 import { seedLevels, seedUser } from "../helpers/seed";
 
 const DAY = 86_400_000;
@@ -42,8 +41,7 @@ describe("levels", () => {
     const { repo, user, noteIds } = await seedUser(env.DB, { now, level: 1, words: 2 });
     await seedLevels(env.DB, { 2: ["авыл", "су"] }, { 1: 31 });
     // Both words of level 1 are graded and not due today, so each call finds the open levels empty.
-    const graded = { ...newMem(now), state: "review" as const, due: now + 5 * DAY, lastReview: now, scheduledDays: 5, stability: 5, difficulty: 5, reps: 1 };
-    for (const id of noteIds) await repo.insertCard(user.id, id, "tt_ru", graded);
+    for (const id of noteIds) await repo.insertCard(user.id, id, "tt_ru", gradedMem(now));
     const screens = await Promise.all([
       new ReviewService(repo, now).nextScreen(user),
       new ReviewService(repo, now).nextScreen(user),
@@ -157,13 +155,12 @@ describe("levels", () => {
     await seedLevels(env.DB, { 2: ["авыл", "су"] }, { 1: 31 });
     const db = countingDb(env.DB);
     const h = harness(db, { now });
-    const easy = () => (h.lastMarkup().inline_keyboard ?? []).flat().map((b) => b.callback_data).find((c) => /^g:\d+:\d+:4$/.test(c))!;
     await h.text("/learn");
-    await h.press(easy(), h.tg.lastMessageId());
+    await h.press(easyButton(h), h.tg.lastMessageId());
     expect(h.lastText()).toContain("<b>вакыт</b>");
     const telegramBefore = h.tg.calls.length;
     db.calls = 0;
-    await h.press(easy(), h.tg.lastMessageId());
+    await h.press(easyButton(h), h.tg.lastMessageId());
     const telegram = h.tg.calls.slice(telegramBefore).map((c) => c.method);
     expect(h.lastText().startsWith(ru.levelUp(1, 2, 31))).toBe(true);
     expect(h.lastText()).toContain("<b>авыл</b>");

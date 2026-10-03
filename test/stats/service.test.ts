@@ -7,7 +7,8 @@ import { cumulative, levelsView } from "../../src/stats/service";
 import { newMem } from "../../src/srs/fsrs";
 import { harness } from "../helpers/botHarness";
 import { countingDb } from "../helpers/countingDb";
-import { seedLevels, seedUser } from "../helpers/seed";
+import { gradedMem } from "../helpers/review";
+import { note, seedLevels, seedUser } from "../helpers/seed";
 
 const T = Date.UTC(2026, 8, 30, 6);
 const DAY = 86_400_000;
@@ -68,7 +69,7 @@ describe("stats", () => {
 });
 
 describe("levels view", () => {
-  const graded = { ...newMem(T), state: "review" as const, due: T + 5 * DAY, lastReview: T, scheduledDays: 5, stability: 5, difficulty: 5, reps: 1 };
+  const graded = gradedMem(T);
 
   it("counts started words and own copies as seen, and separates passed, open and skipped levels", async () => {
     const ids = await seedLevels(env.DB, { 1: ["китап", "вакыт"], 2: ["авыл", "су"], 3: ["юл", "көн"], 4: ["өй", "эш", "кеше"], 5: ["сүз"] }, { 2: 40, 3: 54 });
@@ -84,11 +85,11 @@ describe("levels view", () => {
     await repo.insertCard(user.id, noteIds[0]!, "ru_tt", graded);
     await repo.insertCard(user.id, noteIds[1]!, "tt_ru", newMem(T));
     const own = await repo.customDeck(user.id, T);
-    await repo.insertNotes(own, [{ word: "Кеше", transcription: null, pos: "n", translation: "человек", exampleTt: "", exampleRu: "" }]);
+    await repo.insertNotes(own, [note("Кеше", "человек")]);
     // Another learner's cards and words do not count.
     const other = await seedUser(env.DB, { now: T, level: 4, tgId: 2 });
     await other.repo.insertCard(other.user.id, noteIds[1]!, "tt_ru", graded);
-    await other.repo.insertNotes(await other.repo.customDeck(other.user.id, T), [{ word: "эш", transcription: null, pos: "n", translation: "работа", exampleTt: "", exampleRu: "" }]);
+    await other.repo.insertNotes(await other.repo.customDeck(other.user.id, T), [note("эш", "работа")]);
 
     expect(await repo.levelsOverview(user.id)).toEqual([
       { levelNo: 1, total: 2, coveragePct: null, open: false, seen: 0 },

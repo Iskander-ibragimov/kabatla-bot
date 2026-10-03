@@ -7,7 +7,8 @@ export const WORDS: [string, string][] = [
 ];
 
 const NCHY = new Set([6, 9, 10, 16, 19]);
-const note = (word: string, translation: string): NoteInput => ({
+/** A catalog-style note for tests: translation `<word>-ru` unless given, examples `<word>.` and `<translation>.`. */
+export const note = (word: string, translation = `${word}-ru`): NoteInput => ({
   word, transcription: null, pos: "n", translation, exampleTt: `${word}.`, exampleRu: `${translation}.`, exampleSrc: "own",
 });
 
@@ -30,7 +31,7 @@ export async function seedLevels(db: D1Database, levels: Record<number, string[]
   const ids: Record<number, number> = {};
   for (const [no, words] of Object.entries(levels)) {
     const levelNo = Number(no);
-    ids[levelNo] = (await seedLevel(repo, levelNo, words.map((w) => note(w, `${w}-ru`)), coverage[levelNo] ?? null)).deckId;
+    ids[levelNo] = (await seedLevel(repo, levelNo, words.map((w) => note(w)), coverage[levelNo] ?? null)).deckId;
   }
   for (const [no, pct] of Object.entries(coverage)) await db.prepare("UPDATE decks SET coverage_pct = ? WHERE level_no = ?").bind(pct, Number(no)).run();
   return ids;

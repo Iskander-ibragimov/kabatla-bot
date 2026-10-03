@@ -4,8 +4,7 @@ import { Repo } from "../../src/db/repo";
 import { countingDb } from "../helpers/countingDb";
 import { newMem } from "../../src/srs/fsrs";
 import { dayWindow } from "../../src/users/service";
-import { seedLevels, seedUser } from "../helpers/seed";
-import type { NoteInput } from "../../src/db/repo";
+import { note, seedLevels, seedUser } from "../helpers/seed";
 
 const T = Date.UTC(2026, 8, 30, 6, 0, 0);
 const DAY = 86_400_000;
@@ -55,8 +54,6 @@ describe("repo", () => {
     const c = await repo.candidateCards(userId, T, { dayStartMs: T - 3_600_000, dayEndMs: T + 20 * 3_600_000, today: "2026-09-30", directions: ["tt_ru", "ru_tt"] });
     expect(c.newNotes.slice(0, 4).map((x) => [x.word, x.direction])).toEqual([["китап", "tt_ru"], ["китап", "ru_tt"], ["Алма", "tt_ru"], ["Алма", "ru_tt"]]);
   });
-
-  const note = (word: string): NoteInput => ({ word, transcription: null, pos: "n", translation: `${word}-ru`, exampleTt: `${word}.`, exampleRu: `${word}.`, exampleSrc: "own" });
 
   it("gives own and AI words before level words, levels by number", async () => {
     const now = Date.UTC(2026, 8, 30, 6, 0);

@@ -44,3 +44,7 @@ export function harness(db: D1Database, opts: { now: number; fetch?: typeof fetc
     lastMarkup: () => { const c = [...tg.calls].reverse().find((x) => x.method === "sendMessage" || x.method === "editMessageText"); return (c?.payload.reply_markup ?? {}) as { inline_keyboard?: { text: string; callback_data: string }[][] }; },
   };
 }
+
+/** Callback data of the «Легко» button on the card the harness showed last. */
+export const easyButton = (h: Pick<ReturnType<typeof harness>, "lastMarkup">): string =>
+  (h.lastMarkup().inline_keyboard ?? []).flat().map((b) => b.callback_data).find((c) => /^g:\d+:\d+:4$/.test(c))!;

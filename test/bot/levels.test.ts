@@ -2,20 +2,18 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { renderLevels } from "../../src/bot/screens";
 import { renderLevelUp } from "../../src/bot/views";
-import { type NoteInput, Repo } from "../../src/db/repo";
+import { Repo } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
 import { newMem } from "../../src/srs/fsrs";
 import type { LevelsView } from "../../src/stats/service";
-import { harness } from "../helpers/botHarness";
+import { easyButton, harness } from "../helpers/botHarness";
 import { countingDb } from "../helpers/countingDb";
-import { seedLevels, seedUser } from "../helpers/seed";
+import { gradedMem } from "../helpers/review";
+import { note, seedLevels, seedUser } from "../helpers/seed";
 
 const T = Date.UTC(2026, 8, 30, 6);
-const DAY = 86_400_000;
-const note = (word: string): NoteInput => ({ word, transcription: null, pos: "n", translation: `${word}-ru`, exampleTt: "", exampleRu: "" });
 const buttons = (m: { inline_keyboard?: { text: string; callback_data: string }[][] }) => (m.inline_keyboard ?? []).flat().map((b) => [b.text, b.callback_data]);
-const easy = (h: ReturnType<typeof harness>) => buttons(h.lastMarkup()).map(([, data]) => data!).find((c) => /^g:\d+:\d+:4$/.test(c))!;
 
 /**
  * The picture from the brief: the learner (Telegram id 42) started at level 4 of 100 words; 36 words are graded, one more
@@ -25,10 +23,9 @@ async function learnerAtLevel4(db: D1Database) {
   const level4 = Array.from({ length: 100 }, (_, i) => `сүз${i + 1}`);
   await seedLevels(db, { 1: ["китап", "вакыт"], 2: ["авыл", "су"], 3: ["юл", "көн"], 4: level4 }, { 3: 54, 4: 61 });
   const { repo, user, noteIds } = await seedUser(db, { now: T, level: 4, tgId: 42 });
-  const graded = { ...newMem(T), state: "review" as const, due: T + 5 * DAY, lastReview: T, scheduledDays: 5, stability: 5, difficulty: 5, reps: 1 };
-  await repo.batch(noteIds.slice(0, 36).map((id) => repo.insertCardStmt(user.id, id, "tt_ru", graded)));
+  await repo.batch(noteIds.slice(0, 36).map((id) => repo.insertCardStmt(user.id, id, "tt_ru", gradedMem(T))));
   await repo.insertCard(user.id, noteIds[36]!, "tt_ru", newMem(T));
-  await repo.insertNotes(await repo.customDeck(user.id, T), ["сүз100", ...Array.from({ length: 11 }, (_, i) => `үзем${i + 1}`)].map(note));
+  await repo.insertNotes(await repo.customDeck(user.id, T), ["сүз100", ...Array.from({ length: 11 }, (_, i) => `үзем${i + 1}`)].map((w) => note(w)));
   const ai = await repo.insertDeck({ slug: null, kind: "ai", titleRu: "🤖 Путешествия", titleTt: "🤖 Путешествия", levelNo: null, coveragePct: null, ownerId: user.id });
   await repo.insertNotes(ai, Array.from({ length: 20 }, (_, i) => note(`сәяхәт${i + 1}`)));
   await repo.subscribe(user.id, ai, T);
@@ -109,7 +106,7 @@ describe("/levels", () => {
     await seedUser(env.DB, { now: T, level: 1, words: 1, tgId: 42 });
     const h = harness(env.DB, { now: T });
     await h.text("/learn");
-    await h.press(easy(h), h.tg.lastMessageId());
+    await h.press(easyButton(h), h.tg.lastMessageId());
     expect(h.lastText()).toContain(ru.doneTitle);
     expect(buttons(h.lastMarkup())).toEqual([[ru.addWords, "help:add"], ["📚 Уровни", "levels"]]);
     await h.press("levels", h.tg.lastMessageId());
@@ -161,13 +158,13 @@ describe("level-up line", () => {
     const h = harness(env.DB, { now: T });
     await h.text("/learn");
     expect(h.lastText().startsWith("🔵 2 · 🔴 0 · 🟢 0\n<b>китап</b>")).toBe(true);
-    await h.press(easy(h), h.tg.lastMessageId());
+    await h.press(easyButton(h), h.tg.lastMessageId());
     expect(h.lastText().startsWith("🔵 1 · 🔴 0 · 🟢 0\n<b>вакыт</b>")).toBe(true);
-    await h.press(easy(h), h.tg.lastMessageId());
+    await h.press(easyButton(h), h.tg.lastMessageId());
     const line = "Все 100 слов уровня 1 в работе. Открываю уровень 2. Пройденные слова покрывают ≈31% обычного текста.";
     expect(h.lastText().startsWith(`${line}\n\n🔵 2 · 🔴 0 · 🟢 0\n<b>авыл</b>`)).toBe(true);
     // The line is said once: the next card is plain again.
-    await h.press(easy(h), h.tg.lastMessageId());
+    await h.press(easyButton(h), h.tg.lastMessageId());
     expect(h.lastText().startsWith("🔵 1 · 🔴 0 · 🟢 0\n<b>су</b>")).toBe(true);
   });
 
@@ -176,7 +173,7 @@ describe("level-up line", () => {
     await seedLevels(env.DB, {}, { 20: 80 });
     const h = harness(env.DB, { now: T });
     await h.text("/learn");
-    await h.press(easy(h), h.tg.lastMessageId());
+    await h.press(easyButton(h), h.tg.lastMessageId());
     const line = "Все 2 000 слов в работе! 🎉 Дальше — повторения по расписанию. Свои слова можно добавлять в любой момент.";
     expect(h.lastText().startsWith(`${line} Пройденные слова покрывают ≈80% обычного текста.\n\n${ru.doneTitle}`)).toBe(true);
     await h.text("/learn");
