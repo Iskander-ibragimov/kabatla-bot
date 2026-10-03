@@ -147,7 +147,7 @@ jobs:
             if curl -sf "$WORKER_URL/" > /dev/null; then ok=1; break; fi
             sleep 10
           done
-          test -n "$ok" || { echo "Worker did not answer at its URL"; exit 1; }
+          test -n "$ok" || { echo "Worker did not answer at its URL" | tee "$RUNNER_TEMP/webhook.log"; exit 1; }
           set -o pipefail
           npx tsx scripts/set-webhook.ts 2>&1 | tee "$RUNNER_TEMP/webhook.log"
 
@@ -257,7 +257,7 @@ jobs:
             echo "- last_error_message: ${LAST_ERR}"
             printf '%s' "$CMDS"
             echo
-            echo "## webhook and commands output (last 15 lines)"
+            echo "## webhook and commands output (last 15 lines; warnings: $(printf '%s\n' "$WH_OUT" | grep -c '^WARNING' || true))"
             echo '```'
             echo "${WH_OUT:-(none)}"
             echo '```'
