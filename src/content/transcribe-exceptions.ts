@@ -31,15 +31,46 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "әмма": "ә́мма",
   "чөнки": "чө́нки",
   "хәзер": "хә́зер",
+  "яки": "йә́ки",
+  "ягъни": "йә́гъни",
+  "бәлки": "бә́лки",
+  "һаман": "һа́ман",
+  "быел": "бы́йыл",
 
-  // Front words spelled with я, ю, е alone and no ь at the end: the row rule reads them back.
-  "юеш": "йүйе́ш",
+  // The question particle -мы/-ме is unstressed: the stress stays before it. Kept as words, not as a
+  // rule: the spelling cannot tell the particle from a stem or an ending (егерме, исеме, кеме).
+  "исәнме": "исә́нме",
+  "исәнмесез": "исә́нмесез",
 
-  // Arabic loans where а after [къ], [гъ] or in a front word is read [ә] and the spelling does not show it.
+  // A glide [w] between у, ү and the next vowel that the spelling does not show.
+  // юеш is also a front word spelled with ю, е alone, which the row rule reads as back.
+  "юеш": "йүwе́ш",
+  "суык": "суwы́къ",
+  "куу": "къуwу́",
+  "юу": "йуwу́",
+
+  // Arabic loans where а (я) after [къ], [гъ] or in a front word is read [ә] ([йә]) and the spelling does not show it.
   "сәлам": "сәлә́м",
   "кадәр": "къәдә́р",
   "гаилә": "гъәилә́",
   "гадәт": "гъәдә́т",
+  "галим": "гъәли́м",
+  "каләм": "къәлә́м",
+  "кадер": "къәде́р",
+  "канәгать": "къәнәгъә́т",
+  "сәламәт": "сәләмә́т",
+  "гаять": "гъәйә́т",
+  "җинаять": "җинәйә́т",
+  "кыяфәт": "къыйәфә́т",
+
+  // Arabic loans where ый after [къ], [гъ] is read [и].
+  "тәнкыйть": "тәнкъи́т",
+  "мөстәкыйль": "мөстәкъи́л",
+  "кыйммәт": "къиммә́т",
+  "гыйлем": "гъиле́м",
+
+  // Arabic loans where о after [гъ] is read [ө].
+  "гомер": "гъөме́р",
 
   // Russian loans: в is [в], к and г stay plain before back vowels, stress as in Russian.
   "вагон": "ваго́н",

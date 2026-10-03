@@ -60,7 +60,7 @@ describe("transcribe: exceptions", () => {
 });
 
 describe("transcribe: text", () => {
-  it("transcribes phrases word by word and keeps punctuation", () => expect(transcribe("Исәнмесез! Хәлләр ничек?")).toBe("исәнмесе́з! хәллә́р ни́чек?"));
+  it("transcribes phrases word by word and keeps punctuation", () => expect(transcribe("Исәнмесез! Хәлләр ничек?")).toBe("исә́нмесез! хәллә́р ни́чек?"));
   it("never throws and leaves non-Tatar input as is", () => {
     for (const s of ["", "   ", "hello", "123", "🙂", "wifi роутер", "а".repeat(500)]) expect(() => transcribe(s)).not.toThrow();
     expect(transcribe("hello")).toBe("hello"); expect(transcribe("")).toBe("");

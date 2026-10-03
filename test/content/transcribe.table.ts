@@ -142,12 +142,39 @@ const EXCEPTION_ROWS: Row[] = [
   ["әмма", "ә́мма"], // verify
   ["чөнки", "чө́нки"], // verify
   ["хәзер", "хә́зер"], // verify
-  // a front word spelled with ю, е alone: the rule for such words reads it back
-  ["юеш", "йүйе́ш"], // verify
-  // Arabic loans: а after [къ], [гъ] read as [ә] with nothing in the spelling to show it
+  // the question particle -мы/-ме is unstressed: the stress stays before it
+  ["исәнме", "исә́нме"],
+  ["исәнмесез", "исә́нмесез"],
+  // more words with the stress on the first syllable
+  ["яки", "йә́ки"], // verify
+  ["ягъни", "йә́гъни"], // verify
+  ["бәлки", "бә́лки"], // verify
+  ["һаман", "һа́ман"], // verify
+  ["быел", "бы́йыл"],
+  // a glide [w] between у, ү and the next vowel that the spelling does not show
+  ["юеш", "йүwе́ш"], // verify: or йүйе́ш
+  ["суык", "суwы́къ"], // verify: or сыwы́къ
+  ["куу", "къуwу́"], // verify: or къыwу́
+  ["юу", "йуwу́"], // verify: or йыwу́
+  // Arabic loans: а (я) read as [ә] ([йә]) with nothing in the spelling to show it
   ["кадәр", "къәдә́р"], // verify
   ["гаилә", "гъәилә́"], // verify
   ["гадәт", "гъәдә́т"], // verify
+  ["галим", "гъәли́м"],
+  ["каләм", "къәлә́м"],
+  ["кадер", "къәде́р"],
+  ["канәгать", "къәнәгъә́т"],
+  ["сәламәт", "сәләмә́т"],
+  ["гаять", "гъәйә́т"],
+  ["җинаять", "җинәйә́т"],
+  ["кыяфәт", "къыйәфә́т"], // verify
+  // Arabic loans: ый after [къ], [гъ] read as [и]
+  ["тәнкыйть", "тәнкъи́т"],
+  ["мөстәкыйль", "мөстәкъи́л"],
+  ["кыйммәт", "къиммә́т"],
+  ["гыйлем", "гъиле́м"],
+  // Arabic loans: о after [гъ] read as [ө]
+  ["гомер", "гъөме́р"],
   // Russian loans: в stays [в], к and г stay plain, stress as in Russian
   ["вагон", "ваго́н"],
   ["диван", "дива́н"],
