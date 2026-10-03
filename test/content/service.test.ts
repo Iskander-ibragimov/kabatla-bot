@@ -213,13 +213,60 @@ describe("content service: own words", () => {
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM previews").first()).toEqual({ n: 0 });
   });
 
-  it("keeps the user's spelling when the input already had Tatar letters", async () => {
+  it("keeps the user's spelling only when the model returned the word without Tatar letters", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
-    const llm = llmReturning([{ input: "күңел", lang: "tt", word: "кунел", pos: "n", translation: "душа, настроение", exampleTt: "Күңел күтәренке.", exampleRu: "Настроение приподнятое." }]);
-    const r = await preview(service(repo, llm), user, "күңел");
-    const item = r.items[0]!;
-    expect(item.word).toBe("күңел");
-    expect(item).toMatchObject({ transcription: transcribe("күңел"), translation: "душа, настроение", ai: true, exampleSrc: "ai" });
+    const llm = llmReturning([
+      // The model lost the letters the user typed: the user's spelling stays.
+      { input: "күңел", lang: "tt", word: "кунел", pos: "n", translation: "душа, настроение", exampleTt: "Күңел күтәренке.", exampleRu: "Настроение приподнятое." },
+      // The model finished a half-restored phrase and a half-restored word: its spelling is taken.
+      { input: "бәхетле коннәр", lang: "tt", word: "бәхетле көннәр", pos: "phr", translation: "счастливые дни", exampleTt: "Бәхетле көннәр килер.", exampleRu: "Счастливые дни придут." },
+      { input: "үзгареш", lang: "tt", word: "үзгәреш", pos: "n", translation: "изменение", exampleTt: "Зур үзгәреш булды.", exampleRu: "Произошло большое изменение." },
+      // Typed right, returned as typed.
+      { input: "тәрәзә", lang: "tt", word: "тәрәзә", pos: "n", translation: "окно", exampleTt: "Тәрәзә ачык.", exampleRu: "Окно открыто." },
+    ]);
+    const r = await preview(service(repo, llm), user, "күңел\nбәхетле коннәр\nүзгареш\nтәрәзә");
+    expect(r.items.map((i) => i.word)).toEqual(["күңел", "бәхетле көннәр", "үзгәреш", "тәрәзә"]);
+    expect(r.items[0]).toMatchObject({ transcription: transcribe("күңел"), translation: "душа, настроение", ai: true, exampleSrc: "ai" });
+    expect(r.items[2]).toMatchObject({ transcription: transcribe("үзгәреш"), translation: "изменение", ai: true });
+  });
+
+  it("takes the model's spelling of a half-restored word and looks it up in the catalog", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 7 }); // l01 has «көн»
+    await seedLevels(env.DB, { 5: ["күңел"] });
+    const llm = llmReturning([
+      { input: "күнел", lang: "tt", word: "күңел", pos: "n", translation: "душа", exampleTt: "Күңел тыныч.", exampleRu: "На душе спокойно." },
+      { input: "сәгат", lang: "tt", word: "сәгать", pos: "n", translation: "час, часы", exampleTt: "Сәгать ничә?", exampleRu: "Который час?" },
+      { input: "көнн", lang: "tt", word: "көн", pos: "n", translation: "день", exampleTt: "Көн матур.", exampleRu: "День красивый." },
+    ]);
+    const r = await preview(service(repo, llm), user, "күнел\nсәгат\nкөнн");
+    // «күңел» stands in a level: the reviewed catalog card is used, not the model's.
+    expect(r.items[0]).toEqual({
+      word: "күңел", transcription: null, pos: "n", translation: "күңел-ru", exampleTt: "күңел.", exampleRu: "күңел-ru.", exampleSrc: "own", audioFileId: null, sourceUrl: null, ai: false,
+    });
+    // «сәгать» is in no level: the model's card under the restored spelling.
+    expect(r.items[1]).toEqual({
+      word: "сәгать", transcription: transcribe("сәгать"), pos: "n", translation: "час, часы", exampleTt: "Сәгать ничә?", exampleRu: "Который час?",
+      exampleSrc: "ai", audioFileId: null, sourceUrl: null, ai: true,
+    });
+    expect(r.items).toHaveLength(2);
+    // «көн» is a word of the open level: a duplicate, found only by the restored spelling.
+    expect(r.duplicates).toEqual([{ word: "көн", deckTitle: "Уровень 1", linkAdded: false }]);
+    expect(r.manual).toEqual([]);
+  });
+
+  it("puts a typed verb form on the card of its dictionary form", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 1 });
+    const llm = llmReturning([{ input: "киләм", lang: "tt", word: "килү", pos: "v", translation: "приходить", exampleTt: "Мин иртәгә киләм.", exampleRu: "Я приду завтра." }]);
+    const svc = service(repo, llm);
+    const r = await preview(svc, user, "киләм");
+    expect(r.items).toEqual([{
+      word: "килү", transcription: transcribe("килү"), pos: "v", translation: "приходить", exampleTt: "Мин иртәгә киләм.", exampleRu: "Я приду завтра.",
+      exampleSrc: "ai", audioFileId: null, sourceUrl: null, ai: true,
+    }]);
+    // When «килү» is in the catalog, the typed form leads to its reviewed card, so the word is not shown twice when the level opens.
+    await seedLevels(env.DB, { 3: ["килү"] });
+    const again = await preview(svc, user, "киләм");
+    expect(again.items.map((i) => [i.word, i.translation, i.ai])).toEqual([["килү", "килү-ru", false]]);
   });
 
   it("gives a Tatar word for Russian input and transcribes it by the rules", async () => {
@@ -461,6 +508,10 @@ describe("content service: AI decks", () => {
     const r = await service(repo, failingLlm()).generateDeck(user, "космос", 10);
     expect(r.kind).toBe("failed");
     expect((await fresh(repo, user)).gensCount).toBe(0);
+    // Exactly one unit comes back: two decks made earlier today stay counted.
+    for (let i = 0; i < 2; i++) expect(await consume(repo, await fresh(repo, user), "gen", T)).toBe(true);
+    expect((await service(repo, llmReturning([{ ...card("сүз"), translation: "junk" }])).generateDeck(await fresh(repo, user), "космос", 10)).kind).toBe("failed");
+    expect((await fresh(repo, user)).gensCount).toBe(2);
   });
 });
 

@@ -89,11 +89,15 @@ export class ContentService {
     const forAi = notKnown.filter((l) => !catalog.has(wordKey(l.word)));
     const cards = await this.askCards(forAi.map((l) => l.word));
 
-    /** By the key of a line: the model's card for it and the word the line stands for. A line typed with Tatar letters keeps the user's spelling. */
+    /**
+     * By the key of a line: the model's card for it and the word the line stands for. That is the model's word (restored
+     * spelling, dictionary form), unless the line was typed with Tatar letters and the model returned a word without them:
+     * then the model lost the letters, and the user's spelling stays.
+     */
     const answers = new Map<string, { card: WordCard; word: string }>();
     for (const l of forAi) {
       const card = cards.get(wordKey(l.word));
-      if (card) answers.set(wordKey(l.word), { card, word: hasTatarLetters(l.word) ? l.word : card.word });
+      if (card) answers.set(wordKey(l.word), { card, word: hasTatarLetters(l.word) && !hasTatarLetters(card.word) ? l.word : card.word });
     }
     const changed = [...answers].filter(([typed, a]) => wordKey(a.word) !== typed).map(([, a]) => a.word);
     if (changed.length) {
@@ -206,13 +210,13 @@ export class ContentService {
     const count = Math.min(30, Math.max(10, Math.round(n) || 20));
     if (!(await consume(this.repo, user, "gen", this.now))) return { kind: "limit" };
     try {
+      // completeCards gives at least one valid card or throws LlmUnavailable, so `items` is never empty here.
       const cards = await completeCards(this.deps.llm, DECK_SYSTEM, `Topic: ${topic}\nNumber of cards: ${count}`, Date.now() + this.deadlineMs);
       const seen = new Set<string>();
       const items: CardDraft[] = cards
         .filter((c) => { const k = wordKey(c.word); if (seen.has(k)) return false; seen.add(k); return true; })
         .slice(0, count)
         .map((c) => aiDraft(c, c.word, null));
-      if (!items.length) { await refund(this.repo, user, "gen", this.now); return { kind: "failed" }; }
       const previewId = await this.repo.insertPreview(user.id, "gen", { topic, items }, this.now);
       return { kind: "preview", previewId, topic, items };
     } catch (e) {
