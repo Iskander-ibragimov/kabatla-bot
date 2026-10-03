@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { gunzipSync } from "node:zlib";
-import { type Row, formatLevel, levelFile, parseLevel } from "./levels";
+import { type LevelMeta, type Row, formatLevel, levelFile, levelNumber, parseLevel } from "./levels";
 
 export const LEVELS_DIR = "data/levels";
 export const FILES = {
@@ -27,10 +27,10 @@ export const FILES = {
   dix: "data/work/tat-rus.dix",
   candidates: "data/work/candidates.tsv",
   cognates: "data/work/cognates.json",
+  /** Verb rows of the corpus that `candidates` dropped: `count, stem, infinitive, reason`. */
+  droppedVerbs: "data/work/dropped-verbs.tsv",
   review: "data/work/review.tsv",
 } as const;
-
-export interface LevelMeta { level: number; coveragePct: number }
 
 export function readText(path: string, hint = ""): string {
   if (!existsSync(path)) throw new Error(`нет файла ${path}${hint ? ` — ${hint}` : ""}`);
@@ -50,10 +50,16 @@ export function readLines(path: string): string[] {
 
 const levelPath = (n: number): string => `${LEVELS_DIR}/${levelFile(n)}`;
 
-/** Numbers of the level files on disk, ascending. */
+const levelsDir = (): string[] => (existsSync(LEVELS_DIR) ? readdirSync(LEVELS_DIR) : []);
+
+/** Numbers of the level files on disk (l01.csv … l20.csv), ascending. */
 export function levelNumbers(): number[] {
-  if (!existsSync(LEVELS_DIR)) return [];
-  return readdirSync(LEVELS_DIR).map((name) => /^l(\d\d)\.csv$/.exec(name)).filter((m) => m !== null).map((m) => Number(m[1])).sort((a, b) => a - b);
+  return levelsDir().map(levelNumber).filter((n) => n !== null).sort((a, b) => a - b);
+}
+
+/** Files that look like a level but are not one of l01.csv … l20.csv (l00.csv, l21.csv, l5.csv). */
+export function strayLevelFiles(): string[] {
+  return levelsDir().filter((name) => /^l\d+\.csv$/i.test(name) && levelNumber(name) === null).sort();
 }
 
 export const readLevel = (n: number): Row[] => parseLevel(readText(levelPath(n)));

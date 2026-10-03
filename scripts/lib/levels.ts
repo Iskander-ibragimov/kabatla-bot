@@ -17,6 +17,11 @@ export const LEVEL_COUNT = 20;
 
 /** File name of a level inside data/levels: l01.csv … l20.csv, the deck slug plus `.csv`. */
 export const levelFile = (n: number): string => `${levelSlug(n)}.csv`;
+/** The level a file name stands for, or null: only l01.csv … l20.csv are level files. */
+export function levelNumber(name: string): number | null {
+  const n = Number(/^l(\d\d)\.csv$/.exec(name)?.[1]);
+  return n >= 1 && n <= LEVEL_COUNT ? n : null;
+}
 export const parseLevel = (text: string): Row[] => parseCsv(text) as Row[];
 export const formatLevel = (rows: Row[]): string => toCsv([...CSV_HEADER], rows);
 
@@ -70,6 +75,22 @@ export interface CheckOptions {
   core?: readonly string[];
   /** Least number of `phr` rows in levels 1–3; checked once the three exist. */
   minPhrases?: number;
+  /** meta.json; when given, every level must have a coverage and it must not fall from level to level. */
+  meta?: readonly LevelMeta[];
+}
+
+/** One entry of data/levels/meta.json. */
+export interface LevelMeta { level: number; coveragePct: number }
+
+/** The levels whose coverage is lower than that of the level before, as `l03: покрытие 39% …`. */
+export function coverageDrops(meta: readonly LevelMeta[]): string[] {
+  const byLevel = [...meta].sort((a, b) => a.level - b.level);
+  return byLevel.flatMap((m, i) => {
+    const before = byLevel[i - 1];
+    return before && m.coveragePct < before.coveragePct
+      ? [`${levelSlug(m.level)}: покрытие ${m.coveragePct}% меньше, чем у ${levelSlug(before.level)} (${before.coveragePct}%)`]
+      : [];
+  });
 }
 
 const TRANSCRIPTION_EXTRA = "wʼ́";
@@ -143,21 +164,31 @@ export function checkLevels(levels: Row[][], opts: CheckOptions): string[] {
     const phrases = levels.slice(0, 3).flat().filter((row) => row.pos === "phr").length;
     if (phrases < opts.minPhrases) errors.push(`фраз в уровнях 1–3: ${phrases}, нужно не меньше ${opts.minPhrases}`);
   }
+  if (opts.meta) {
+    const meta = opts.meta;
+    levels.forEach((_, i) => {
+      if (!meta.some((m) => m.level === i + 1)) errors.push(`${levelSlug(i + 1)}: нет покрытия в meta.json`);
+    });
+    errors.push(...coverageDrops(meta));
+  }
   return errors;
 }
 
 /**
  * Cumulative coverage of running text by level, whole percent. Level N covers the corpus occurrences of the words
  * of levels 1…N plus those of the removed Russian look-alikes that are at least as frequent as the rarest corpus
- * word of level N (a learner knows them anyway). Core words (`origin: "core"`) and words without a count do not set
- * that threshold: they stand in the early levels for their use, not for their frequency.
+ * word of levels 1…N (a learner knows them anyway). Core words (`origin: "core"`) and words without a count do not
+ * set that threshold: they stand in the early levels for their use, not for their frequency. The threshold only
+ * goes down from level to level, so the coverage never falls.
  */
 export function coverage(levels: { count: number; origin?: string }[][], cognates: { count: number }[], total: number): number[] {
   let learned = 0;
+  let rarest = Infinity;
   return levels.map((rows) => {
-    for (const row of rows) learned += row.count;
-    const byFrequency = rows.filter((row) => row.origin !== "core" && row.count > 0).map((row) => row.count);
-    const rarest = byFrequency.length ? Math.min(...byFrequency) : Infinity;
+    for (const row of rows) {
+      learned += row.count;
+      if (row.origin !== "core" && row.count > 0) rarest = Math.min(rarest, row.count);
+    }
     const known = cognates.reduce((sum, c) => (c.count >= rarest ? sum + c.count : sum), 0);
     return Math.round(((learned + known) / total) * 100);
   });

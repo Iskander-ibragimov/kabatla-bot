@@ -25,7 +25,7 @@ function infinitiveOf(stem: string): string {
   const u = endsBack(stem) ? "у" : "ү";
   if (last === "й") return `${cut}ю`; // куй → кую, сөй → сөю
   if (last === "и") return `${stem}ю`; // ки → кию
-  if (last === "ы" || last === "е") return cut.endsWith("и") ? `${cut}ю` : cut + u; // укы → уку, төзе → төзү, бие → бию
+  if (last === "ы" || last === "е") return isVowel(before) ? `${cut}ю` : cut + u; // укы → уку, төзе → төзү; after a vowel: бие → бию, ое → ою, бае → баю
   if ((last === "у" || last === "ү") && isVowel(before)) return `${cut}в${last}`; // яу → яву
   if ((last === "к" || last === "п") && isVowel(before)) return cut + (last === "к" ? "г" : "б") + u; // чык → чыгу, тап → табу
   return stem + u; // бар → бару, аша → ашау, эшлә → эшләү, ту → туу

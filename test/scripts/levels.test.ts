@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CSV_HEADER, type Row, checkLevels, coverage, formatLevel, levelFile, parseLevel, tokenize, wordForm } from "../../scripts/lib/levels";
+import { CSV_HEADER, type Row, checkLevels, coverage, coverageDrops, formatLevel, levelFile, levelNumber, parseLevel, tokenize, wordForm } from "../../scripts/lib/levels";
 import { transcribe } from "../../src/content/transcribe";
 import { levelSlug } from "../../src/users/service";
 
@@ -33,6 +33,11 @@ describe("level files", () => {
   it("names level files like the deck slugs", () => {
     expect(levelFile(1)).toBe("l01.csv");
     for (let n = 1; n <= 20; n++) expect(levelFile(n)).toBe(`${levelSlug(n)}.csv`);
+  });
+
+  it("takes only l01.csv … l20.csv for level files", () => {
+    expect(["l01.csv", "l09.csv", "l20.csv"].map(levelNumber)).toEqual([1, 9, 20]);
+    expect(["l00.csv", "l21.csv", "l99.csv", "l1.csv", "l001.csv", "L01.csv", "l01.csv.bak", "meta.json"].map(levelNumber)).toEqual(Array(8).fill(null));
   });
 
   it("keeps the agreed column order", () => {
@@ -227,12 +232,43 @@ describe("checkLevels", () => {
   });
 });
 
+describe("checkLevels and meta.json", () => {
+  const meta = (...pct: number[]) => pct.map((coveragePct, i) => ({ level: i + 1, coveragePct }));
+
+  it("passes a coverage that grows or stays from level to level", () => {
+    expect(checkLevels(fixtureLevels(3), { ...opts(3), meta: meta(30, 41, 41) })).toEqual([]);
+    expect(checkLevels(fixtureLevels(3), opts(3))).toEqual([]);
+  });
+
+  it("reports a coverage that falls, whatever the order of the entries", () => {
+    expect(checkLevels(fixtureLevels(3), { ...opts(3), meta: meta(30, 41, 39).reverse() })).toEqual([expect.stringMatching(/^l03: покрытие 39% .*l02.*41%/)]);
+  });
+
+  it("wants a coverage for every level", () => {
+    expect(checkLevels(fixtureLevels(3), { ...opts(3), meta: meta(30, 41) })).toEqual([expect.stringMatching(/^l03: .*нет покрытия/)]);
+  });
+
+  it("coverageDrops names every fall", () => {
+    expect(coverageDrops(meta(30, 28, 35, 34))).toEqual([expect.stringMatching(/^l02: покрытие 28% .*l01.*30%/), expect.stringMatching(/^l04: покрытие 34% .*l03.*35%/)]);
+    expect(coverageDrops(meta(30, 30, 31))).toEqual([]);
+    expect(coverageDrops([])).toEqual([]);
+  });
+});
+
 describe("coverage", () => {
   it("computes cumulative coverage with removed cognates", () =>
     expect(coverage([[{ count: 300 }, { count: 200 }], [{ count: 100 }]], [{ count: 250 }, { count: 50 }], 2000)).toEqual([38, 43]));
 
   it("takes the cognate threshold from the corpus words of the level, not from the core words", () =>
     expect(coverage([[{ count: 300 }, { count: 200, origin: "corpus" }, { count: 0, origin: "core" }]], [{ count: 250 }, { count: 50 }], 2000)).toEqual([38]));
+
+  it("never falls: the cognate threshold is the rarest corpus word of all the levels so far, so a rare word in an early level does not make the next one lose cognates", () => {
+    const cognates = [{ count: 250 }, ...Array.from({ length: 8 }, () => ({ count: 15 }))];
+    expect(coverage([[{ count: 300 }, { count: 6 }], [{ count: 20 }]], cognates, 1000)).toEqual([68, 70]);
+  });
+
+  it("keeps the threshold through a level of core words only", () =>
+    expect(coverage([[{ count: 300 }, { count: 200 }], [{ count: 10, origin: "core" }]], [{ count: 250 }, { count: 50 }], 2000)).toEqual([38, 38]));
 
   it("counts no cognates for a level without corpus words", () =>
     expect(coverage([[{ count: 10, origin: "core" }]], [{ count: 250 }], 1000)).toEqual([1]));

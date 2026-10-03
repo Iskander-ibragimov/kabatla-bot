@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Row } from "../../scripts/lib/levels";
 import {
-  WORDLIST_HEADER, type WordlistRow, apertium, attestedForms, buildCandidates, checkWordlist, cutLevels, findExamples, formatCandidates,
+  WORDLIST_HEADER, type WordlistRow, apertium, attestedForms, buildCandidates, checkWordlist, cutLevels, findExamples, formatCandidates, formatDroppedVerbs,
   lookupPos, lostWords, parseDix, parseLemmas, parseTatoeba, reviewWordlist, verbInfinitives,
 } from "../../scripts/lib/wordlist";
 import { transcribe } from "../../src/content/transcribe";
@@ -115,6 +115,14 @@ describe("buildCandidates", () => {
     expect(built.total).toBe(lemmas.reduce((s, l) => s + l.count, 0));
     expect(built.dropped).toEqual({ list: 3, digits: 2, latin: 1, upper: 1, short: 2, symbols: 0, unattested: 2 });
     expect(built.kept).toBe(20);
+  });
+
+  it("lists the verb rows it dropped, by count, with the infinitive it tried and the reason", () => {
+    expect(built.droppedVerbs).toEqual([
+      { count: 400, stem: "кабул", infinitive: "кабулу", reason: "unattested" },
+      { count: 1, stem: "и", infinitive: "ию", reason: "short" },
+    ]);
+    expect(formatDroppedVerbs(built.droppedVerbs)).toBe("count\tstem\tinfinitive\treason\n400\tкабул\tкабулу\tunattested\n1\tи\tию\tshort\n");
   });
 
   it("keeps the first `limit` words", () => {

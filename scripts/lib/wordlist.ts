@@ -7,7 +7,7 @@ import { wordKey } from "../../src/db/repo";
 import { levelSlug } from "../../src/users/service";
 import { LEVEL_SIZE, type Row, isAttested, tokenize, wordForm } from "./levels";
 import type { LemmaRow, SentencePair } from "./sources";
-import { dictionaryForm } from "./tatar-verbs";
+import { dictionaryForm, verbInfinitive } from "./tatar-verbs";
 
 /** Corpus list suffix (and Apertium tag) → project part-of-speech code. Lists that are not here are dropped whole. */
 export const POS_MAP: Readonly<Record<string, string>> = {
@@ -71,6 +71,8 @@ export function apertium(dix: Dix, word: string, pos?: string): string[] {
 export interface Candidate { word: string; pos: string; count: number; apertium: string[]; also: string }
 export type DropReason = "list" | "digits" | "latin" | "upper" | "short" | "symbols" | "unattested";
 export interface Cognate { word: string; count: number }
+/** A verb row of the corpus lists that did not become a candidate: its stem, the infinitive that was tried, and why. */
+export interface DroppedVerb { count: number; stem: string; infinitive: string; reason: DropReason }
 export interface Candidates {
   /** Words to translate, most frequent first. */
   candidates: Candidate[];
@@ -81,6 +83,11 @@ export interface Candidates {
   /** Lemma rows that went into the candidates and the cognates. */
   kept: number;
   dropped: Record<DropReason, number>;
+  /**
+   * The dropped verb rows, most frequent first. The infinitive is built by rule, so a stem the rule does not cover
+   * (курык → курку) or the first word of a compound verb (кабул [итү]) is only visible here.
+   */
+  droppedVerbs: DroppedVerb[];
 }
 
 /**
@@ -112,6 +119,7 @@ function dropReason(lemma: string, pos: string | undefined, forms: ReadonlySet<s
  */
 export function buildCandidates(lemmas: LemmaRow[], forms: ReadonlySet<string>, dix: Dix, limit = 3500, known: ReadonlySet<string> = new Set()): Candidates {
   const dropped: Record<DropReason, number> = { list: 0, digits: 0, latin: 0, upper: 0, short: 0, symbols: 0, unattested: 0 };
+  const droppedVerbs: DroppedVerb[] = [];
   const words = new Map<string, Map<string, number>>();
   let total = 0;
   let kept = 0;
@@ -119,7 +127,11 @@ export function buildCandidates(lemmas: LemmaRow[], forms: ReadonlySet<string>, 
     total += count;
     const pos = POS_MAP[list];
     const reason = dropReason(lemma, pos, forms);
-    if (reason || !pos) { dropped[reason ?? "list"] += 1; continue; }
+    if (reason || !pos) {
+      dropped[reason ?? "list"] += 1;
+      if (reason && pos === "v") droppedVerbs.push({ count, stem: lemma, infinitive: verbInfinitive(lemma), reason });
+      continue;
+    }
     kept += 1;
     const word = dictionaryForm(lemma, pos);
     const byPos = words.get(word) ?? new Map<string, number>();
@@ -137,7 +149,7 @@ export function buildCandidates(lemmas: LemmaRow[], forms: ReadonlySet<string>, 
     else candidates.push({ word, pos: main![0], count, apertium: translations, also: rest.map(([pos, c]) => `${pos} ${c}`).join(", ") });
   }
   const byCount = (a: { count: number }, b: { count: number }) => b.count - a.count;
-  return { candidates: candidates.sort(byCount).slice(0, limit), cognates: cognates.sort(byCount), total, kept, dropped };
+  return { candidates: candidates.sort(byCount).slice(0, limit), cognates: cognates.sort(byCount), total, kept, dropped, droppedVerbs: droppedVerbs.sort(byCount) };
 }
 
 export function formatCandidates(candidates: Candidate[]): string {
@@ -156,6 +168,10 @@ export function verbInfinitives(lemmas: LemmaRow[]): Set<string> {
  */
 export function lookupPos(word: string, infinitives: ReadonlySet<string>): string {
   return infinitives.has(tokenize(word).pop() ?? "") ? "v" : "";
+}
+
+export function formatDroppedVerbs(verbs: DroppedVerb[]): string {
+  return ["count\tstem\tinfinitive\treason", ...verbs.map((v) => [v.count, v.stem, v.infinitive, v.reason].join("\t"))].join("\n") + "\n";
 }
 
 export interface ExampleHit { tatId: number; tat: string; rus: string; form: string; unattested: string[] }

@@ -52,7 +52,8 @@ const assign = (columns: readonly string[]): string => columns.map((c) => `${c} 
  * (matched by deck and word key), then the deck's `total`. Safe to run on a live database on every deploy:
  *  - a row that is already in the database with the same fields is not written at all, so loading an unchanged
  *    catalog costs no row writes. The check stands in the SELECT that feeds the INSERT, not in the upsert's own
- *    WHERE: D1 bills a row write for an upsert that reaches the conflict even when it then changes nothing;
+ *    WHERE: `decks` and `notes` are AUTOINCREMENT tables, and an INSERT that gets as far as the conflict has
+ *    already bumped `sqlite_sequence` — one billed row write, even when the upsert then changes nothing;
  *  - a changed row gets its fields updated in place: the note keeps its id, and with it the users' cards;
  *  - an empty `audio_file_id` never erases the audio already attached to the note;
  *  - nothing is deleted, and a word that already stands in another level stays there and is not copied.
