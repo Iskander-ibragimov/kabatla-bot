@@ -110,6 +110,7 @@ export const ru = {
   levelsCoverage: (pct: number) => `📖 Покрытие текста ≈${pct}%`,
   openSkippedBtn: (range: string) => `Открыть пропущенные (${range})`,
   /** Command descriptions and the bot description, registered by scripts/set-webhook.ts. */
+  cmdStart: "Начать",
   cmdLearn: "Повторять слова",
   cmdLevels: "Уровни",
   cmdGen: "AI-колода по теме",

@@ -189,7 +189,7 @@ describe("i18n dictionaries", () => {
   });
 
   it("describes the bot and its commands in both languages", () => {
-    const cmds: Key[] = ["cmdLearn", "cmdLevels", "cmdGen", "cmdStats", "cmdSettings", "cmdUndo", "cmdHelp"];
+    const cmds: Key[] = ["cmdStart", "cmdLearn", "cmdLevels", "cmdGen", "cmdStats", "cmdSettings", "cmdUndo", "cmdHelp"];
     for (const d of [ru, tt]) {
       for (const k of cmds) expect((d[k] as string).length, k).toBeGreaterThanOrEqual(3);
       for (const k of cmds) expect((d[k] as string).length, k).toBeLessThanOrEqual(256);

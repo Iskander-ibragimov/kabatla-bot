@@ -1,0 +1,248 @@
+name: Deploy
+# push to master -> worker live with the Telegram webhook registered.
+# Publishes a diagnostics file deploy.md (no secrets) as the only file of the orphan branch `deploy-report`.
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - "data/work/**"
+      - ".github/trigger/voice-sample"
+      - ".github/trigger/fetch-sources"
+  workflow_dispatch:
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install
+        id: install
+        run: corepack enable pnpm && pnpm install --frozen-lockfile
+      - name: Typecheck
+        id: typecheck
+        run: pnpm typecheck
+      - name: Test
+        id: test
+        run: pnpm test
+
+      - name: Check secrets
+        id: secrets
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_TG_ID: ${{ secrets.ADMIN_TG_ID }}
+        run: |
+          missing=""
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID BOT_TOKEN ADMIN_TG_ID; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          missing="${missing# }"
+          echo "missing=$missing" >> "$GITHUB_OUTPUT"
+          if [ -n "$missing" ]; then
+            echo "Missing repository secrets: $missing"
+            exit 1
+          fi
+
+      - name: Derive webhook secret
+        id: derive
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: |
+          S=$(printf '%s' "${BOT_TOKEN}:kabatla-webhook" | sha256sum | cut -c1-64)
+          echo "::add-mask::$S"
+          echo "WEBHOOK_SECRET=$S" >> "$GITHUB_ENV"
+
+      - name: Ensure workers.dev subdomain
+        id: subdomain
+        run: |
+          API=https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain
+          SUB=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" $API | jq -r '.result.subdomain // empty')
+          if [ -z "$SUB" ]; then
+            SUB="kabatla-$(echo $CLOUDFLARE_ACCOUNT_ID | cut -c1-8)"
+            curl -s -X PUT -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" --data "{\"subdomain\":\"$SUB\"}" $API | jq -c '.success, .errors'
+          fi
+          echo "sub=$SUB" >> "$GITHUB_OUTPUT"
+          echo "workers.dev subdomain: $SUB"
+
+      - name: Ensure D1 database
+        id: d1
+        run: |
+          ID=$(npx wrangler d1 list --json | jq -r '.[] | select(.name=="kabatla") | .uuid')
+          if [ -z "$ID" ]; then
+            npx wrangler d1 create kabatla
+            ID=$(npx wrangler d1 list --json | jq -r '.[] | select(.name=="kabatla") | .uuid')
+          fi
+          test -n "$ID"
+          sed -i "s/^database_id = .*/database_id = \"$ID\"/" wrangler.toml
+          echo "D1: $ID"
+
+      - name: Apply migrations
+        id: migrations
+        run: npx wrangler d1 migrations apply kabatla --remote
+
+      - name: Detect catalog
+        id: catalog
+        run: |
+          LEVELS=$(ls data/levels/l*.csv 2>/dev/null | wc -l)
+          echo "levels=$LEVELS" >> "$GITHUB_OUTPUT"
+          if [ -f scripts/csv-to-sql.ts ] && [ "$LEVELS" -gt 0 ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No catalog to load (script present: $([ -f scripts/csv-to-sql.ts ] && echo yes || echo no), levels: $LEVELS)"
+          fi
+
+      - name: Load catalog
+        id: seed
+        if: steps.catalog.outputs.run == 'true'
+        run: |
+          npx tsx scripts/csv-to-sql.ts
+          npx wrangler d1 execute kabatla --remote --file seed/catalog.sql --yes
+
+      - name: Deploy worker
+        id: deploy
+        run: |
+          npx wrangler deploy | tee deploy.log
+          URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
+          if [ -z "$URL" ]; then URL="https://kabatla-bot.${{ steps.subdomain.outputs.sub }}.workers.dev"; fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Set worker secrets
+        id: wsecrets
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_TG_ID: ${{ secrets.ADMIN_TG_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+        run: |
+          trap 'rm -f secrets.json' EXIT
+          PROVIDERS=$(npx tsx scripts/pick-models.ts)
+          echo "providers=$(printf '%s' "$PROVIDERS" | jq 'length')" >> "$GITHUB_OUTPUT"
+          jq -n --arg b "$BOT_TOKEN" --arg w "$WEBHOOK_SECRET" --arg a "$ADMIN_TG_ID" --arg p "$PROVIDERS" \
+            '{BOT_TOKEN:$b, WEBHOOK_SECRET:$w, ADMIN_TG_ID:$a, LLM_PROVIDERS:$p}' > secrets.json
+          npx wrangler secret bulk secrets.json
+
+      - name: Register Telegram webhook and commands
+        id: webhook
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          WORKER_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          ok=""
+          for i in $(seq 1 12); do
+            if curl -sf "$WORKER_URL/" > /dev/null; then ok=1; break; fi
+            sleep 10
+          done
+          test -n "$ok" || { echo "Worker did not answer at its URL"; exit 1; }
+          npx tsx scripts/set-webhook.ts
+
+      - name: Self-check the webhook endpoint
+        id: selfcheck
+        env:
+          WORKER_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          NO=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{"update_id":1}' "$WORKER_URL/tg")
+          YES=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -H "X-Telegram-Bot-Api-Secret-Token: $WEBHOOK_SECRET" --data '{"update_id":1}' "$WORKER_URL/tg")
+          echo "without secret header: HTTP $NO"
+          echo "with secret header: HTTP $YES"
+          echo "no=$NO" >> "$GITHUB_OUTPUT"
+          echo "yes=$YES" >> "$GITHUB_OUTPUT"
+          case "$NO" in 2*) echo "Endpoint accepted a request without the secret"; exit 1;; esac
+          test "$YES" = "200"
+
+      - name: Publish diagnostics to the deploy-report branch
+        if: always()
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          SHA: ${{ github.sha }}
+          S_INSTALL: ${{ steps.install.outcome }}
+          S_TYPECHECK: ${{ steps.typecheck.outcome }}
+          S_TEST: ${{ steps.test.outcome }}
+          S_SECRETS: ${{ steps.secrets.outcome }}
+          S_SUBDOMAIN: ${{ steps.subdomain.outcome }}
+          S_D1: ${{ steps.d1.outcome }}
+          S_MIGRATIONS: ${{ steps.migrations.outcome }}
+          S_SEED: ${{ steps.seed.outcome }}
+          S_DEPLOY: ${{ steps.deploy.outcome }}
+          S_WSECRETS: ${{ steps.wsecrets.outcome }}
+          S_WEBHOOK: ${{ steps.webhook.outcome }}
+          S_SELFCHECK: ${{ steps.selfcheck.outcome }}
+          MISSING: ${{ steps.secrets.outputs.missing }}
+          PROVIDERS: ${{ steps.wsecrets.outputs.providers }}
+          LEVELS: ${{ steps.catalog.outputs.levels }}
+          WORKER_URL: ${{ steps.deploy.outputs.url }}
+          SC_NO: ${{ steps.selfcheck.outputs.no }}
+          SC_YES: ${{ steps.selfcheck.outputs.yes }}
+        run: |
+          WORKER_HOST="${WORKER_URL#https://}"
+          WH_URL="" PENDING="n/a" LAST_ERR="n/a" BOT_USER="n/a" MATCH="n/a"
+          if [ -n "$BOT_TOKEN" ]; then
+            ME=$(curl -s --max-time 20 "https://api.telegram.org/bot$BOT_TOKEN/getMe" || true)
+            BOT_USER=$(printf '%s' "$ME" | jq -r '.result.username // "n/a"' 2>/dev/null || echo n/a)
+            INFO=$(curl -s --max-time 20 "https://api.telegram.org/bot$BOT_TOKEN/getWebhookInfo" || true)
+            WH_URL=$(printf '%s' "$INFO" | jq -r '.result.url // ""' 2>/dev/null || true)
+            PENDING=$(printf '%s' "$INFO" | jq -r '.result.pending_update_count // "n/a"' 2>/dev/null || echo n/a)
+            LAST_ERR=$(printf '%s' "$INFO" | jq -r '.result.last_error_message // "(none)"' 2>/dev/null || echo n/a)
+            if [ -n "$WORKER_HOST" ]; then
+              case "$WH_URL" in "https://$WORKER_HOST/"*) MATCH=yes;; *) MATCH=no;; esac
+            fi
+          fi
+          mkdir -p report
+          {
+            echo "# deploy report"
+            echo
+            echo "Run: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "Commit: ${SHA}"
+            echo
+            echo "## Steps"
+            echo "- install: ${S_INSTALL}"
+            echo "- typecheck: ${S_TYPECHECK}"
+            echo "- test: ${S_TEST}"
+            echo "- check secrets: ${S_SECRETS}"
+            echo "- workers.dev subdomain: ${S_SUBDOMAIN}"
+            echo "- D1 database: ${S_D1}"
+            echo "- migrations: ${S_MIGRATIONS}"
+            echo "- load catalog: ${S_SEED}"
+            echo "- deploy worker: ${S_DEPLOY}"
+            echo "- worker secrets: ${S_WSECRETS}"
+            echo "- webhook and commands: ${S_WEBHOOK}"
+            echo "- self-check: ${S_SELFCHECK}"
+            echo
+            echo "## Missing secrets"
+            echo "${MISSING:-none}"
+            echo
+            echo "## Worker"
+            echo "- LLM providers selected: ${PROVIDERS:-n/a}"
+            echo "- catalog levels: ${LEVELS:-0}"
+            echo "- worker host: ${WORKER_HOST:-n/a}"
+            echo
+            echo "## Telegram"
+            echo "- bot username: ${BOT_USER}"
+            echo "- webhook host matches worker: ${MATCH}"
+            echo "- pending_update_count: ${PENDING}"
+            echo "- last_error_message: ${LAST_ERR}"
+            echo
+            echo "## Self-check"
+            echo "- POST /tg without secret header: HTTP ${SC_NO:-n/a} (expected: not 2xx)"
+            echo "- POST /tg with secret header: HTTP ${SC_YES:-n/a} (expected: 200)"
+          } > report/deploy.md
+          cd report
+          git init -q -b deploy-report
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy.md
+          git commit -q -m "reports: deploy $(date -u +%Y-%m-%d)"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" deploy-report

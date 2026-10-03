@@ -11,3 +11,5 @@ Telegram-бот для изучения татарских слов по инт�
 - `pnpm depcruise` — проверка границ слоёв
 
 Спецификация: `docs/` (дизайн и план MVP).
+
+Выкладка: `.github/workflows/deploy.yml` (push в `master`, вручную или правкой `.github/trigger/deploy`). Итог каждого запуска — файл `deploy.md` в ветке `deploy-report`.

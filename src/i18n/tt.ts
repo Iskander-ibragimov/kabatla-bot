@@ -115,6 +115,7 @@ export const tt: Dict = {
   levelsAhead: (n) => `🔒 Алда: ${n}`,
   levelsCoverage: (pct) => `📖 Текстта таныш сүзләр: ≈${pct}%`,
   openSkippedBtn: (range) => `Калдырылган дәрәҗәләрне ачу (${range})`,
+  cmdStart: "Башлау",
   cmdLearn: "Сүзләрне кабатлау",
   cmdLevels: "Дәрәҗәләр",
   cmdGen: "Тема буенча AI-тупланма",

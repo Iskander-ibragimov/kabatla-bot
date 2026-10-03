@@ -16,7 +16,7 @@ async function api(method: string, body: unknown) {
 
 /** Commands that exist today, in menu order; the texts live in the interface dictionaries. */
 const commands = (t: Dict) =>
-  ([["learn", t.cmdLearn], ["levels", t.cmdLevels], ["gen", t.cmdGen], ["stats", t.cmdStats], ["settings", t.cmdSettings], ["undo", t.cmdUndo], ["help", t.cmdHelp]] as const)
+  ([["start", t.cmdStart], ["learn", t.cmdLearn], ["levels", t.cmdLevels], ["gen", t.cmdGen], ["stats", t.cmdStats], ["settings", t.cmdSettings], ["undo", t.cmdUndo], ["help", t.cmdHelp]] as const)
     .map(([command, description]) => ({ command, description }));
 
 await api("setWebhook", {
