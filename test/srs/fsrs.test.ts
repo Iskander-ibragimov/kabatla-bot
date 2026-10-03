@@ -75,12 +75,13 @@ describe("srs", () => {
 
   it("formatInterval ru and tt", () => {
     const cases: [number, string, string][] = [
-      [45_000, "<1м", "<1m"], [6 * MIN, "<6м", "<6m"], [3 * H, "3ч", "3h"],
-      [D, "1д", "1d"], [70 * D, "2,3мес", "2.3mo"], [400 * D, "1,1г", "1.1y"],
+      [45_000, "<1м", "<1мин"], [6 * MIN, "<6м", "<6мин"], [3 * H, "3ч", "3сәг"],
+      [D, "1д", "1көн"], [70 * D, "2,3мес", "2,3ай"], [400 * D, "1,1г", "1,1ел"],
     ];
     for (const [ms, ru, tt] of cases) {
       expect(formatInterval(ms, "ru")).toBe(ru);
       expect(formatInterval(ms, "tt")).toBe(tt);
+      expect(formatInterval(ms, "tt")).not.toMatch(/[a-z]/i);
     }
   });
 });

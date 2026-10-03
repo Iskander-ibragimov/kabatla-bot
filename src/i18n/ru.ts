@@ -1,4 +1,9 @@
 /** Russian UI strings. Functions take already-escaped HTML fragments. */
+const POS: Record<string, string> = {
+  n: "сущ.", v: "гл.", adj: "прил.", adv: "нареч.", pron: "мест.", num: "числ.",
+  post: "послелог", conj: "союз", part: "частица", intj: "межд.", phr: "фраза",
+};
+
 export const ru = {
   again: "Снова",
   hard: "Трудно",
@@ -29,7 +34,7 @@ export const ru = {
   edit: "✏️ Изменить",
   cancel: "✖️",
   foundN: (n: number) => `Нашёл ${n}:`,
-  welcome: "Привет! Я <b>Повтор</b> 👋\nПомогу выучить английские слова методом интервальных повторений, как в Anki.\n\nНа каком языке общаться?\n<i>Hi! Which language should I use?</i>",
+  welcome: "Привет! Я <b>Кабатла</b> 👋\nПомогу выучить татарские слова методом интервальных повторений, как в Anki.\n\nНа каком языке общаться?",
   placementQ: (i: number, word: string) => `Проверим уровень · ${i}/10\n\nЗнаете слово?\n\n<b>${word}</b>`,
   knowBtn: "Знаю",
   dontKnowBtn: "Не знаю",
@@ -58,7 +63,7 @@ export const ru = {
   notAdded: "Не добавляю.",
   editAsk: (word: string) => `Пришлите свой перевод для «${word}»`,
   previewExpired: "Это превью устарело — пришлите слова ещё раз.",
-  genUsage: "Напишите тему после команды, например:\n<code>/gen собеседование в IT</code>",
+  genUsage: "Напишите тему после команды, например:\n<code>/gen в гостях</code>",
   genWorking: (topic: string) => `🤖 Собираю колоду «${topic}»…`,
   genLimit: "Сегодня лимит AI-колод исчерпан (3 из 3). Завтра будет снова.",
   genFailed: "Не получилось собрать колоду — попробуйте позже.",
@@ -78,10 +83,10 @@ export const ru = {
   setMode: (r: number) => `🎯 Режим: ${r === 0.85 ? "Лёгкий" : r === 0.95 ? "Интенсив" : "Оптимальный"} · ${Math.round(r * 100)}%`,
   setNew: (n: number) => `🆕 Новых в день: ${n}`,
   setRemind: (t: string) => `⏰ Напоминание: ${t}`,
-  setDir: (d: string) => `↔️ Направление: ${d === "both" ? "оба" : d === "ru_tt" ? "RU → TT" : "TT → RU"}`,
+  setDir: (d: string) => `↔️ Направление: ${d === "both" ? "оба" : d === "ru_tt" ? "русский → татарский" : "татарский → русский"}`,
   setAuto: (on: boolean) => `🔊 Автоозвучка: ${on ? "вкл" : "выкл"}`,
-  help: "<b>Команды</b>\n/learn — повторять\n/decks — колоды\n/gen тема — AI-колода\n/stats — прогресс\n/settings — настройки\n/undo — отменить оценку\n\nЧтобы добавить своё слово, просто напишите его в чат. Можно списком до 20 строк. Ссылка в том же сообщении прикрепится к карточке.",
-  helpAdd: "Напишите слово или фразу в чат, например <code>resilient</code>. Можно несколько строк сразу, а ссылку на источник — в том же сообщении.",
+  help: "<b>Команды</b>\n/learn — повторять\n/decks — колоды\n/gen тема — AI-колода\n/stats — прогресс\n/settings — настройки\n/undo — отменить оценку\n\nЧтобы добавить своё слово, просто напишите его в чат. Можно списком до 20 строк. Ссылка в том же сообщении прикрепится к карточке.\n\n<i>Источники: частота слов — письменный корпус corpus.tatar; примеры — в том числе из Tatoeba (CC BY 2.0 FR); озвучка — синтез речи.</i>",
+  helpAdd: "Напишите слово или фразу в чат, например <code>рәхмәт</code>. Можно несколько строк сразу, а ссылку на источник — в том же сообщении.",
   maintenance: "⏳ Технический перерыв до 03:00 МСК: исчерпан дневной лимит бесплатного сервера. Прогресс сохранён.",
   unknownCommand: "Не знаю такой команды. /help",
   pushDaily: (n: number, mins: number) => `⏰ <b>Пора повторить</b>\n${n} карточек · ~${mins} мин`,
@@ -90,6 +95,18 @@ export const ru = {
   startBtn: "▶ Начать",
   saveStreakBtn: "▶ Спасти серию",
   continueBtn: "▶ Продолжить",
+  /** Part of speech by its catalog code; an unknown code is shown as is. */
+  posName: (code: string) => POS[code] ?? code,
+  levelTitle: (n: number) => `Уровень ${n}`,
+  /** Command descriptions and the bot description, registered by scripts/set-webhook.ts. */
+  cmdLearn: "Повторять слова",
+  cmdDecks: "Колоды",
+  cmdGen: "AI-колода по теме",
+  cmdStats: "Прогресс",
+  cmdSettings: "Настройки",
+  cmdUndo: "Отменить оценку",
+  cmdHelp: "Помощь",
+  botAbout: "Учу татарские слова по методу интервальных повторений, как Anki: 2 000 самых частых слов в 20 уровнях, свои слова со ссылками, AI-колоды и одно напоминание в день.",
 } as const;
 
 type Widen<T> = { [K in keyof T]: T[K] extends (...a: infer A) => string ? (...a: A) => string : string };

@@ -15,7 +15,7 @@ export function renderOnboarding(s: OnboardingScreen, lang: Lang, deck?: DeckRow
   const t = dict(lang);
   switch (s.kind) {
     case "lang":
-      return { text: t.welcome, keyboard: [[btn("🇷🇺 Русский", "ob:ru"), btn("Татарча", "ob:tt")]] };
+      return { text: t.welcome, keyboard: [[btn("Русский", "ob:ru"), btn("Татарча", "ob:tt")]] };
     case "placement":
       return { text: t.placementQ(s.index + 1, esc(s.word)), keyboard: [[btn(t.knowBtn, "ob:1", "success"), btn(t.dontKnowBtn, "ob:0")]] };
     case "goal":

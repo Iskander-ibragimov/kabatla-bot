@@ -91,17 +91,27 @@ export function preview(m: Mem, now: number, retention: number): Record<Rating, 
   return { 1: due(1), 2: due(2), 3: due(3), 4: due(4) };
 }
 
+/**
+ * Unit labels of the grade buttons. They live here, not in i18n, because srs imports nothing.
+ * Tatar: минут, сәгать, көн, ай, ел — short words stay whole, long ones are cut the usual way.
+ */
+const UNITS: Record<Lang, { min: string; hour: string; day: string; month: string; year: string }> = {
+  ru: { min: "м", hour: "ч", day: "д", month: "мес", year: "г" },
+  tt: { min: "мин", hour: "сәг", day: "көн", month: "ай", year: "ел" },
+};
+
+/** Compact interval for a grade button: "<10м", "3ч", "8д", "2,3мес" (ru); "<10мин", "3сәг", "8көн", "2,3ай" (tt). */
 export function formatInterval(ms: number, lang: Lang): string {
-  const ru = lang === "ru";
-  if (ms < MIN) return ru ? "<1м" : "<1m";
+  const u = UNITS[lang];
+  if (ms < MIN) return `<1${u.min}`;
   const m = Math.round(ms / MIN);
-  if (m < 60) return `<${m}${ru ? "м" : "m"}`;
-  if (ms < DAY) return `${Math.round(ms / H)}${ru ? "ч" : "h"}`;
+  if (m < 60) return `<${m}${u.min}`;
+  if (ms < DAY) return `${Math.round(ms / H)}${u.hour}`;
   const d = Math.round(ms / DAY);
-  if (d < 30) return `${d}${ru ? "д" : "d"}`;
-  const dec = (x: number) => (Math.round(x * 10) / 10).toString().replace(".", ru ? "," : ".");
-  if (d < 365) return `${dec(d / 30)}${ru ? "мес" : "mo"}`;
-  return `${dec(d / 365)}${ru ? "г" : "y"}`;
+  if (d < 30) return `${d}${u.day}`;
+  const dec = (x: number) => (Math.round(x * 10) / 10).toString().replace(".", ",");
+  if (d < 365) return `${dec(d / 30)}${u.month}`;
+  return `${dec(d / 365)}${u.year}`;
 }
 
 export function stage(m: Mem): Stage {

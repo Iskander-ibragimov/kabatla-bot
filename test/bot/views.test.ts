@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { renderAddPreview, renderCard, renderDone, type CardView } from "../../src/bot/views";
+import { renderOnboarding, renderSettings } from "../../src/bot/screens";
+import { formatLong, renderAddPreview, renderCard, renderDone, type CardView } from "../../src/bot/views";
+import type { User } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
 import { newMem } from "../../src/srs/fsrs";
@@ -87,7 +89,39 @@ describe("views", () => {
     expect(many.keyboard.flat().map((b) => b.callback_data)).toEqual(["add:ok:6", "add:no:6"]);
   });
 
-  it("ru and tt have the same keys", () => {
+  it("ru and tt have the same keys, of the same kind", () => {
+    expect(tt).not.toBe(ru);
     expect(Object.keys(tt).sort()).toEqual(Object.keys(ru).sort());
+    const kind = (d: Record<string, unknown>) => Object.entries(d).map(([k, v]) => `${k}:${typeof v === "function" ? `fn/${v.length}` : typeof v}`).sort();
+    expect(kind(tt)).toEqual(kind(ru));
+  });
+
+  it("card buttons, progress line and done screen are in Tatar for a tt user", () => {
+    const card = renderCard(view(), counts, { 1: "<10мин", 2: "1көн", 3: "2көн", 4: "4көн" }, true, "tt");
+    expect(card.keyboard.slice(0, 2).flat().map((b) => b.text)).toEqual(["Яңадан <10мин", "Авыр 1көн", "Яхшы 2көн", "Җиңел 4көн"]);
+    expect(card.keyboard[2]!.map((b) => b.text)).toEqual(["🔊", "↩️ Кире алу"]);
+    expect(card.text).toContain("🌿 Өйрәнәм · хәтердә ~2 көн · кабатлау №4");
+    const done = renderDone({ reviewsToday: 24, learnedToday: 3, totals: { learned: 37, known: 20, learning: 14, new: 429 }, nextLearningInMs: 480_000, streak: 5 }, "tt");
+    expect(done.text).toContain("Бүген: 24 кабатлау · +3 өйрәнелде");
+    expect(done.text).toContain("Барлыгы: 🏆 37 · 🌳 20 · 🌿 14 · 🌱 429");
+    expect(done.text).toContain("8 минут");
+    expect(done.text).toContain("🔥 Рәттән 5 көн");
+    expect(done.text).not.toMatch(/Сегодня|Всего|Серия/);
+  });
+
+  it("long intervals use Tatar units for a tt user", () => {
+    expect([8 * 60_000, 3 * 3_600_000, 11 * 86_400_000, 36 * 86_400_000].map((ms) => formatLong(ms, "tt"))).toEqual(["8 минут", "3 сәгать", "11 көн", "1,2 ай"]);
+    expect(formatLong(36 * 86_400_000, "ru")).toBe("1,2 мес.");
+  });
+
+  it("settings and the language choice name both languages in their own words", () => {
+    const user = { lang: "ru", retention: 0.9, newPerDay: 10, remindAt: "09:00", direction: "tt_ru", autoplay: false } as User;
+    const labels = (u: User) => renderSettings(u).keyboard.flat().map((b) => b.text);
+    expect(labels(user)).toEqual(["🌐 Язык: Русский", "🎯 Режим: Оптимальный · 90%", "🆕 Новых в день: 10", "⏰ Напоминание: 09:00", "↔️ Направление: татарский → русский", "🔊 Автоозвучка: выкл"]);
+    expect(labels({ ...user, lang: "tt", direction: "ru_tt" })).toEqual(["🌐 Тел: Татарча", "🎯 Режим: Оптималь · 90%", "🆕 Көненә яңа сүзләр: 10", "⏰ Искә төшерү: 09:00", "↔️ Юнәлеш: русча → татарча", "🔊 Автомат тавыш: сүндерелгән"]);
+    expect(renderSettings({ ...user, lang: "tt" }).text).toContain("Көйләүләр");
+    for (const lang of ["ru", "tt"] as const) {
+      expect(renderOnboarding({ kind: "lang" }, lang).keyboard.flat().map((b) => [b.text, b.callback_data])).toEqual([["Русский", "ob:ru"], ["Татарча", "ob:tt"]]);
+    }
   });
 });
