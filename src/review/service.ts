@@ -1,4 +1,4 @@
-import type { Candidates, CardRow, Direction, NewNote, Repo, User } from "../db/repo";
+import type { CardRow, Direction, NewNote, Repo, User } from "../db/repo";
 import { type Mem, type Rating, formatInterval, grade as fsrsGrade, memoryDays, newMem, preview, stage } from "../srs/fsrs";
 import { dayWindow, localDay } from "../users/service";
 import { pick } from "./pick";
@@ -65,18 +65,25 @@ export class ReviewService {
   async nextScreen(user: User, feedback: Feedback | null = null): Promise<Screen> {
     const w = dayWindow(user.tzOffsetMin, this.now);
     const opts = { ...w, directions: directionsOf(user) };
-    let c: Candidates = await this.repo.candidateCards(user.id, this.now, opts);
+    let c = await this.repo.candidateCards(user.id, this.now, opts);
     let levelUp: LevelUp | null = null;
-    // The open levels have no unseen words and today's limit is not spent: open the next level the catalog has in the
-    // same D1 call that re-reads the queue. Only the call whose UPDATE moved users.level gets the new level back and
-    // announces it (double taps, stale `user`). While no higher level is published nothing moves and nothing is said.
+    // The open decks have no unseen words and today's limit is not spent: a level is opened in the same D1 call that
+    // re-reads the queue.
     if (c.counts.newAvailable === 0 && newLeftOf(user, c.counts) > 0 && user.level <= LAST_LEVEL) {
-      const from = user.level;
-      const reread = await this.repo.candidateCards(user.id, this.now, opts, this.repo.openLevelStmts(user.id, from, LAST_LEVEL, this.now));
-      const [, moved, coverage] = reread.pre;
-      const opened = moved!.results[0]?.level as number | undefined;
-      if (opened != null) levelUp = { from, to: opened <= LAST_LEVEL ? opened : null, coveragePct: (coverage!.results[0]?.coverage_pct as number | null | undefined) ?? null };
-      c = reread;
+      if (c.currentLevelClosed) {
+        // The deck of the current level exists but was never opened (the learner finished onboarding before it was
+        // published): that deck is opened, the level stays, and nothing is announced — no level was finished.
+        c = await this.repo.candidateCards(user.id, this.now, opts, [this.repo.openCurrentLevelStmt(user.id, this.now)]);
+      } else {
+        // The next level the catalog has is opened. Only the call whose UPDATE moved users.level gets the new level back
+        // and announces it (double taps, stale `user`). While no higher level is published nothing moves and nothing is said.
+        const from = user.level;
+        const reread = await this.repo.candidateCards(user.id, this.now, opts, this.repo.openLevelStmts(user.id, from, LAST_LEVEL, this.now));
+        const [moved, , coverage] = reread.pre;
+        const opened = moved!.results[0]?.level as number | undefined;
+        if (opened != null) levelUp = { from, to: opened <= LAST_LEVEL ? opened : null, coveragePct: (coverage!.results[0]?.coverage_pct as number | null | undefined) ?? null };
+        c = reread;
+      }
     }
     const newLeft = newLeftOf(user, c.counts);
     const p = pick(c, newLeft, this.now, user.mixCounter);

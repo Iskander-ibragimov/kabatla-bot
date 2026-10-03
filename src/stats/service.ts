@@ -31,7 +31,10 @@ export interface LevelsView {
   passed: number[];
   /** The current level (when the catalog has it and it is open) and the opened levels below it that still have unseen words, by level number. */
   inProgress: { levelNo: number; seen: number; total: number }[];
-  /** How many levels the catalog has after the current one; levels that are not published yet are not counted. */
+  /**
+   * How many levels the catalog has that are still to be opened: those after the current one and the current one itself
+   * when it was never opened (the session opens it next). Levels that are not published yet are not counted.
+   */
   ahead: number;
   /** «Мои слова» and the AI decks. */
   own: Pick<DeckRow, "kind" | "titleRu" | "titleTt" | "total">[];
@@ -49,7 +52,7 @@ export async function levelsView(repo: Repo, user: Pick<User, "id" | "level">): 
     passed: below.filter((l) => !l.open || l.seen >= l.total).map((l) => l.levelNo),
     inProgress: levels.filter((l) => l.open && (l.levelNo === user.level || (l.levelNo < user.level && l.seen < l.total)))
       .map((l) => ({ levelNo: l.levelNo, seen: l.seen, total: l.total })),
-    ahead: levels.filter((l) => l.levelNo > user.level).length,
+    ahead: levels.filter((l) => l.levelNo > user.level || (l.levelNo === user.level && !l.open)).length,
     own: own.map((d) => ({ kind: d.kind, titleRu: d.titleRu, titleTt: d.titleTt, total: d.total })),
     coveragePct: below.at(-1)?.coveragePct ?? null,
     skipped: below.filter((l) => !l.open).map((l) => l.levelNo),

@@ -116,9 +116,11 @@ describe("levels view", () => {
     // Production today: level 1 is the only level published.
     const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 3 });
     expect(await levelsView(repo, user)).toEqual({ passed: [], inProgress: [{ levelNo: 1, seen: 0, total: 3 }], ahead: 0, own: [], coveragePct: null, skipped: [] });
-    await seedLevels(env.DB, { 2: ["авыл"], 3: ["су"], 7: ["юл"] });
+    const ids = await seedLevels(env.DB, { 2: ["авыл"], 3: ["су"], 7: ["юл"] });
     expect((await levelsView(repo, user)).ahead).toBe(3);
+    // On level 3, with its deck open, only level 7 is ahead.
     await repo.updateUser(user.id, { level: 3 });
+    await repo.subscribe(user.id, ids[3]!, T);
     expect((await levelsView(repo, (await repo.getUser(user.id))!)).ahead).toBe(1);
   });
 
@@ -128,6 +130,25 @@ describe("levels view", () => {
     await env.DB.prepare("DELETE FROM user_decks").run();
     await repo.updateUser(user.id, { level: 4 });
     expect(await levelsView(repo, (await repo.getUser(user.id))!)).toEqual({ passed: [1], inProgress: [], ahead: 0, own: [], coveragePct: null, skipped: [1] });
+  });
+
+  it("a current level that exists but was never opened is a level ahead, in /levels as in the session; /stats is the same as for an open one (ruling T16c)", async () => {
+    const repo = new Repo(env.DB);
+    const id = await repo.insertUser({ tgId: 42, chatId: 42, lang: "ru", now: T });
+    await repo.updateUser(id, { onboardingStep: null, level: 4 });
+    const user = (await repo.getUser(id))!;
+    await seedLevels(env.DB, { 3: ["юл"], 4: ["авыл", "су"], 5: ["көн"] }, { 3: 54 });
+    expect(await levelsView(repo, user)).toEqual({ passed: [3], inProgress: [], ahead: 2, own: [], coveragePct: 54, skipped: [3] });
+    const h = harness(env.DB, { now: T });
+    await h.text("/levels");
+    expect(h.lastText()).toBe(["📚 <b>Уровни</b>", "✅ Пройдено: 3", "🔒 Впереди: 2", "📖 Покрытие текста ≈54%"].join("\n"));
+    const closed = await cumulative(repo, user, T);
+    expect(closed).toMatchObject({ level: 4, coveragePct: 54, fresh: 0 });
+    // The session opens it: now it is the level in progress and one level is ahead.
+    await h.text("/learn");
+    expect(h.lastText()).toContain("<b>авыл</b>");
+    expect(await levelsView(repo, user)).toEqual({ passed: [3], inProgress: [{ levelNo: 4, seen: 0, total: 2 }], ahead: 1, own: [], coveragePct: 54, skipped: [3] });
+    expect(await cumulative(repo, user, T)).toMatchObject({ level: 4, coveragePct: 54, fresh: 2 });
   });
 
   it("takes the coverage from the nearest level below the current one when the catalog has a gap, in /levels and in /stats", async () => {

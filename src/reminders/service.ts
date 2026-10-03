@@ -18,9 +18,12 @@ const READY = "+u.active = 1 AND u.onboarding_step IS NULL";
 const IN_DECKS = "n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = u.id)";
 /**
  * The words of the level a tap on «Учить» would open: levels open lazily, in the review session, once the open ones have
- * no unseen words. NULL while the catalog has no level above the user's current one.
+ * no unseen words. That level is the user's current one when its deck was never opened, else the next level the catalog
+ * has above it. NULL while there is no such level.
  */
-const NEXT_LEVEL_WORDS = `(SELECT d.total FROM decks d WHERE d.level_no > u.level AND d.level_no <= ${LAST_LEVEL} ORDER BY d.level_no LIMIT 1)`;
+const NEXT_LEVEL_WORDS = `(SELECT d.total FROM decks d WHERE d.level_no <= ${LAST_LEVEL} AND (d.level_no > u.level
+    OR (d.level_no = u.level AND NOT EXISTS (SELECT 1 FROM user_decks ud WHERE ud.user_id = u.id AND ud.deck_id = d.id)))
+  ORDER BY d.level_no LIMIT 1)`;
 
 interface Push { chat_id: number; text: string; reply_markup: unknown; parse_mode: "HTML" }
 interface Planned { userId: number; push: Push }

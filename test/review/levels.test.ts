@@ -196,6 +196,142 @@ describe("levels", () => {
     });
   });
 
+  describe("the current level's deck exists but was never opened (ruling T16c)", () => {
+    /** A learner who finished onboarding at `level` with nothing open: the catalog had no such level then. */
+    async function strandedAt(level: number, tgId = 1) {
+      const repo = new Repo(env.DB);
+      const id = await repo.insertUser({ tgId, chatId: tgId, lang: "ru", now });
+      await repo.updateUser(id, { onboardingStep: null, tzOffsetMin: 180, level });
+      return { repo, user: (await repo.getUser(id))! };
+    }
+    const openLevels = async (userId: number) =>
+      (await env.DB.prepare("SELECT d.level_no FROM user_decks ud JOIN decks d ON d.id = ud.deck_id WHERE ud.user_id = ? AND d.level_no IS NOT NULL ORDER BY d.level_no").bind(userId).all<{ level_no: number }>())
+        .results.map((r) => r.level_no);
+
+    it("opens that deck on the next screen, with no announcement, and the level stays", async () => {
+      const { repo, user } = await strandedAt(4);
+      expect((await new ReviewService(repo, now).nextScreen(user)).kind).toBe("nothing");
+      // The catalog gains level 4, and level 5 behind it.
+      await seedLevels(env.DB, { 4: ["авыл", "су"], 5: ["юл"] }, { 4: 61 });
+      const s = asCard(await new ReviewService(repo, now).nextScreen(user));
+      expect(s.view.word).toBe("авыл");
+      expect(s.levelUp).toBeNull();
+      expect(s.counts).toEqual({ n: 2, l: 0, r: 0 });
+      expect((await repo.getUser(user.id))!.level).toBe(4);
+      expect(await openLevels(user.id)).toEqual([4]);
+      // From here on it is an ordinary level: level 5 opens when level 4 is done, with the announcement.
+      let next = await gradeShown(repo, user, s, 4, now);
+      expect(asCard(next).view.word).toBe("су");
+      expect(levelUpOf(next)).toBeNull();
+      next = await gradeShown(repo, user, next, 4, now);
+      expect(levelUpOf(next)).toEqual({ from: 4, to: 5, coveragePct: 61 });
+      expect(asCard(next).view.word).toBe("юл");
+      expect(await openLevels(user.id)).toEqual([4, 5]);
+    });
+
+    it("two concurrent calls open it once and neither moves to the level above", async () => {
+      const { repo, user } = await strandedAt(4);
+      await seedLevels(env.DB, { 4: ["авыл", "су"], 5: ["юл"] });
+      const screens = await Promise.all([
+        new ReviewService(repo, now).nextScreen(user),
+        new ReviewService(repo, now).nextScreen(user),
+        new ReviewService(repo, now).nextScreen(user),
+      ]);
+      expect(screens.map((s) => asCard(s).view.word)).toEqual(["авыл", "авыл", "авыл"]);
+      expect(new Set(screens.map((s) => asCard(s).view.cardId)).size).toBe(1);
+      expect(screens.map(levelUpOf)).toEqual([null, null, null]);
+      expect((await repo.getUser(user.id))!.level).toBe(4);
+      expect(await openLevels(user.id)).toEqual([4]);
+      expect(await subscriptions(user.id)).toBe(1);
+      expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM cards WHERE user_id = ?").bind(user.id).first<{ n: number }>())!.n).toBe(1);
+    });
+
+    it("the level change itself refuses to step over a current level that is not open", async () => {
+      // What a call would send if it had read the queue before level 4 was published.
+      const { repo, user } = await strandedAt(4);
+      await seedLevels(env.DB, { 4: ["авыл"], 5: ["юл"] });
+      await repo.batch(repo.openLevelStmts(user.id, 4, LAST_LEVEL, now));
+      expect((await repo.getUser(user.id))!.level).toBe(4);
+      expect(await openLevels(user.id)).toEqual([]);
+    });
+
+    it("costs exactly one D1 call more than a plain next card", async () => {
+      const { user } = await strandedAt(4);
+      await seedLevels(env.DB, { 4: ["авыл", "су"] });
+      const db = countingDb(env.DB);
+      const repo = new Repo(db);
+      expect(asCard(await new ReviewService(repo, now).nextScreen(user)).view.word).toBe("авыл");
+      const opening = db.calls;
+      db.calls = 0;
+      expect(asCard(await new ReviewService(repo, now).nextScreen(user)).view.word).toBe("авыл");
+      expect(opening).toBe(db.calls + 1);
+    });
+
+    it("waits until the open decks have no unseen words, like any level", async () => {
+      // Level 1 was opened with «Открыть пропущенные» and still has a word.
+      const { repo, user } = await strandedAt(4);
+      await seedLevels(env.DB, { 1: ["китап"], 4: ["авыл"] });
+      expect(await repo.openSkippedLevels(user.id, now)).toBe(1);
+      let s = await new ReviewService(repo, now).nextScreen((await repo.getUser(user.id))!);
+      expect(asCard(s).view.word).toBe("китап");
+      expect(await openLevels(user.id)).toEqual([1]);
+      s = await gradeShown(repo, user, s, 4, now);
+      expect(asCard(s).view.word).toBe("авыл");
+      expect(levelUpOf(s)).toBeNull();
+      expect((await repo.getUser(user.id))!.level).toBe(4);
+      expect(await openLevels(user.id)).toEqual([1, 4]);
+    });
+
+    it("does not open it while the daily limit is used up", async () => {
+      const { repo, user } = await strandedAt(4);
+      await repo.updateUser(user.id, { newPerDay: 1 });
+      await seedLevels(env.DB, { 1: ["китап"], 4: ["авыл"] });
+      await repo.openSkippedLevels(user.id, now);
+      let s = await new ReviewService(repo, now).nextScreen((await repo.getUser(user.id))!);
+      s = await gradeShown(repo, user, s, 3, now);
+      expect(s.kind).toBe("done");
+      expect(await openLevels(user.id)).toEqual([1]);
+    });
+
+    it("the last level, never opened, is opened and not congratulated on", async () => {
+      const { repo, user } = await strandedAt(20);
+      await seedLevels(env.DB, { 20: ["авыл"] }, { 20: 80 });
+      const s = asCard(await new ReviewService(repo, now).nextScreen(user));
+      expect(s.view.word).toBe("авыл");
+      expect(s.levelUp).toBeNull();
+      expect((await repo.getUser(user.id))!.level).toBe(20);
+      const done = await gradeShown(repo, user, s, 4, now);
+      expect(levelUpOf(done)).toEqual({ from: 20, to: null, coveragePct: 80 });
+      expect((await repo.getUser(user.id))!.level).toBe(21);
+    });
+
+    it("onboarding on an empty catalog, then the level is published: /learn shows its first word within budget", async () => {
+      const db = countingDb(env.DB);
+      const h = harness(db, { now });
+      await h.text("/start");
+      await h.press("ob:ru");
+      for (let i = 0; i < 10; i++) await h.press(i < 5 ? "ob:1" : "ob:0");
+      await h.press("ob:10");
+      await h.press("ob:09:00");
+      await h.press("ob:180");
+      expect(h.lastText()).toBe(ru.nothingToLearn);
+      const repo = new Repo(env.DB);
+      const u = (await repo.getUserByTg(42))!;
+      expect(u.level).toBe(4);
+      expect(await repo.userDeckIds(u.id)).toEqual([]);
+
+      await seedLevels(env.DB, { 4: ["авыл", "су"], 5: ["юл"] }, { 4: 61 });
+      const telegramBefore = h.tg.calls.length;
+      db.calls = 0;
+      await h.text("/learn");
+      expect(h.lastText().startsWith("🔵 2 · 🔴 0 · 🟢 0\n<b>авыл</b>")).toBe(true);
+      expect(h.tg.calls.slice(telegramBefore).map((c) => c.method)).toEqual(["sendMessage"]);
+      expect(db.calls).toBeLessThanOrEqual(8);
+      expect((await repo.getUser(u.id))!.level).toBe(4);
+      expect(await openLevels(u.id)).toEqual([4]);
+    });
+  });
+
   it("congratulates once after level 20", async () => {
     const { repo, user } = await seedUser(env.DB, { now, level: 20, words: 2 });
     await seedLevels(env.DB, {}, { 20: 80 });

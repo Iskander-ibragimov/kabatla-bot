@@ -96,6 +96,9 @@ const ownedCopy = (user: string) =>
   `(dk.kind = 'catalog' AND EXISTS (SELECT 1 FROM notes o JOIN decks od ON od.id = o.deck_id WHERE od.owner_id = ${user} AND o.word_key = n.word_key))`;
 /** Excludes such a level word from the new-word queue: it counts as shown. */
 const skipOwned = (user: string) => `NOT ${ownedCopy(user)}`;
+/** Subscribes user ?1 to the deck of the level the user is on now, at time ?2; nothing when the catalog has no such deck. */
+const OPEN_CURRENT_LEVEL =
+  "INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) SELECT u.id, d.id, ?2 FROM users u JOIN decks d ON d.level_no = u.level WHERE u.id = ?1";
 /** A card `c` with its note `n`; the viewer of the note is the user the card belongs to. */
 const CARD_COLS = `c.id, c.note_id, c.direction, c.state, c.step, c.stability, c.difficulty, c.due, c.last_review, c.scheduled_days, c.reps, c.lapses, c.buried_day, ${noteCols("c.user_id")}`;
 
@@ -221,19 +224,30 @@ export class Repo {
   }
   /**
    * Opens the level that follows `from`: the next level the catalog has (the smallest `level_no` above `from`, up to
-   * `last`), so a gap in the catalog is stepped over. Three statements for one batch: the subscription to that deck,
-   * the level change, which returns the new level, and the coverage of `from` for the announcement.
+   * `last`), so a gap in the catalog is stepped over. Three statements for one batch: the level change, which returns
+   * the new level; the subscription to the deck of that level, made only when the level changed; and the coverage of
+   * `from` for the announcement.
    * The level change touches a row only if the user is still on `from`, so only one of several concurrent calls gets
-   * the new level back. While no higher level exists nothing changes, except on the last level: from there the user
-   * moves to `last + 1`, which means every level is done.
+   * the new level back; and only if the deck of `from` is open for the user or does not exist — a current level that
+   * was never opened is opened first, see `openCurrentLevelStmt`. While no higher level exists nothing changes, except
+   * on the last level: from there the user moves to `last + 1`, which means every level is done.
    */
   openLevelStmts(userId: number, from: number, last: number, now: number): D1PreparedStatement[] {
     const next = "(SELECT MIN(level_no) FROM decks WHERE level_no > ?1 AND level_no <= ?2)";
+    const currentClosed = "EXISTS (SELECT 1 FROM decks d WHERE d.level_no = ?1 AND NOT EXISTS (SELECT 1 FROM user_decks ud WHERE ud.user_id = ?3 AND ud.deck_id = d.id))";
     return [
-      this.db.prepare(`INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) SELECT ?3, id, ?4 FROM decks WHERE level_no = ${next}`).bind(from, last, userId, now),
-      this.db.prepare(`UPDATE users SET level = COALESCE(${next}, ?2 + 1) WHERE id = ?3 AND level = ?1 AND (?1 = ?2 OR ${next} IS NOT NULL) RETURNING level`).bind(from, last, userId),
+      this.db.prepare(`UPDATE users SET level = COALESCE(${next}, ?2 + 1) WHERE id = ?3 AND level = ?1 AND (?1 = ?2 OR ${next} IS NOT NULL) AND NOT ${currentClosed} RETURNING level`).bind(from, last, userId),
+      this.db.prepare(`${OPEN_CURRENT_LEVEL} AND changes() = 1`).bind(userId, now),
       this.db.prepare("SELECT coverage_pct FROM decks WHERE level_no = ?").bind(from),
     ];
+  }
+  /**
+   * Opens the deck of the user's current level when the catalog has it and the user is not subscribed to it; `users.level`
+   * stays. A user's level is meant to be open whenever its deck exists; this restores that for a learner who finished
+   * onboarding before the level was published. Safe to run from several calls at once: the deck is opened once.
+   */
+  openCurrentLevelStmt(userId: number, now: number): D1PreparedStatement {
+    return this.db.prepare(OPEN_CURRENT_LEVEL).bind(userId, now);
   }
   private rowToDeck(r: Record<string, unknown>): DeckRow {
     return { id: r.id as number, slug: (r.slug as string) ?? null, ownerId: (r.owner_id as number) ?? null, kind: r.kind as DeckRow["kind"],
@@ -436,8 +450,11 @@ export class Repo {
     return r ? rowToCard(r) : null;
   }
 
-  /** Everything the session queue needs, in one D1 call. `pre` statements run first in the same batch; their results come back as `pre`. */
-  async candidateCards(userId: number, now: number, w: DayWindow, pre: D1PreparedStatement[] = []): Promise<Candidates & { pre: D1Result<Record<string, unknown>>[] }> {
+  /**
+   * Everything the session queue needs, in one D1 call. `pre` statements run first in the same batch; their results come back as `pre`.
+   * `currentLevelClosed`: the catalog has the deck of the user's current level and the user is not subscribed to it.
+   */
+  async candidateCards(userId: number, now: number, w: DayWindow, pre: D1PreparedStatement[] = []): Promise<Candidates & { pre: D1Result<Record<string, unknown>>[]; currentLevelClosed: boolean }> {
     const lim = w.limitEach ?? 50;
     const dirs = JSON.stringify(w.directions);
     const inDirs = "c.direction IN (SELECT value FROM json_each(?))";
@@ -461,13 +478,15 @@ export class Repo {
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state = 'review' AND c.due < ?3 AND c.direction IN (SELECT value FROM json_each(?2)) AND (c.buried_day IS NULL OR c.buried_day != ?4) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS review,
           (SELECT COUNT(*) FROM notes n JOIN decks dk ON dk.id = n.deck_id JOIN json_each(?2) d WHERE n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1) AND ${skipOwned("?1")} AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ?1 AND c.note_id = n.id AND ((c.direction = d.value AND c.state != 'new') OR c.buried_day = ?4))) AS new_available,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND was_new = 1 AND rating < 4 AND undone = 0 AND reviewed_at >= ?5) AS new_done_today,
-          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND was_new = 1 AND rating = 4 AND undone = 0 AND reviewed_at >= ?5) AS easy_new_today`)
+          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND was_new = 1 AND rating = 4 AND undone = 0 AND reviewed_at >= ?5) AS easy_new_today,
+          EXISTS (SELECT 1 FROM users u JOIN decks dk ON dk.level_no = u.level WHERE u.id = ?1 AND NOT EXISTS (SELECT 1 FROM user_decks ud WHERE ud.user_id = ?1 AND ud.deck_id = dk.id)) AS level_closed`)
         .bind(userId, dirs, w.dayEndMs, w.today, w.dayStartMs),
     ]);
     const [learning, review, fresh, counts] = res.slice(pre.length);
     const c = counts!.results[0]!;
     return {
       pre: res.slice(0, pre.length),
+      currentLevelClosed: c.level_closed === 1,
       learning: learning!.results.map(rowToCard),
       review: review!.results.map(rowToCard),
       newNotes: fresh!.results.map((r) => ({ ...noteFields(r), noteId: r.note_id as number, direction: r.direction as Direction })),

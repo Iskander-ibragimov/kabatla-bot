@@ -37,8 +37,9 @@ describe("reminders tick", () => {
   });
 
   it("no push when nothing is due", async () => {
+    // Nothing is open, and the catalog has no deck of the learner's level nor of a higher one: a tap would open nothing.
     await seedUser(env.DB, { now: local(30, 8, 0), words: 3, patch: { newPerDay: 5 } });
-    await env.DB.prepare("DELETE FROM user_decks").run();
+    await env.DB.batch([env.DB.prepare("DELETE FROM user_decks"), env.DB.prepare("UPDATE users SET level = 5")]);
     const tg = fakeTelegram();
     await run(env.DB, tg, local(30, 9, 5));
     expect(tg.of("sendMessage")).toHaveLength(0);
@@ -108,6 +109,21 @@ describe("reminders tick", () => {
       expect(await pushes()).toEqual([]);
       await repo.updateUser(user.id, { level: 21, nextDailyAt: local(30, 9, 0) });
       expect(await pushes(local(30, 9, 2))).toEqual([]);
+    });
+
+    it("a current level that was never opened counts as the level a tap would open (ruling T16c)", async () => {
+      // Finished onboarding at level 4 when the catalog had no such level; now it has, and level 5 behind it.
+      const repo = new Repo(env.DB);
+      const id = await repo.insertUser({ tgId: 7, chatId: 7, lang: "ru", now: local(30, 8, 0) });
+      await repo.updateUser(id, { onboardingStep: null, tzOffsetMin: 180, level: 4, nextDailyAt: local(30, 9, 0) });
+      await seedLevels(env.DB, { 4: ["авыл", "су", "юл"], 5: Array.from({ length: 8 }, (_, i) => `сүз${i + 1}`) });
+      expect(await pushes()).toEqual([ru.pushDaily(3, 1)]);
+      // Once it is open and finished, the level above is the next one.
+      await repo.subscribe(id, (await repo.getDeckBySlug("l04"))!.id, local(30, 9, 5));
+      const notes = await env.DB.prepare("SELECT id FROM notes WHERE deck_id = (SELECT id FROM decks WHERE level_no = 4)").all<{ id: number }>();
+      for (const n of notes.results) await repo.insertCard(id, n.id, "tt_ru", gradedMem(local(29, 12, 0)));
+      await repo.updateUser(id, { nextDailyAt: local(30, 9, 0) });
+      expect(await pushes(local(30, 9, 6))).toEqual([ru.pushDaily(8, 3)]);
     });
 
     it("still counts the unseen words of the open levels first, without looking ahead", async () => {
