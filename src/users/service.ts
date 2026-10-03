@@ -88,7 +88,9 @@ export type OnboardingScreen =
   | { kind: "remind" }
   | { kind: "tz"; options: { label: string; offset: number }[] }
   | { kind: "finished"; remindAt: string; tzOffsetMin: number; level: number }
-  | { kind: "invalid"; step: string };
+  | { kind: "invalid"; step: string }
+  /** The answer came after another one had already finished onboarding; nothing was written. */
+  | { kind: "stale" };
 
 const TZ_CHOICES = [120, 180, 240, 300, 420, 600];
 function tzOptions(now: number) {
@@ -159,12 +161,12 @@ export async function advanceOnboarding(repo: Repo, user: User, answer: string, 
     // and `users.level` is the level actually opened. With an empty catalog the placed level stays, with nothing opened.
     const start = await repo.startLevel(user.level);
     const level = start?.levelNo ?? user.level;
-    const stmts = [repo.updateUserStmt(user.id, {
+    // Two answers to this step may arrive together: the write is guarded on the step, so only one of them finishes.
+    const [finished] = await repo.batch(repo.finishOnboardingStmts(user.id, {
       level, tzOffsetMin: offset, onboardingStep: null, onboardingData: null,
       nextDailyAt: nextOccurrence(offset, user.remindAt, now), nextEveningAt: nextOccurrence(offset, EVENING_AT, now),
-    })];
-    if (start) stmts.unshift(repo.subscribeStmt(user.id, start.deckId, now));
-    await repo.batch(stmts);
+    }, start?.deckId ?? null, now));
+    if (!finished!.meta.changes) return { kind: "stale" };
     return { kind: "finished", remindAt: user.remindAt, tzOffsetMin: offset, level };
   }
   return invalid;

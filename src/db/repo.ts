@@ -154,6 +154,20 @@ export class Repo {
     return this.db.prepare(`UPDATE users SET ${keys.map((k) => `${snake(k)} = ?`).join(", ")} WHERE id = ?`).bind(...vals, id);
   }
   async updateUser(id: number, patch: Partial<Omit<User, "id">>): Promise<void> { await this.updateUserStmt(id, patch).run(); }
+  /**
+   * The write that ends onboarding, two statements for one batch: the user patch, applied only while the user is still on
+   * the time-zone step, and the subscription to the start deck (if there is one), made only when the patch was applied.
+   * Of two concurrent answers to that step one changes the row; `meta.changes` of the first statement tells which.
+   */
+  finishOnboardingStmts(userId: number, patch: Partial<Omit<User, "id">>, deckId: number | null, now: number): D1PreparedStatement[] {
+    const keys = Object.keys(patch);
+    const vals = keys.map((k) => { const v = (patch as Record<string, unknown>)[k]; return typeof v === "boolean" ? (v ? 1 : 0) : (v ?? null); });
+    const stmts = [this.db.prepare(`UPDATE users SET ${keys.map((k) => `${snake(k)} = ?`).join(", ")} WHERE id = ? AND onboarding_step = 'tz'`).bind(...vals, userId)];
+    if (deckId != null) {
+      stmts.push(this.db.prepare("INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) SELECT ?, ?, ? WHERE changes() = 1").bind(userId, deckId, now));
+    }
+    return stmts;
+  }
 
   /* decks and notes */
   async insertDeck(d: { slug: string | null; kind: DeckRow["kind"]; titleRu: string; titleTt: string; levelNo: number | null; coveragePct: number | null; ownerId: number | null }): Promise<number> {

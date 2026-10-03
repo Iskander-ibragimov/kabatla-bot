@@ -115,6 +115,27 @@ describe("bot handlers", () => {
     expect(await repo.userDeckIds(u.id)).toEqual([(await repo.getDeckBySlug("l01"))!.id]);
   });
 
+  it("two concurrent taps on a time-zone button finish onboarding once; the second is answered as a stale button", async () => {
+    const { h, update } = await finishWith((h) => Promise.all([h.press("ob:180", 100), h.press("ob:180", 100)]));
+    expect(update.filter((c) => c.method === "editMessageText")).toHaveLength(1);
+    const cards = update.filter((c) => c.method === "sendMessage");
+    expect(cards).toHaveLength(1);
+    expect(String(cards[0]!.payload.text)).toContain("дүрт");
+    expect(update.filter((c) => c.method === "answerCallbackQuery").map((c) => c.payload.text).sort()).toEqual([tt.staleButton, undefined].sort());
+    const repo = new Repo(env.DB);
+    const u = (await repo.getUserByTg(42))!;
+    expect(await repo.userDeckIds(u.id)).toEqual([(await repo.getDeckBySlug("l04"))!.id]);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM cards WHERE user_id = ?").bind(u.id).first<{ n: number }>())!.n).toBe(1);
+    void h;
+  });
+
+  it("two concurrent typed times finish onboarding once and the second gets no answer", async () => {
+    const { update } = await finishWith((h) => Promise.all([h.text("14:35"), h.text("14:35")]));
+    expect(update.map((c) => c.method)).toEqual(["sendMessage", "sendMessage"]);
+    expect(textsOf(update)[0]).toContain(tt.easyHint);
+    expect(textsOf(update)[1]).toContain("дүрт");
+  });
+
   it("without a seeded start level onboarding still finishes and shows the empty screen", async () => {
     const h = harness(env.DB, { now: T });
     await h.text("/start");

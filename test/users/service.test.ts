@@ -148,6 +148,33 @@ describe("users", () => {
     });
   });
 
+  describe("finishing onboarding twice", () => {
+    it("of two concurrent answers to the time-zone step only one finishes; the other is stale and writes nothing", async () => {
+      const repo = new Repo(env.DB);
+      const deckIds = await seedLevels(env.DB, { 1: ["бер"] });
+      const user = await placedAt(repo, 31, 1);
+      const screens = await Promise.all([advanceOnboarding(repo, user, "180", T), advanceOnboarding(repo, user, "240", T)]);
+      expect(screens.map((s) => s.kind).sort()).toEqual(["finished", "stale"]);
+      const won = screens.find((s) => s.kind === "finished") as { tzOffsetMin: number };
+      expect(await repo.getUser(user.id)).toMatchObject({ onboardingStep: null, tzOffsetMin: won.tzOffsetMin, level: 1 });
+      expect(await repo.userDeckIds(user.id)).toEqual([deckIds[1]]);
+    });
+
+    it("an answer that arrives with the user row read before the finish changes nothing", async () => {
+      const repo = new Repo(env.DB);
+      const deckIds = await seedLevels(env.DB, { 1: ["бер"], 2: ["ике"] });
+      const before = await placedAt(repo, 32, 1);
+      expect((await advanceOnboarding(repo, before, "180", T)).kind).toBe("finished");
+      // The learner moved on and left level 1; the late answer must neither move them back nor open anything.
+      await repo.updateUser(before.id, { level: 2 });
+      await env.DB.prepare("DELETE FROM user_decks WHERE user_id = ?").bind(before.id).run();
+      expect(await advanceOnboarding(repo, before, "240", T + 60_000)).toEqual({ kind: "stale" });
+      expect(await repo.getUser(before.id)).toMatchObject({ onboardingStep: null, tzOffsetMin: 180, level: 2, nextDailyAt: nextOccurrence(180, "09:00", T) });
+      expect(await repo.userDeckIds(before.id)).toEqual([]);
+      void deckIds;
+    });
+  });
+
   it("first reminder is scheduled for the next occurrence, not right after onboarding", async () => {
     const repo = new Repo(env.DB);
     await seedLevels(env.DB, { 1: ["китап"] });

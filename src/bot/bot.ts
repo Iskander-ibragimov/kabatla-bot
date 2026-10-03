@@ -108,6 +108,8 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   const answerOb = async (ctx: Ctx, answer: string, messageId?: number) => {
     const screen = await advanceOnboarding(repo, ctx.user, answer, deps.now());
     if (screen.kind === "invalid") { if (ctx.callbackQuery) return toast(ctx, dict(ctx.user.lang).chooseAbove); await ctx.reply(dict(ctx.user.lang).chooseAbove); return; }
+    // Another update has just finished onboarding and sent the first card: a second tap is a stale button, a second typed time gets no answer.
+    if (screen.kind === "stale") return toast(ctx, dict(ctx.user.lang).staleButton);
     const lang = screen.kind === "placement" && screen.index === 0 && (answer === "ru" || answer === "tt") ? answer : ctx.user.lang;
     await editOrSend(ctx, messageId, renderOnboarding(screen, lang));
     if (screen.kind !== "finished") return toast(ctx);
