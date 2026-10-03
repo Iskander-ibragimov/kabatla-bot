@@ -1,6 +1,7 @@
 import type { Lang, Repo } from "../db/repo";
 import { dict } from "../i18n";
 import { claim, completeMany, fail } from "../jobs/queue";
+import { LAST_LEVEL } from "../review/service";
 import { type TgApi, tgErrorInfo } from "../tg/client";
 import { EVENING_AT, localDay, nextOccurrence } from "../users/service";
 
@@ -15,6 +16,11 @@ const LOCAL_MIN = `(((${NOW} / 60000) + u.tz_offset_min) % 1440)`;
 const DAY_START = `(((${NOW} + (u.tz_offset_min - 240) * 60000) / 86400000) * 86400000 - (u.tz_offset_min - 240) * 60000)`;
 const READY = "+u.active = 1 AND u.onboarding_step IS NULL";
 const IN_DECKS = "n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = u.id)";
+/**
+ * The words of the level a tap on «Учить» would open: levels open lazily, in the review session, once the open ones have
+ * no unseen words. NULL while the catalog has no level above the user's current one.
+ */
+const NEXT_LEVEL_WORDS = `(SELECT d.total FROM decks d WHERE d.level_no > u.level AND d.level_no <= ${LAST_LEVEL} ORDER BY d.level_no LIMIT 1)`;
 
 interface Push { chat_id: number; text: string; reply_markup: unknown; parse_mode: "HTML" }
 interface Planned { userId: number; push: Push }
@@ -24,6 +30,8 @@ const button = (text: string) => ({ inline_keyboard: [[{ text, callback_data: "l
 /**
  * Runs every minute. Candidates come from indexed columns (next_daily_at, next_evening_at, last_review_at),
  * so only due users are read. Users are marked before sending (at-most-once), so a crashed or slow tick never repeats a push.
+ * The daily push counts the reviews due today and the new words today's limit still allows: the unseen words of the
+ * open decks, or, when there are none, the words of the next level the catalog has.
  */
 export async function tick(d: TickDeps): Promise<{ sent: number }> {
   const { repo, tg, now } = d;
@@ -32,7 +40,8 @@ export async function tick(d: TickDeps): Promise<{ sent: number }> {
     db.prepare(`SELECT u.id, u.chat_id, u.lang, u.tz_offset_min, u.remind_at,
         (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = u.id AND c.state != 'new' AND c.due < ${DAY_START} + 86400000 AND ${IN_DECKS}) AS due_n,
         MIN(MAX(0, u.new_per_day - (SELECT COUNT(*) FROM review_log r WHERE r.user_id = u.id AND r.was_new = 1 AND r.undone = 0 AND r.reviewed_at >= ${DAY_START})),
-            (SELECT COUNT(*) FROM notes n WHERE ${IN_DECKS} AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = u.id AND c.note_id = n.id AND c.state != 'new'))) AS new_n
+            COALESCE(NULLIF((SELECT COUNT(*) FROM notes n WHERE ${IN_DECKS} AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = u.id AND c.note_id = n.id AND c.state != 'new')), 0),
+                     ${NEXT_LEVEL_WORDS}, 0)) AS new_n
       FROM users u WHERE u.next_daily_at <= ${NOW} AND ${READY}
       ORDER BY u.next_daily_at, u.id LIMIT ${MAX_SENDS}`).bind(now),
     db.prepare(`SELECT u.id, u.chat_id, u.lang, u.tz_offset_min, u.streak, u.last_study_day FROM users u

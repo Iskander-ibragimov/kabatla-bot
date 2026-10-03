@@ -6,7 +6,9 @@ import { tick } from "../../src/reminders/service";
 import { newMem } from "../../src/srs/fsrs";
 import { countingDb } from "../helpers/countingDb";
 import { fakeTelegram } from "../helpers/fakeTelegram";
-import { seedUser } from "../helpers/seed";
+import { ru } from "../../src/i18n/ru";
+import { gradedMem } from "../helpers/review";
+import { seedLevels, seedUser } from "../helpers/seed";
 
 const MIN = 60_000;
 const local = (d: number, h: number, m: number) => Date.UTC(2026, 8, d, h, m) - 180 * MIN; // +03:00
@@ -40,6 +42,80 @@ describe("reminders tick", () => {
     const tg = fakeTelegram();
     await run(env.DB, tg, local(30, 9, 5));
     expect(tg.of("sendMessage")).toHaveLength(0);
+  });
+
+  describe("a learner who finished every open level", () => {
+    /** Level 1 with `words` words, all graded and not due today, for a user whose reminder is due at 09:00. */
+    async function finishedLevel1(words: number, patch: Parameters<typeof seedUser>[1]["patch"] = {}) {
+      const seeded = await seedUser(env.DB, { now: local(30, 8, 0), words, patch });
+      for (const id of seeded.noteIds) await seeded.repo.insertCard(seeded.user.id, id, "tt_ru", gradedMem(local(29, 12, 0)));
+      return seeded;
+    }
+    const pushes = async (now = local(30, 9, 1)) => { const tg = fakeTelegram(); await run(env.DB, tg, now); return tg.of("sendMessage").map((c) => String(c.payload.text)); };
+
+    it("is reminded when a higher level is in the catalog: a tap would open it", async () => {
+      await finishedLevel1(2);
+      await seedLevels(env.DB, { 2: ["авыл", "су", "юл"] });
+      // Three new words wait in level 2, fewer than the daily limit of ten.
+      expect(await pushes()).toEqual([ru.pushDaily(3, 1)]);
+    });
+
+    it("counts the new words up to the daily limit", async () => {
+      await finishedLevel1(2, { newPerDay: 5 });
+      await seedLevels(env.DB, { 2: Array.from({ length: 12 }, (_, i) => `сүз${i + 1}`) });
+      expect(await pushes()).toEqual([ru.pushDaily(5, 2)]);
+    });
+
+    it("the next level may be behind a gap", async () => {
+      await finishedLevel1(1);
+      await seedLevels(env.DB, { 4: ["авыл", "су"] });
+      expect(await pushes()).toEqual([ru.pushDaily(2, 1)]);
+    });
+
+    it("adds the reviews due today to the new words of the next level", async () => {
+      const { repo, user, noteIds } = await finishedLevel1(2);
+      await seedLevels(env.DB, { 2: ["авыл"] });
+      await repo.updateCardStmt((await repo.getCardByNote(user.id, noteIds[0]!, "tt_ru"))!.id, { ...gradedMem(local(25, 12, 0)), due: local(30, 7, 0) }).run();
+      expect(await pushes()).toEqual([ru.pushDaily(2, 1)]);
+    });
+
+    it("is not reminded while no higher level is published", async () => {
+      await finishedLevel1(2);
+      expect(await pushes()).toEqual([]);
+      // A level below the current one is a skipped level: a tap on the reminder would not open it.
+      const { repo, user } = await seedUser(env.DB, { now: local(30, 8, 0), level: 3, words: 1, tgId: 2 });
+      await repo.insertCard(user.id, (await env.DB.prepare("SELECT id FROM notes WHERE deck_id = (SELECT id FROM decks WHERE level_no = 3)").first<{ id: number }>())!.id, "tt_ru", gradedMem(local(29, 12, 0)));
+      expect(await pushes(local(30, 9, 2))).toEqual([]);
+    });
+
+    it("is not reminded when today's limit of new words is already used up", async () => {
+      const { repo, user, noteIds } = await finishedLevel1(2, { newPerDay: 2 });
+      await seedLevels(env.DB, { 2: ["авыл", "су"] });
+      // Both words were first graded this morning, after the 04:00 day boundary.
+      const mem = gradedMem(local(30, 6, 0));
+      await repo.batch(noteIds.map((id, i) => repo.insertLogStmt({
+        cardId: i + 1, userId: user.id, rating: 3, stateBefore: newMem(local(30, 6, 0)), intervalBeforeDays: 0, intervalAfterMs: mem.due - local(30, 6, 0),
+        reviewedAt: local(30, 6, 0), wasNew: true, learnedNow: false, streakBefore: 0, lastStudyDayBefore: null,
+      })));
+      expect(await pushes()).toEqual([]);
+    });
+
+    it("is not reminded after the last level: there is nothing left to open", async () => {
+      const { repo, user, noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), level: 20, words: 1 });
+      await repo.insertCard(user.id, noteIds[0]!, "tt_ru", gradedMem(local(29, 12, 0)));
+      // A deck numbered above the last level is not a level.
+      await seedLevels(env.DB, { 21: ["авыл"] });
+      expect(await pushes()).toEqual([]);
+      await repo.updateUser(user.id, { level: 21, nextDailyAt: local(30, 9, 0) });
+      expect(await pushes(local(30, 9, 2))).toEqual([]);
+    });
+
+    it("still counts the unseen words of the open levels first, without looking ahead", async () => {
+      const { repo, user, noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 3 });
+      await repo.insertCard(user.id, noteIds[0]!, "tt_ru", gradedMem(local(29, 12, 0)));
+      await seedLevels(env.DB, { 2: Array.from({ length: 9 }, (_, i) => `сүз${i + 1}`) });
+      expect(await pushes()).toEqual([ru.pushDaily(2, 1)]);
+    });
   });
 
   it("evening push only with a streak of 2+ and no study today", async () => {
