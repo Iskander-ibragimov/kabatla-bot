@@ -80,7 +80,15 @@ function rowToUser(r: Record<string, unknown>): User {
   return u as unknown as User;
 }
 
-const NOTE_COLS = "n.word, n.transcription, n.pos, n.translation, n.example_tt, n.example_ru, n.example_src, n.audio_file_id, n.source_url";
+/**
+ * The columns of a note `n` as `viewer` may read them. `viewer` is an SQL expression for the id of the user the row is read for
+ * (a bind marker or a column), or null when the row is read for nobody in particular.
+ * The link of a note is read only when the note's deck is owned by the viewer: a link belongs to the learner who typed it,
+ * and whatever stands in `source_url` of a level note, which every learner sees, is read as NULL.
+ */
+const noteCols = (viewer: string | null) =>
+  "n.word, n.transcription, n.pos, n.translation, n.example_tt, n.example_ru, n.example_src, n.audio_file_id, " +
+  (viewer === null ? "NULL" : `CASE WHEN (SELECT owner_id FROM decks WHERE id = n.deck_id) = ${viewer} THEN n.source_url END`) + " AS source_url";
 /** A note/direction is "new" unless its card was started, or any card of the note is buried today. Binds: userId, today. */
 const NEW_FILTER = `NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ? AND c.note_id = n.id AND ((c.direction = d.value AND c.state != 'new') OR c.buried_day = ?))`;
 /** True for a level word when the user owns a note with the same word_key; `n` and `dk` are the outer note and deck aliases. */
@@ -88,7 +96,8 @@ const ownedCopy = (user: string) =>
   `(dk.kind = 'catalog' AND EXISTS (SELECT 1 FROM notes o JOIN decks od ON od.id = o.deck_id WHERE od.owner_id = ${user} AND o.word_key = n.word_key))`;
 /** Excludes such a level word from the new-word queue: it counts as shown. */
 const skipOwned = (user: string) => `NOT ${ownedCopy(user)}`;
-const CARD_COLS = `c.id, c.note_id, c.direction, c.state, c.step, c.stability, c.difficulty, c.due, c.last_review, c.scheduled_days, c.reps, c.lapses, c.buried_day, ${NOTE_COLS}`;
+/** A card `c` with its note `n`; the viewer of the note is the user the card belongs to. */
+const CARD_COLS = `c.id, c.note_id, c.direction, c.state, c.step, c.stability, c.difficulty, c.due, c.last_review, c.scheduled_days, c.reps, c.lapses, c.buried_day, ${noteCols("c.user_id")}`;
 
 function noteFields(r: Record<string, unknown>): NoteFields {
   return {
@@ -227,9 +236,9 @@ export class Repo {
   /** A note with this word in any deck the user is subscribed to. */
   async findNoteForUser(userId: number, word: string): Promise<(NoteRow & { deckTitleRu: string; deckTitleTt: string }) | null> {
     const r = await this.db.prepare(
-      `SELECT n.id, n.deck_id, ${NOTE_COLS}, d.title_ru, d.title_tt FROM notes n
-       JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ? JOIN decks d ON d.id = n.deck_id
-       WHERE n.word_key = ? LIMIT 1`,
+      `SELECT n.id, n.deck_id, ${noteCols("?1")}, d.title_ru, d.title_tt FROM notes n
+       JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ?1 JOIN decks d ON d.id = n.deck_id
+       WHERE n.word_key = ?2 LIMIT 1`,
     ).bind(userId, wordKey(word)).first<Record<string, unknown>>();
     return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, deckTitleRu: r.title_ru as string, deckTitleTt: r.title_tt as string } : null;
   }
@@ -243,7 +252,7 @@ export class Repo {
     const out = new Map<string, UserNote>();
     if (!keys.length) return out;
     const { results } = await this.db.prepare(
-      `SELECT n.id, n.deck_id, n.word_key, ${NOTE_COLS}, d.title_ru, d.title_tt, d.owner_id IS ?1 AS owned FROM notes n
+      `SELECT n.id, n.deck_id, n.word_key, ${noteCols("?1")}, d.title_ru, d.title_tt, d.owner_id IS ?1 AS owned FROM notes n
        JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ?1 JOIN decks d ON d.id = n.deck_id
        WHERE n.word_key IN (SELECT value FROM json_each(?2)) ORDER BY (d.owner_id IS NULL), n.id`,
     ).bind(userId, JSON.stringify(keys)).all<Record<string, unknown>>();
@@ -255,13 +264,13 @@ export class Repo {
     }
     return out;
   }
-  /** The reviewed cards of the catalog for these words, from any level, open or not: one D1 call, keyed by wordKey. */
+  /** The reviewed cards of the catalog for these words, from any level, open or not: one D1 call, keyed by wordKey. A catalog note has no link to give. */
   async findCatalogNotes(words: string[]): Promise<Map<string, NoteRow & { levelNo: number }>> {
     const keys = [...new Set(words.map(wordKey))];
     const out = new Map<string, NoteRow & { levelNo: number }>();
     if (!keys.length) return out;
     const { results } = await this.db.prepare(
-      `SELECT n.id, n.deck_id, n.word_key, ${NOTE_COLS}, d.level_no FROM notes n JOIN decks d ON d.id = n.deck_id
+      `SELECT n.id, n.deck_id, n.word_key, ${noteCols(null)}, d.level_no FROM notes n JOIN decks d ON d.id = n.deck_id
        WHERE d.kind = 'catalog' AND d.level_no IS NOT NULL AND n.word_key IN (SELECT value FROM json_each(?)) ORDER BY d.level_no, n.id`,
     ).bind(JSON.stringify(keys)).all<Record<string, unknown>>();
     for (const r of results) {
@@ -270,14 +279,15 @@ export class Repo {
     }
     return out;
   }
+  /** The note as nobody in particular reads it: for its voice. Its link is not given; `visibleNote` reads a note for a user. */
   async getNote(id: number): Promise<NoteRow | null> {
-    const r = await this.db.prepare(`SELECT n.id, n.deck_id, ${NOTE_COLS} FROM notes n WHERE n.id = ?`).bind(id).first<Record<string, unknown>>();
+    const r = await this.db.prepare(`SELECT n.id, n.deck_id, ${noteCols(null)} FROM notes n WHERE n.id = ?`).bind(id).first<Record<string, unknown>>();
     return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number } : null;
   }
   /** The note when the user can see it: it is in one of their decks or they have a card for it. */
   async visibleNote(userId: number, noteId: number): Promise<NoteRow | null> {
     const r = await this.db.prepare(
-      `SELECT n.id, n.deck_id, ${NOTE_COLS} FROM notes n WHERE n.id = ?1
+      `SELECT n.id, n.deck_id, ${noteCols("?2")} FROM notes n WHERE n.id = ?1
        AND (n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?2)
             OR EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ?2 AND c.note_id = ?1))`,
     ).bind(noteId, userId).first<Record<string, unknown>>();
@@ -414,9 +424,10 @@ export class Repo {
         .bind(userId, w.dayEndMs, dirs, w.today, userId, lim),
       // Own and AI decks first, then levels by number; d.key is the position in w.directions, so a note's directions come in the order the caller asked for.
       // A level word the user already owns (same word_key in a deck with owner_id = user) counts as shown and is skipped.
-      this.db.prepare(`SELECT n.id AS note_id, d.value AS direction, ${NOTE_COLS} FROM notes n JOIN decks dk ON dk.id = n.deck_id JOIN json_each(?) d
+      // The first marker is the viewer of noteCols.
+      this.db.prepare(`SELECT n.id AS note_id, d.value AS direction, ${noteCols("?")} FROM notes n JOIN decks dk ON dk.id = n.deck_id JOIN json_each(?) d
         WHERE ${inDecks} AND ${NEW_FILTER} AND ${skipOwned("?")}
-        ORDER BY (dk.kind = 'catalog'), COALESCE(dk.level_no, 0), n.id, d.key LIMIT ?`).bind(dirs, userId, userId, w.today, userId, lim),
+        ORDER BY (dk.kind = 'catalog'), COALESCE(dk.level_no, 0), n.id, d.key LIMIT ?`).bind(userId, dirs, userId, userId, w.today, userId, lim),
       this.db.prepare(`SELECT
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state IN ('learning','relearning') AND c.direction IN (SELECT value FROM json_each(?2)) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS learning,
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state = 'review' AND c.due < ?3 AND c.direction IN (SELECT value FROM json_each(?2)) AND (c.buried_day IS NULL OR c.buried_day != ?4) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS review,

@@ -92,6 +92,47 @@ describe("content service: own words", () => {
     expect(await catalogLinks()).toEqual([{ word: "китап", source_url: null }]);
   });
 
+  it("a link that was left on a catalog note is shown to nobody and is not copied", async () => {
+    const STRAY = "https://stray.example/left-by-someone";
+    const a = await seedUser(env.DB, { now: T, level: 1, words: 1, tgId: 1 }); // l01: китап
+    const b = await seedUser(env.DB, { now: T, level: 1, words: 1, tgId: 2 });
+    await seedLevels(env.DB, { 5: ["бәхет", "шатлык"] });
+    await env.DB.prepare("UPDATE notes SET source_url = ? WHERE deck_id IN (SELECT id FROM decks WHERE owner_id IS NULL)").bind(STRAY).run();
+    const svc = service(b.repo, failingLlm());
+
+    // (a) the card of the level word, before and after it is started
+    const review = new ReviewService(b.repo, T);
+    let screen = await review.nextScreen(b.user);
+    if (screen.kind !== "card") throw new Error(screen.kind);
+    expect(screen.view).toMatchObject({ word: "китап", sourceUrl: null });
+    expect(renderCard(screen.view, screen.counts, screen.intervals, false, "ru").text).not.toMatch(/🔗|stray/);
+    screen = await review.grade(b.user, screen.view.cardId, screen.view.reps, 1);
+    if (screen.kind !== "card") throw new Error(screen.kind);
+    expect(screen.view).toMatchObject({ word: "китап", sourceUrl: null });
+    expect(renderCard(screen.view, screen.counts, screen.intervals, true, "ru").text).not.toMatch(/🔗|stray/);
+
+    // (b) the duplicate line, with and without a link of the user's own
+    expect(await svc.prepareAdd(b.user, "китап", [])).toEqual({ kind: "duplicates-only", duplicates: [{ word: "китап", deckTitle: "Уровень 1", linkAdded: false }] });
+    expect(await svc.prepareAdd(b.user, "китап https://b.example/x", [])).toEqual({ kind: "duplicates-only", duplicates: [{ word: "китап", deckTitle: "Уровень 1", linkAdded: false }] });
+
+    // (c) a copy into My words takes only the link typed with the word
+    const mine = service(a.repo, failingLlm());
+    const r = await preview(mine, a.user, "бәхет\nшатлык https://a.example/song");
+    expect(r.items.map((i) => [i.word, i.sourceUrl])).toEqual([["бәхет", null], ["шатлык", "https://a.example/song"]]);
+    expect(renderAddPreview(r.items, r.previewId, "ru").text).not.toContain("stray");
+    await mine.confirmAdd(a.user, r.previewId);
+    expect((await ownNotes(a.user.id)).map((n) => [n.word, n.source_url])).toEqual([["бәхет", null], ["шатлык", "https://a.example/song"]]);
+
+    // (d) the link of an own note is shown to its owner: own words come first in the queue
+    const first = await new ReviewService(a.repo, T).nextScreen(a.user);
+    if (first.kind !== "card") throw new Error(first.kind);
+    expect(first.view).toMatchObject({ word: "бәхет", sourceUrl: null });
+    const second = await new ReviewService(a.repo, T).grade(a.user, first.view.cardId, first.view.reps, 4);
+    if (second.kind !== "card") throw new Error(second.kind);
+    expect(second.view).toMatchObject({ word: "шатлык", sourceUrl: "https://a.example/song" });
+    expect(renderCard(second.view, second.counts, second.intervals, true, "ru").text).toContain('🔗 <a href="https://a.example/song">a.example</a>');
+  });
+
   it("a duplicate in a deck the learner owns gets the link: My words and an AI deck", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
     await repo.insertNotes(await repo.customDeck(user.id, T), [note("рәхмәт"), { ...note("сәлам"), sourceUrl: "https://old.example/s" }]);

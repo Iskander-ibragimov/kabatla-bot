@@ -166,6 +166,64 @@ describe("schema", () => {
   });
 });
 
+describe("a note's link is read only by the owner of its deck", () => {
+  const STRAY = "https://stray.example/left-by-someone";
+  const OWN = "https://own.example/mine";
+  const window = { ...dayWindow(180, T), directions: ["tt_ru" as const] };
+
+  /** Level 1 with «китап» carrying a link written straight into the row, and a learner with a linked word of their own. */
+  async function planted() {
+    const a = await seedUser(env.DB, { now: T, words: 1, tgId: 1 }); // l01: китап
+    const b = await seedUser(env.DB, { now: T, words: 1, tgId: 2 });
+    const level = a.noteIds[0]!;
+    await env.DB.prepare("UPDATE notes SET source_url = ? WHERE id = ?").bind(STRAY, level).run();
+    const [own] = await a.repo.insertNotes(await a.repo.customDeck(a.user.id, T), [{ ...note("рәхмәт"), sourceUrl: OWN }]);
+    return { repo: a.repo, a: a.user.id, b: b.user.id, level, own: own! };
+  }
+
+  it("the word lookups give no link for a level note and the owner's link for an own note", async () => {
+    const { repo, a, b, level, own } = await planted();
+    for (const viewer of [a, b]) {
+      expect((await repo.findNoteForUser(viewer, "китап"))!.sourceUrl).toBeNull();
+      expect((await repo.findNotesForUser(viewer, ["китап"])).get("китап")!.sourceUrl).toBeNull();
+      expect((await repo.visibleNote(viewer, level))!.sourceUrl).toBeNull();
+    }
+    expect((await repo.findCatalogNotes(["китап"])).get("китап")!.sourceUrl).toBeNull();
+    expect((await repo.getNote(level))!.sourceUrl).toBeNull();
+    expect((await repo.findNoteForUser(a, "рәхмәт"))!.sourceUrl).toBe(OWN);
+    expect((await repo.findNotesForUser(a, ["рәхмәт"])).get("рәхмәт")).toMatchObject({ sourceUrl: OWN, owned: true });
+    expect((await repo.visibleNote(a, own))!.sourceUrl).toBe(OWN);
+    // The row itself is not touched: nothing is deleted from the database.
+    expect(await env.DB.prepare("SELECT source_url FROM notes WHERE id = ?").bind(level).first()).toEqual({ source_url: STRAY });
+  });
+
+  it("the queue and the card give no link for a level note and the owner's link for an own note", async () => {
+    const { repo, a, b, level, own } = await planted();
+    for (const viewer of [a, b]) {
+      const fresh = await repo.candidateCards(viewer, T, window);
+      expect(fresh.newNotes.find((n) => n.noteId === level)).toMatchObject({ word: "китап", sourceUrl: null });
+      const id = await repo.insertCard(viewer, level, "tt_ru", { ...newMem(T), state: "learning", step: 0, due: T - 1 });
+      expect((await repo.getCard(viewer, id))!.sourceUrl).toBeNull();
+      expect((await repo.getCardByNote(viewer, level, "tt_ru"))!.sourceUrl).toBeNull();
+      expect((await repo.candidateCards(viewer, T, window)).learning.map((c) => [c.word, c.sourceUrl])).toEqual([["китап", null]]);
+      await env.DB.prepare("UPDATE cards SET state = 'review' WHERE id = ?").bind(id).run();
+      expect((await repo.candidateCards(viewer, T, window)).review.map((c) => [c.word, c.sourceUrl])).toEqual([["китап", null]]);
+    }
+    expect((await repo.candidateCards(a, T, window)).newNotes.find((n) => n.noteId === own)).toMatchObject({ word: "рәхмәт", sourceUrl: OWN });
+    const mine = await repo.insertCard(a, own, "tt_ru", { ...newMem(T), state: "learning", step: 0, due: T - 1 });
+    expect((await repo.getCard(a, mine))!.sourceUrl).toBe(OWN);
+    expect((await repo.getCardByNote(a, own, "tt_ru"))!.sourceUrl).toBe(OWN);
+    expect((await repo.candidateCards(a, T, window)).learning.map((c) => [c.word, c.sourceUrl])).toEqual([["рәхмәт", OWN]]);
+    await env.DB.prepare("UPDATE cards SET state = 'review' WHERE id = ?").bind(mine).run();
+    expect((await repo.candidateCards(a, T, window)).review.map((c) => c.sourceUrl)).toContain(OWN);
+    // A card that another learner somehow holds for that own note shows them no link.
+    const foreign = await repo.insertCard(b, own, "tt_ru", newMem(T));
+    expect((await repo.getCard(b, foreign))!.sourceUrl).toBeNull();
+    expect((await repo.getCardByNote(b, own, "tt_ru"))!.sourceUrl).toBeNull();
+    expect((await repo.visibleNote(b, own))!.sourceUrl).toBeNull();
+  });
+});
+
 describe("wordKey", () => {
   it("ignores case, extra spaces and the punctuation at the edges of a word or phrase", () => {
     expect(wordKey("Рәхмәт!")).toBe("рәхмәт");
