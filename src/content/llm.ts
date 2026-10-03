@@ -1,18 +1,36 @@
 import { z } from "zod";
+import { hasTatarLetters, isTatarText } from "./tatar";
 
 export const ProviderSchema = z.object({ baseUrl: z.string().url(), apiKey: z.string(), model: z.string().min(1) });
 export type LlmProvider = z.infer<typeof ProviderSchema>;
 
-const CYR = /[А-Яа-яЁё]/;
-export const WordCardSchema = z.object({
-  word: z.string().trim().min(1),
-  transcription: z.string().nullish(),
-  pos: z.string().default(""),
-  translation: z.string().trim().min(1).refine((s) => CYR.test(s), "translation must be Russian"),
-  exampleTt: z.string().trim().min(1),
-  exampleRu: z.string().trim().min(1).refine((s) => CYR.test(s), "exampleRu must be Russian"),
+/** Part-of-speech codes of the catalog. */
+export const POS_CODES = ["n", "v", "adj", "adv", "pron", "num", "post", "conj", "part", "intj", "phr"] as const;
+
+/** A card as the model returns it: `input` echoes the user's line, `word` is the Tatar word the card is about. */
+export interface WordCard { input: string; lang: "tt" | "ru"; word: string; pos: string; translation: string; exampleTt: string; exampleRu: string }
+
+const RUSSIAN_LETTER = /[А-Яа-яЁё]/;
+const CYRILLIC_LETTER = /[\u0400-\u04FF]/;
+/** Russian text: has Cyrillic letters and none of ә ө ү җ ң һ. */
+const russian = z.string().trim().min(1).refine((s) => RUSSIAN_LETTER.test(s) && !hasTatarLetters(s), "must be Russian");
+/** Tatar text: letters of the Tatar Cyrillic alphabet only, so that no look-alike of another alphabet gets into a card. */
+const tatar = z.string().trim().min(1).refine((s) => isTatarText(s) && CYRILLIC_LETTER.test(s), "must be Tatar Cyrillic");
+/** A code of POS_CODES, or "" for anything else. */
+const pos = z.unknown().transform((v) => {
+  const code = typeof v === "string" ? v.trim().toLowerCase() : "";
+  return (POS_CODES as readonly string[]).includes(code) ? code : "";
 });
-export type WordCard = z.infer<typeof WordCardSchema>;
+
+export const WordCardSchema: z.ZodType<WordCard> = z.object({
+  input: z.string().trim().min(1),
+  lang: z.enum(["tt", "ru"]),
+  word: tatar,
+  pos,
+  translation: russian,
+  exampleTt: tatar,
+  exampleRu: russian,
+}).refine((c) => c.exampleTt.toLowerCase() !== c.exampleRu.toLowerCase(), "exampleTt repeats exampleRu");
 
 export class LlmUnavailable extends Error {}
 
@@ -57,13 +75,56 @@ export async function completeCards(llm: LlmClient, system: string, user: string
   return res.cards.flatMap((c) => { const r = WordCardSchema.safeParse(c); return r.success ? [r.data] : []; });
 }
 
-export const WORDS_SYSTEM =
-  "You build flashcards for Russian speakers learning Tatar. Reply with JSON only: " +
-  '{"cards":[{"word","transcription","pos","translation","exampleTt","exampleRu"}]}. ' +
-  "translation: short Russian translation (1–3 variants). exampleTt: one natural everyday Tatar sentence with the word. " +
-  "exampleRu: its Russian translation. transcription: null. pos: one of n, v, adj, adv, pron, num, post, conj, part, intj, phr. Keep the words exactly as given.";
+const CARDS_JSON = '{"cards":[{"input":"…","lang":"…","word":"…","pos":"…","translation":"…","exampleTt":"…","exampleRu":"…"}]}';
+/** The fields both prompts describe in the same words. */
+const CARD_FIELDS = [
+  '"pos": one of ' + POS_CODES.join(", ") + " (phr for a phrase).",
+  '"translation": a short Russian translation of "word", 1–3 variants separated by commas, in Russian only.',
+  '"exampleTt": one short, natural, everyday Tatar sentence with the word, written with ә ө ү җ ң һ.',
+  '"exampleRu": the Russian translation of that sentence.',
+].join("\n");
+const WORD_FORM =
+  "Write it in standard literary Tatar spelling. A verb goes in the form ending in -у/-ү (бару, килү, эшләү), a noun in the nominative singular. " +
+  "Lower case, except proper names.";
+const SCRIPT_RULE =
+  "Tatar text is written only in the Tatar Cyrillic alphabet: the Russian letters and ә ө ү җ ң һ. " +
+  "Never use Latin letters or look-alike letters of other alphabets. Add no stress marks and no transcription.";
 
-export const DECK_SYSTEM =
-  "You create themed Tatar vocabulary decks for Russian speakers. Reply with JSON only: " +
-  '{"cards":[{"word","transcription","pos","translation","exampleTt","exampleRu"}]}. ' +
-  "Pick the most useful words and short phrases for the topic, no duplicates, from common to advanced.";
+/** One card per line of the user's message; the message is `Lines:` and the lines. */
+export const WORDS_SYSTEM = [
+  "You make flashcards for Russian speakers who learn Tatar.",
+  "The user message is a list of lines. Each line is one word or short phrase typed by a learner, in Tatar or in Russian. " +
+    "Learners often have no Tatar keyboard and type Tatar words without the letters ә ө ү җ ң һ, with similar Russian letters in their place " +
+    "(э, а or е for ә; о for ө; у for ү; ж for җ; н for ң; х for һ).",
+  "",
+  "Reply with JSON only, one card for each line, in the order of the lines:",
+  CARDS_JSON,
+  "",
+  '"input": the line exactly as it was given, character for character.',
+  '"lang": the language of the line, "tt" or "ru": "tt" for a Tatar word, also when it is typed without the Tatar letters; "ru" for a Russian word. ' +
+    "If the line could be either, choose what a learner of Tatar more likely meant.",
+  '"word": the Tatar word of the card. For "ru": the most common Tatar word for the Russian line. ' +
+    'For "tt": the word of the line itself with its spelling restored, that is with ә ө ү җ ң һ put back where they belong; do not replace it with a synonym. ' +
+    WORD_FORM,
+  CARD_FIELDS,
+  "",
+  SCRIPT_RULE,
+  "Skip a line only when it is not a word or phrase of either language.",
+].join("\n");
+
+/** A themed deck; the message is `Topic:` and `Number of cards:`. Same fields as WORDS_SYSTEM. */
+export const DECK_SYSTEM = [
+  "You make themed vocabulary decks of Tatar words for Russian speakers who learn Tatar.",
+  "The user message gives a topic, in Russian or in Tatar, and the number of cards. Choose the most useful Tatar words and short phrases for the topic, " +
+    "the most common first, with no repeats.",
+  "",
+  "Reply with JSON only:",
+  CARDS_JSON,
+  "",
+  '"input": the same text as "word".',
+  '"lang": always "tt".',
+  '"word": a Tatar word or short phrase. ' + WORD_FORM,
+  CARD_FIELDS,
+  "",
+  SCRIPT_RULE,
+].join("\n");

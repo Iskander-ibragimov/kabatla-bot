@@ -7,9 +7,11 @@ export type Button = InlineKeyboardButton.CallbackButton;
 export type Keyboard = Button[][];
 export interface Rendered { text: string; keyboard: Keyboard }
 
+import type { CardDraft } from "../content/service";
 import type { CardView, Counts, DaySummary, Feedback, LevelUp } from "../review/service";
 export type { CardView, Counts, DaySummary, Feedback, LevelUp };
-export interface PreviewItem { word: string; transcription: string | null; pos: string; translation: string; exampleTt: string; exampleRu: string; sourceUrl: string | null }
+/** What a preview shows of a card that is not saved yet. */
+export type PreviewItem = Pick<CardDraft, "word" | "transcription" | "pos" | "translation" | "exampleTt" | "exampleRu" | "sourceUrl" | "ai">;
 
 export { esc };
 const btn = (text: string, data: string, style?: Button["style"]): Button => (style ? { text, callback_data: data, style } : { text, callback_data: data });
@@ -30,6 +32,11 @@ export function formatLong(ms: number, lang: Lang): string {
   return `${(Math.round(d / 3) / 10).toString().replace(".", t.decimal)} ${t.unitMonth}`;
 }
 
+/** «[transcription] · <i>part of speech</i>» for the card and the previews; either part may be missing, "" when both are. */
+function wordMeta(n: { transcription: string | null; pos: string }, lang: Lang): string {
+  return [n.transcription ? `[${esc(n.transcription)}]` : "", n.pos ? `<i>${esc(dict(lang).posName(n.pos))}</i>` : ""].filter(Boolean).join(" · ");
+}
+
 export function progressLine(m: Mem, lang: Lang): string {
   const t = dict(lang);
   const st = { new: t.stageNew, learning: t.stageLearning, known: t.stageKnown, learned: t.stageLearned }[stage(m)];
@@ -43,15 +50,14 @@ export function progressLine(m: Mem, lang: Lang): string {
 export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, string>, canUndo: boolean, lang: Lang): Rendered {
   const t = dict(lang);
   const lines: string[] = [`🔵 ${c.n} · 🔴 ${c.l} · 🟢 ${c.r}`];
-  const transcription = v.transcription ? `[${esc(v.transcription)}]` : "";
-  const pos = v.pos ? `<i>${esc(t.posName(v.pos))}</i>` : "";
   if (v.direction === "tt_ru") {
+    const meta = wordMeta(v, lang);
     lines.push(`<b>${esc(v.word)}</b>`);
-    if (transcription || pos) lines.push([transcription, pos].filter(Boolean).join(" · "));
+    if (meta) lines.push(meta);
     lines.push(`<tg-spoiler><b>${esc(v.translation)}</b></tg-spoiler>`);
   } else {
     lines.push(`<b>${esc(v.translation)}</b>`);
-    lines.push(`<tg-spoiler><b>${esc(v.word)}</b>${transcription ? " " + transcription : ""}</tg-spoiler>`);
+    lines.push(`<tg-spoiler><b>${esc(v.word)}</b>${v.transcription ? ` [${esc(v.transcription)}]` : ""}</tg-spoiler>`);
   }
   let text = lines.join("\n");
   if (v.exampleTt || v.exampleRu) text += `<blockquote><tg-spoiler><i>${esc(v.exampleTt)}</i>\n${esc(v.exampleRu)}</tg-spoiler></blockquote>`;
@@ -87,18 +93,28 @@ export function renderLevelUp(l: LevelUp, lang: Lang): string {
   return l.to == null ? t.levelsDone(l.coveragePct) : t.levelUp(l.from, l.to, l.coveragePct);
 }
 
+/** The preview of own words before they are added. It ends with the AI note when a translation in it is the model's. */
 export function renderAddPreview(items: PreviewItem[], previewId: number, lang: Lang): Rendered {
   const t = dict(lang);
+  const ai = items.some((i) => i.ai);
   if (items.length === 1) {
     const i = items[0]!;
     let text = `<b>${esc(i.word)}</b>`;
-    const meta = [i.transcription ? esc(i.transcription) : "", i.pos ? `<i>${esc(i.pos)}</i>` : ""].filter(Boolean).join(" · ");
+    const meta = wordMeta(i, lang);
     if (meta) text += `\n${meta}`;
     text += `\n\n<b>${esc(i.translation)}</b>`;
     if (i.exampleTt || i.exampleRu) text += `<blockquote><i>${esc(i.exampleTt)}</i>\n${esc(i.exampleRu)}</blockquote>`;
     if (i.sourceUrl) text += `\n🔗 ${esc(hostOf(i.sourceUrl))}`;
+    if (ai) text += `\n${t.aiNote}`;
     return { text, keyboard: [[btn(t.add, `add:ok:${previewId}`, "primary"), btn(t.edit, `add:edit:${previewId}`), btn(t.cancel, `add:no:${previewId}`)]] };
   }
-  const text = [t.foundN(items.length), ...items.map((i) => `• <b>${esc(i.word)}</b> — ${esc(i.translation)}${i.sourceUrl ? " 🔗" : ""}`)].join("\n");
-  return { text, keyboard: [[btn(t.addAll(items.length), `add:ok:${previewId}`, "primary"), btn(t.cancel, `add:no:${previewId}`)]] };
+  const lines = [t.foundN(items.length), ...items.map((i) => `${previewLine(i, lang)}${i.sourceUrl ? " 🔗" : ""}`)];
+  if (ai) lines.push("", t.aiNote);
+  return { text: lines.join("\n"), keyboard: [[btn(t.addAll(items.length), `add:ok:${previewId}`, "primary"), btn(t.cancel, `add:no:${previewId}`)]] };
+}
+
+/** One word of a list preview: «• <b>word</b> [transcription] · <i>part of speech</i> — translation». */
+export function previewLine(i: Pick<PreviewItem, "word" | "transcription" | "pos" | "translation">, lang: Lang): string {
+  const meta = wordMeta(i, lang);
+  return `• <b>${esc(i.word)}</b>${meta ? ` ${meta}` : ""} — ${esc(i.translation)}`;
 }

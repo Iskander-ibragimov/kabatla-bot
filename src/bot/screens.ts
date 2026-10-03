@@ -4,8 +4,8 @@ import type { Lang } from "../srs/fsrs";
 import type { Cumulative, LevelsView } from "../stats/service";
 import type { OnboardingScreen } from "../users/service";
 import { REMIND_TIMES } from "../users/service";
-import type { Button, Keyboard, Rendered } from "./views";
-import { esc } from "./views";
+import type { Button, Keyboard, PreviewItem, Rendered } from "./views";
+import { esc, previewLine } from "./views";
 
 const btn = (text: string, data: string, style?: Button["style"]): Button => (style ? { text, callback_data: data, style } : { text, callback_data: data });
 const tzLabel = (min: number) => `UTC${min >= 0 ? "+" : "−"}${Math.floor(Math.abs(min) / 60)}${Math.abs(min) % 60 ? ":" + String(Math.abs(min) % 60).padStart(2, "0") : ""}`;
@@ -71,10 +71,12 @@ export function renderStats(s: Cumulative, lang: Lang): string {
   });
 }
 
-export function renderGenPreview(topic: string, items: { word: string; translation: string }[], left: number, previewId: number, lang: Lang): Rendered {
+/** The preview of an AI deck. Its translations are the model's, so it ends with the AI note. */
+export function renderGenPreview(topic: string, items: PreviewItem[], left: number, previewId: number, lang: Lang): Rendered {
   const t = dict(lang);
-  const text = [t.genTitle(esc(topic), items.length), "", ...items.map((i) => `• <b>${esc(i.word)}</b> — ${esc(i.translation)}`), "", t.genLeft(left)].join("\n");
-  return { text, keyboard: [[btn(t.addDeckGenBtn, `gen:ok:${previewId}`, "primary"), btn(t.cancel, `gen:no:${previewId}`)]] };
+  const lines = [t.genTitle(esc(topic), items.length), "", ...items.map((i) => previewLine(i, lang)), "", t.genLeft(left)];
+  if (items.some((i) => i.ai)) lines.push(t.aiNote);
+  return { text: lines.join("\n"), keyboard: [[btn(t.addDeckGenBtn, `gen:ok:${previewId}`, "primary"), btn(t.cancel, `gen:no:${previewId}`)]] };
 }
 
 export const learnKeyboard = (lang: Lang): Keyboard => [[btn(dict(lang).learnBtn, "learn", "primary")]];

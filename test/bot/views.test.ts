@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { renderOnboarding, renderSettings } from "../../src/bot/screens";
-import { formatLong, renderAddPreview, renderCard, renderDone, type CardView } from "../../src/bot/views";
+import { renderGenPreview, renderOnboarding, renderSettings } from "../../src/bot/screens";
+import { formatLong, renderAddPreview, renderCard, renderDone, type CardView, type PreviewItem } from "../../src/bot/views";
 import type { User } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
@@ -98,17 +98,66 @@ describe("views", () => {
     expect(keyboard.flat().map((b) => [b.text, b.callback_data])).toEqual([["➕ Добавить слова", "help:add"], ["📚 Уровни", "levels"]]);
   });
 
-  it("add preview shows link host and actions", () => {
-    const one = renderAddPreview([{ word: "чыдам", transcription: "чыда́м", pos: "adj", translation: "стойкий", exampleTt: "Балалар чыдам.", exampleRu: "Дети стойкие.", sourceUrl: "https://example.com/a" }], 5, "ru");
-    expect(one.text).toContain("<b>чыдам</b>\nчыда́м · <i>adj</i>\n\n<b>стойкий</b><blockquote><i>Балалар чыдам.</i>\nДети стойкие.</blockquote>");
-    expect(one.text).toContain("🔗 example.com");
+  const draft = (over: Partial<PreviewItem> = {}): PreviewItem =>
+    ({ word: "чыдам", transcription: "чыда́м", pos: "adj", translation: "стойкий", exampleTt: "Балалар чыдам.", exampleRu: "Дети стойкие.", sourceUrl: null, ai: false, ...over });
+
+  it("add preview shows the transcription in brackets, the part of speech by name, the link host and the actions", () => {
+    const one = renderAddPreview([draft({ sourceUrl: "https://example.com/a" })], 5, "ru");
+    expect(one.text).toBe("<b>чыдам</b>\n[чыда́м] · <i>прил.</i>\n\n<b>стойкий</b><blockquote><i>Балалар чыдам.</i>\nДети стойкие.</blockquote>\n🔗 example.com");
     expect(one.keyboard.flat().map((b) => b.callback_data)).toEqual(["add:ok:5", "add:edit:5", "add:no:5"]);
+    expect(renderAddPreview([draft()], 5, "tt").text).toContain("[чыда́м] · <i>сыйфат</i>");
+    expect(renderAddPreview([draft({ transcription: null })], 5, "ru").text).toContain("<b>чыдам</b>\n<i>прил.</i>\n\n");
+    expect(renderAddPreview([draft({ pos: "" })], 5, "ru").text).toContain("<b>чыдам</b>\n[чыда́м]\n\n");
+    expect(renderAddPreview([draft({ pos: "", transcription: null, exampleTt: "", exampleRu: "" })], 5, "ru").text).toBe("<b>чыдам</b>\n\n<b>стойкий</b>");
     const many = renderAddPreview([
-      { word: "су", transcription: null, pos: "", translation: "вода", exampleTt: "", exampleRu: "", sourceUrl: null },
-      { word: "юл", transcription: null, pos: "", translation: "дорога", exampleTt: "", exampleRu: "", sourceUrl: "https://x.org" },
+      draft({ word: "су", transcription: null, pos: "", translation: "вода" }),
+      draft({ word: "юл", transcription: "йул", pos: "n", translation: "дорога", sourceUrl: "https://x.org" }),
     ], 6, "tt");
-    expect(many.text).toContain("• <b>юл</b> — дорога 🔗");
+    expect(many.text).toBe(`${tt.foundN(2)}\n• <b>су</b> — вода\n• <b>юл</b> [йул] · <i>исем</i> — дорога 🔗`);
     expect(many.keyboard.flat().map((b) => b.callback_data)).toEqual(["add:ok:6", "add:no:6"]);
+  });
+
+  it("add preview ends with the AI note when a card is from the AI", () => {
+    expect(ru.aiNote).toContain("перевод сделан AI, проверьте");
+    const one = renderAddPreview([draft({ ai: true, sourceUrl: "https://example.com/a" })], 5, "ru");
+    expect(one.text.endsWith(`</blockquote>\n🔗 example.com\n${ru.aiNote}`)).toBe(true);
+    expect(renderAddPreview([draft({ ai: true, exampleTt: "", exampleRu: "" })], 5, "ru").text.endsWith(`<b>стойкий</b>\n${ru.aiNote}`)).toBe(true);
+    const many = renderAddPreview([draft(), draft({ word: "юл", ai: true })], 6, "ru");
+    expect(many.text.endsWith(`— стойкий\n\n${ru.aiNote}`)).toBe(true);
+    expect(renderAddPreview([draft(), draft({ word: "юл" })], 6, "ru").text).not.toContain(ru.aiNote);
+    expect(renderAddPreview([draft()], 5, "ru").text).not.toContain(ru.aiNote);
+    expect(renderAddPreview([draft({ ai: true })], 5, "tt").text.endsWith(`\n${tt.aiNote}`)).toBe(true);
+  });
+
+  it("add preview escapes what the user and the AI wrote", () => {
+    const evil = draft({ word: "<b>x&y", transcription: "<i>t", pos: "<u>", translation: "a<i>b", exampleTt: "<u>q", exampleRu: "r&s", sourceUrl: "https://e.com/?a=<b>", ai: true });
+    for (const text of [renderAddPreview([evil], 1, "ru").text, renderAddPreview([evil, evil], 1, "ru").text]) {
+      expect(text).toContain("<b>&lt;b&gt;x&amp;y</b>");
+      expect(text).toContain("[&lt;i&gt;t] · <i>&lt;u&gt;</i>");
+      expect(text).toContain("a&lt;i&gt;b");
+      expect(text).not.toMatch(/<u>|<i>t|<b>x/);
+    }
+    expect(renderAddPreview([evil], 1, "ru").text).toContain("<blockquote><i>&lt;u&gt;q</i>\nr&amp;s</blockquote>");
+  });
+
+  it("gen preview lists the words with transcription and part of speech and ends with the AI note", () => {
+    const items = [
+      draft({ word: "сәяхәт", transcription: "сәйәхә́т", pos: "n", translation: "путешествие", ai: true }),
+      draft({ word: "бару", transcription: null, pos: "", translation: "идти", ai: true }),
+    ];
+    const r = renderGenPreview("в <гостях>", items, 2, 9, "ru");
+    expect(r.text).toBe([
+      ru.genTitle("в &lt;гостях&gt;", 2), "",
+      "• <b>сәяхәт</b> [сәйәхә́т] · <i>сущ.</i> — путешествие",
+      "• <b>бару</b> — идти",
+      "", ru.genLeft(2), ru.aiNote,
+    ].join("\n"));
+    expect(r.keyboard.flat().map((b) => b.callback_data)).toEqual(["gen:ok:9", "gen:no:9"]);
+    const inTatar = renderGenPreview("сәяхәт", items, 2, 9, "tt").text;
+    expect(inTatar).toContain("[сәйәхә́т] · <i>исем</i>");
+    expect(inTatar.endsWith(`\n${tt.aiNote}`)).toBe(true);
+    const evil = renderGenPreview("x", [draft({ word: "<b>x", transcription: "<i>t", pos: "<u>", translation: "a&b", ai: true })], 1, 9, "ru").text;
+    expect(evil).toContain("• <b>&lt;b&gt;x</b> [&lt;i&gt;t] · <i>&lt;u&gt;</i> — a&amp;b");
   });
 
   it("ru and tt have the same keys, of the same kind", () => {

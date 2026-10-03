@@ -225,7 +225,10 @@ export class Repo {
     ).bind(userId, wordKey(word)).first<Record<string, unknown>>();
     return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, deckTitleRu: r.title_ru as string, deckTitleTt: r.title_tt as string } : null;
   }
-  /** Batch version of findNoteForUser: one D1 call for many words, keyed by wordKey. */
+  /**
+   * Batch version of findNoteForUser: one D1 call for many words, keyed by wordKey.
+   * When a word is both in a deck the user owns and in an open level, the own note wins: the queue shows that one and skips the level's.
+   */
   async findNotesForUser(userId: number, words: string[]): Promise<Map<string, NoteRow & { deckTitleRu: string; deckTitleTt: string }>> {
     const keys = [...new Set(words.map(wordKey))];
     const out = new Map<string, NoteRow & { deckTitleRu: string; deckTitleTt: string }>();
@@ -233,11 +236,26 @@ export class Repo {
     const { results } = await this.db.prepare(
       `SELECT n.id, n.deck_id, n.word_key, ${NOTE_COLS}, d.title_ru, d.title_tt FROM notes n
        JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ? JOIN decks d ON d.id = n.deck_id
-       WHERE n.word_key IN (SELECT value FROM json_each(?)) ORDER BY n.id`,
+       WHERE n.word_key IN (SELECT value FROM json_each(?)) ORDER BY (d.owner_id IS NULL), n.id`,
     ).bind(userId, JSON.stringify(keys)).all<Record<string, unknown>>();
     for (const r of results) {
       const k = r.word_key as string;
       if (!out.has(k)) out.set(k, { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, deckTitleRu: r.title_ru as string, deckTitleTt: r.title_tt as string });
+    }
+    return out;
+  }
+  /** The reviewed cards of the catalog for these words, from any level, open or not: one D1 call, keyed by wordKey. */
+  async findCatalogNotes(words: string[]): Promise<Map<string, NoteRow & { levelNo: number }>> {
+    const keys = [...new Set(words.map(wordKey))];
+    const out = new Map<string, NoteRow & { levelNo: number }>();
+    if (!keys.length) return out;
+    const { results } = await this.db.prepare(
+      `SELECT n.id, n.deck_id, n.word_key, ${NOTE_COLS}, d.level_no FROM notes n JOIN decks d ON d.id = n.deck_id
+       WHERE d.kind = 'catalog' AND d.level_no IS NOT NULL AND n.word_key IN (SELECT value FROM json_each(?)) ORDER BY d.level_no, n.id`,
+    ).bind(JSON.stringify(keys)).all<Record<string, unknown>>();
+    for (const r of results) {
+      const k = r.word_key as string;
+      if (!out.has(k)) out.set(k, { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, levelNo: r.level_no as number });
     }
     return out;
   }
@@ -267,8 +285,9 @@ export class Repo {
     ).bind(limit).all<{ note_id: number; word: string; translation: string; cnt: number; last_at: number }>();
     return results.map((r) => ({ noteId: r.note_id, word: r.word, translation: r.translation, count: r.cnt, lastAt: r.last_at }));
   }
-  async setNoteSourceUrl(noteId: number, url: string): Promise<void> {
-    await this.db.prepare("UPDATE notes SET source_url = ? WHERE id = ? AND source_url IS NULL").bind(url, noteId).run();
+  /** Attaches a link to a note that has none yet. */
+  setNoteSourceUrlStmt(noteId: number, url: string): D1PreparedStatement {
+    return this.db.prepare("UPDATE notes SET source_url = ? WHERE id = ? AND source_url IS NULL").bind(url, noteId);
   }
   async setNoteAudio(noteId: number, fileId: string): Promise<void> {
     await this.db.prepare("UPDATE notes SET audio_file_id = ? WHERE id = ?").bind(fileId, noteId).run();

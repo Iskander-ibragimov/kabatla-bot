@@ -166,7 +166,7 @@ describe("bot handlers", () => {
 
   it("text with a link shows a preview with the link host; url-only asks for words", async () => {
     const f = (async () =>
-      json({ choices: [{ message: { content: JSON.stringify({ cards: [{ word: "рәхмәт", transcription: null, pos: "intj", translation: "спасибо", exampleTt: "Зур рәхмәт!", exampleRu: "Большое спасибо!" }] }) } }] })
+      json({ choices: [{ message: { content: JSON.stringify({ cards: [{ input: "рәхмәт", lang: "tt", word: "рәхмәт", pos: "intj", translation: "спасибо", exampleTt: "Зур рәхмәт!", exampleRu: "Большое спасибо!" }] }) } }] })
     ) as typeof fetch;
     const h = harness(env.DB, { now: T, fetch: f });
     await h.text("/start");
@@ -174,14 +174,37 @@ describe("bot handlers", () => {
     await repo.updateUser((await repo.getUserByTg(42))!.id, { onboardingStep: null });
     await h.text("рәхмәт https://example.com/a", [{ type: "url", offset: 7, length: 21 }]);
     expect(h.tg.of("sendMessage").at(-1)!.payload.text).toBe("🔎 Ищу слова…");
-    expect(h.lastText()).toContain("<b>рәхмәт</b>");
-    expect(h.lastText()).toContain("<blockquote><i>Зур рәхмәт!</i>\nБольшое спасибо!</blockquote>");
-    expect(h.lastText()).toContain("🔗 example.com");
+    expect(h.lastText()).toBe(`<b>рәхмәт</b>\n[рәхмә́т] · <i>межд.</i>\n\n<b>спасибо</b><blockquote><i>Зур рәхмәт!</i>\nБольшое спасибо!</blockquote>\n🔗 example.com\n${ru.aiNote}`);
     await h.press(callbacks(h.lastMarkup())[0]!, 300);
     expect(h.lastText()).toContain("✅ Добавлено");
     expect(h.lastText()).toContain("<b>рәхмәт</b>");
     await h.text("https://youtu.be/q", [{ type: "url", offset: 0, length: 18 }]);
     expect(h.lastText()).toContain("youtu.be");
+  });
+
+  it("/gen shows the deck with transcriptions and the AI note, and the button adds it", async () => {
+    const cards = ["сәяхәт", "юл", "билет"].map((w, i) => ({ input: w, lang: "tt", word: w, pos: "n", translation: `слово ${i}`, exampleTt: `Бу ${w}.`, exampleRu: `Это слово ${i}.` }));
+    const f = (async () => json({ choices: [{ message: { content: JSON.stringify({ cards }) } }] })) as typeof fetch;
+    const h = harness(env.DB, { now: T, fetch: f });
+    await h.text("/start");
+    const repo = new Repo(env.DB);
+    const u = (await repo.getUserByTg(42))!;
+    await repo.updateUser(u.id, { onboardingStep: null });
+    await h.text("/gen в <дороге>");
+    expect(h.lastText()).toBe([
+      ru.genTitle("в &lt;дороге&gt;", 3), "",
+      "• <b>сәяхәт</b> [сәйәхә́т] · <i>сущ.</i> — слово 0", "• <b>юл</b> [йул] · <i>сущ.</i> — слово 1", "• <b>билет</b> [биле́т] · <i>сущ.</i> — слово 2",
+      "", ru.genLeft(2), ru.aiNote,
+    ].join("\n"));
+    await h.press(callbacks(h.lastMarkup())[0]!, 300);
+    expect(h.lastText()).toContain("✅ Колода");
+    const decks = await repo.ownDecks(u.id);
+    expect(decks.map((d) => [d.kind, d.total])).toEqual([["ai", 3]]);
+    const { results } = await env.DB.prepare("SELECT word, transcription, example_src FROM notes WHERE deck_id = ? ORDER BY id").bind(decks[0]!.id).all();
+    expect(results).toEqual([
+      { word: "сәяхәт", transcription: "сәйәхә́т", example_src: "ai" }, { word: "юл", transcription: "йул", example_src: "ai" }, { word: "билет", transcription: "биле́т", example_src: "ai" },
+    ]);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs").first()).toEqual({ n: 0 });
   });
 
   it("D1 daily limit error answers with maintenance and does not throw", async () => {

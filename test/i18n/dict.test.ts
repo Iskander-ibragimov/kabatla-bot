@@ -122,6 +122,12 @@ describe("i18n dictionaries", () => {
     for (const d of [ru, tt]) { expect(d.reportSent.length).toBeGreaterThan(3); expect(d.reportAlready.length).toBeGreaterThan(3); expect(d.reportSent.length).toBeLessThanOrEqual(200); expect(d.reportAlready.length).toBeLessThanOrEqual(200); }
   });
 
+  it("has the note under an AI-made preview", () => {
+    expect(ru.aiNote).toContain("перевод сделан AI, проверьте");
+    expect(tt.aiNote).toContain("AI");
+    expect(tt.aiNote).not.toBe(ru.aiNote);
+  });
+
   it("keeps the Russian texts free of the English bot", () => {
     const all = KEYS.flatMap((k) => texts(ru, k)).join("\n");
     expect(all).not.toMatch(/англ|English|Hi!|resilient|Повтор<|\bEN\b|\bRU\b|\bTT\b/);

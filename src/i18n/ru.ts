@@ -37,6 +37,8 @@ export const ru = {
   edit: "✏️ Изменить",
   cancel: "✖️",
   foundN: (n: number) => `Нашёл ${n}:`,
+  /** Last line of a preview that has a card made by the AI. */
+  aiNote: "🤖 <i>перевод сделан AI, проверьте</i>",
   welcome: "Привет! Я <b>Кабатла</b> 👋\nПомогу выучить татарские слова методом интервальных повторений, как в Anki.\n\nНа каком языке общаться?",
   placementQ: (i: number, word: string) => `Проверим уровень · ${i}/10\n\nЗнаете слово?\n\n<b>${word}</b>`,
   knowBtn: "Знаю",
