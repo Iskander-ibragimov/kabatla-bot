@@ -10,7 +10,7 @@ import { apiTts, sendVoice, TtsError, type Tts } from "./lib/tts-api";
 import { findPiperModels, piperTts, toOgg, type PiperModel } from "./lib/tts-local";
 
 interface Voice { label: string; tts: Tts }
-interface Tally { label: string; sent: number; total: number; firstError?: string }
+interface Tally { label: string; synthesized: number; sent: number; total: number; firstError?: string }
 
 const REPORT_FILE = process.env.REPORT_FILE ?? "out/voice-run.md";
 const MODELS_DIR = process.env.PIPER_MODELS_DIR ?? "models";
@@ -60,13 +60,14 @@ async function sample(): Promise<void> {
   for (const p of picked) voices.push({ label: p.label, tts: piperTts(p.model.model, p.model.config) });
 
   const report: string[] = ["## Sample run", "", `Piper voices selected: ${picked.length === 0 ? "none" : picked.map((p) => `${p.label} <- ${p.model.name}${p.model.config ? "" : " (no config found)"}`).join("; ")}`, ""];
-  const tallies: Tally[] = voices.map((v) => ({ label: v.label, sent: 0, total: words.length }));
+  const tallies: Tally[] = voices.map((v) => ({ label: v.label, synthesized: 0, sent: 0, total: words.length }));
 
   for (const word of words) {
     for (const [i, voice] of voices.entries()) {
       const tally = tallies[i]!;
       try {
         const ogg = await toOgg(await voice.tts.synth(word));
+        tally.synthesized++;
         await sendVoice({ token, chatId, ogg, caption: `${word} · ${voice.label}` });
         tally.sent++;
       } catch (e) {
@@ -83,8 +84,8 @@ async function sample(): Promise<void> {
     ...(piperSilent ? [`Голоса Piper не дошли: пришли только ${delivered.length === 2 ? "два голоса" : `голосов: ${delivered.length}`} (${delivered.map((t) => t.label).join(", ") || "нет"}).`] : []),
   ].join("\n");
 
-  report.push("| voice | sent | total | first error |", "|---|---|---|---|");
-  for (const t of tallies) report.push(`| ${t.label} | ${t.sent} | ${t.total} | ${t.firstError ? t.firstError.replace(/[|\n]/g, " ") : ""} |`);
+  report.push("| voice | synthesized | sent | total | first error |", "|---|---|---|---|---|");
+  for (const t of tallies) report.push(`| ${t.label} | ${t.synthesized} | ${t.sent} | ${t.total} | ${t.firstError ? t.firstError.replace(/[|\n]/g, " ") : ""} |`);
   report.push("");
   try {
     await telegramText(token, chatId, summary);

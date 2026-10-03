@@ -1,6 +1,6 @@
 /** Node-only speech helpers: Piper (local ONNX voices) and ffmpeg. Run in GitHub Actions, never in the Worker. */
 import { spawn } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { TtsError, type Tts } from "./tts-api";
@@ -26,8 +26,18 @@ function run(cmd: string, args: string[], input: Uint8Array | string): Promise<B
   });
 }
 
+/**
+ * piper-tts 1.8.0 parses -c/--config but ignores it and always loads `<model>.onnx.json`, so the discovered
+ * config is copied to that name when it is missing.
+ */
+export function ensureModelConfig(modelPath: string, configPath?: string): void {
+  const expected = `${modelPath}.json`;
+  if (configPath && configPath !== expected && !existsSync(expected)) copyFileSync(configPath, expected);
+}
+
 /** Piper reads text from stdin and writes a WAV file. */
 export function piperTts(modelPath: string, configPath?: string): Tts {
+  ensureModelConfig(modelPath, configPath);
   return {
     async synth(text) {
       const dir = mkdtempSync(join(tmpdir(), "piper-"));
