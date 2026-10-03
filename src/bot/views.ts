@@ -24,6 +24,17 @@ export function hostOf(url: string): string {
 const TEXT_LIMIT = 4096;
 /** The length Telegram counts: a tag is not text, an entity is the one character it stands for. */
 const visibleLength = (html: string): number => html.replace(/<[^>]+>/g, "").replace(/&(?:lt|gt|amp|quot);/g, "x").length;
+const fits = (text: string) => visibleLength(text) <= TEXT_LIMIT;
+/** The text under the largest cap from `least` to `most` that fits one message, or null when even `least` does not. A larger cap never gives a shorter text. */
+function largestFit(least: number, most: number, render: (cap: number) => string): string | null {
+  let best: string | null = null;
+  for (let lo = least, hi = most; lo <= hi;) {
+    const cap = (lo + hi) >> 1;
+    const text = render(cap);
+    if (fits(text)) { best = text; lo = cap + 1; } else hi = cap - 1;
+  }
+  return best;
+}
 
 /**
  * How much of its texts a message with a list shows. Whole by default: a list is shortened only when the message
@@ -70,20 +81,12 @@ export function shownWords(words: string[], max: number): string[] {
  * `render` is asked for a shorter one, in this order and no further than needed:
  * the transcriptions of the list lines go; then translations, deck titles and link hosts are cut, the longest first
  * (one cap for all, lowered until the message fits); only then the words, see `shownWords`.
- * The fields of a card shown alone are never cut; among other lines only the host of its link may be.
+ * The fields of a card shown alone in a preview are never cut; among other lines only the host of its link may be.
+ * A card of a review session has its own rule, see `fitCard`.
  */
 export function fitMessage(render: (fit: Fit) => string): string {
-  const fits = (text: string) => visibleLength(text) <= TEXT_LIMIT;
   /** The message under the largest cap from `least` up that fits, or null when even `least` does not. */
-  const largest = (least: number, fit: (cap: number) => Fit): string | null => {
-    let best: string | null = null;
-    for (let lo = least, hi = LONGEST; lo <= hi;) {
-      const cap = (lo + hi) >> 1;
-      const text = render(fit(cap));
-      if (fits(text)) { best = text; lo = cap + 1; } else hi = cap - 1;
-    }
-    return best;
-  };
+  const largest = (least: number, fit: (cap: number) => Fit): string | null => largestFit(least, LONGEST, (cap) => render(fit(cap)));
   const whole = render(WHOLE);
   if (fits(whole)) return whole;
   const bare: Fit = { ...WHOLE, transcriptions: false };
@@ -121,23 +124,62 @@ export function progressLine(m: Mem, lang: Lang): string {
   return parts.join(" · ");
 }
 
-export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, string>, canUndo: boolean, lang: Lang): Rendered {
-  const t = dict(lang);
+/**
+ * How much of a card in a review session is shown. Whole by default; the caps (in characters) are lowered only for a
+ * card that would not fit one message, see `fitCard`. `example`: 0 leaves the example out. `extras`: the line with the
+ * transcription and the part of speech is shown and the host of the link is whole.
+ */
+interface CardFit { example: number; translation: number; extras: boolean; word: number }
+const WHOLE_CARD: CardFit = { example: Infinity, translation: Infinity, extras: true, word: Infinity };
+
+/**
+ * The text of a card, always short enough for one Telegram message. The fields are limited where they are typed or
+ * generated, but a note stored before the limits existed, or an imported one, may be longer than a message, and a card
+ * that cannot be sent would block the learner's queue for good. A card that fits is shown whole. Otherwise, in this
+ * order and no further than needed: the example is shortened, down to nothing; then the translation, to no less than
+ * LEAST.translation characters; then the transcription line goes. The word is never shortened while anything else
+ * can be: only a word that alone is longer than a message is cut, in the middle.
+ */
+function fitCard(render: (fit: CardFit) => string): string {
+  const whole = render(WHOLE_CARD);
+  if (fits(whole)) return whole;
+  const bare: CardFit = { ...WHOLE_CARD, example: 0 };
+  const least: CardFit = { ...bare, translation: LEAST.translation, extras: false };
+  return largestFit(0, TEXT_LIMIT, (cap) => render({ ...WHOLE_CARD, example: cap }))
+    ?? largestFit(LEAST.translation, TEXT_LIMIT, (cap) => render({ ...bare, translation: cap }))
+    ?? largestFit(LEAST.translation, TEXT_LIMIT, (cap) => render({ ...least, translation: cap }))
+    ?? largestFit(LEAST.word, TEXT_LIMIT, (cap) => render({ ...least, word: cap }))
+    ?? render({ ...least, word: LEAST.word });
+}
+
+/** `lead` is a line that stands before the card in the same message (the news about a new level); it counts toward the length. */
+function cardText(v: CardView, c: Counts, lang: Lang, lead: string, fit: CardFit): string {
+  const word = esc(clipMiddle(v.word, fit.word));
+  const translation = esc(clip(v.translation, fit.translation));
+  const transcription = fit.extras ? v.transcription : null;
   const lines: string[] = [`🔵 ${c.n} · 🔴 ${c.l} · 🟢 ${c.r}`];
+  if (lead) lines.unshift(lead, "");
   if (v.direction === "tt_ru") {
-    const meta = wordMeta(v, lang);
-    lines.push(`<b>${esc(v.word)}</b>`);
+    const meta = fit.extras ? wordMeta(v, lang) : "";
+    lines.push(`<b>${word}</b>`);
     if (meta) lines.push(meta);
-    lines.push(`<tg-spoiler><b>${esc(v.translation)}</b></tg-spoiler>`);
+    lines.push(`<tg-spoiler><b>${translation}</b></tg-spoiler>`);
   } else {
-    lines.push(`<b>${esc(v.translation)}</b>`);
-    lines.push(`<tg-spoiler><b>${esc(v.word)}</b>${v.transcription ? ` [${esc(v.transcription)}]` : ""}</tg-spoiler>`);
+    lines.push(`<b>${translation}</b>`);
+    lines.push(`<tg-spoiler><b>${word}</b>${transcription ? ` [${esc(transcription)}]` : ""}</tg-spoiler>`);
   }
   let text = lines.join("\n");
-  if (v.exampleTt || v.exampleRu) text += `<blockquote><tg-spoiler><i>${esc(v.exampleTt)}</i>\n${esc(v.exampleRu)}</tg-spoiler></blockquote>`;
-  else text += "\n";
+  if (fit.example > 0 && (v.exampleTt || v.exampleRu)) {
+    text += `<blockquote><tg-spoiler><i>${esc(clip(v.exampleTt, fit.example))}</i>\n${esc(clip(v.exampleRu, fit.example))}</tg-spoiler></blockquote>`;
+  } else text += "\n";
   text += progressLine(v.mem, lang);
-  if (v.sourceUrl) text += `\n🔗 <a href="${esc(v.sourceUrl)}">${esc(hostOf(v.sourceUrl))}</a>`;
+  if (v.sourceUrl) text += `\n🔗 <a href="${esc(v.sourceUrl)}">${esc(clip(hostOf(v.sourceUrl), fit.extras ? Infinity : LEAST.host))}</a>`;
+  return text;
+}
+
+export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, string>, canUndo: boolean, lang: Lang, lead = ""): Rendered {
+  const t = dict(lang);
+  const text = fitCard((fit) => cardText(v, c, lang, lead, fit));
 
   const g = (r: Rating) => `g:${v.cardId}:${v.reps}:${r}`;
   const keyboard: Keyboard = [
@@ -161,7 +203,7 @@ export function renderDone(s: DaySummary, lang: Lang): Rendered {
   return { text: lines.join("\n"), keyboard: [[btn(t.addWords, "help:add"), btn(t.decksBtn, "levels")]] };
 }
 
-/** The line that opens the first card (or the done screen) after a level was opened or the last level was finished. */
+/** The line that opens the first card (the `lead` of `renderCard`) or the done screen after a level was opened or the last level was finished. */
 export function renderLevelUp(l: LevelUp, lang: Lang): string {
   const t = dict(lang);
   return l.to == null ? t.levelsDone(l.coveragePct) : t.levelUp(l.from, l.to, l.coveragePct);

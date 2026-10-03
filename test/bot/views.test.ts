@@ -307,6 +307,102 @@ describe("views", () => {
     });
   });
 
+  describe("a card whose fields are longer than a message (a note stored before the limits, an import)", () => {
+    const fits = (text: string) => expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+    const card = (over: Partial<CardView>, lead?: string, lang: "ru" | "tt" = "ru") => renderCard(view(over), counts, iv, true, lang, lead).text;
+    const WORD = `${"ышанычлы ".repeat(30)}кеше`;
+    const LEAD = ru.levelUp(19, 20, 79);
+
+    it("an ordinary card is shown whole, and the lead line of a new level stands before it", () => {
+      const plain = card({});
+      expect(plain).not.toContain("…");
+      expect(card({}, LEAD)).toBe(`${LEAD}\n\n${plain}`);
+      expect(renderCard(view(), counts, iv, true, "ru").keyboard).toEqual(renderCard(view(), counts, iv, true, "ru", LEAD).keyboard);
+    });
+
+    it("shortens the example first: the word and the translation stay whole", () => {
+      const translation = "надёжный ".repeat(40).trim();
+      for (const direction of ["tt_ru", "ru_tt"] as const) {
+        const text = card({ direction, word: WORD, translation, exampleTt: "ә".repeat(5000), exampleRu: "я".repeat(5000) }, LEAD);
+        fits(text);
+        expect(text).toContain(`<b>${WORD}</b>`);
+        expect(text).toContain(`<b>${translation}</b>`);
+        const [, tatar, russian] = text.match(/<blockquote><tg-spoiler><i>(ә+…)<\/i>\n(я+…)<\/tg-spoiler><\/blockquote>/)!;
+        expect(tatar!.length).toBe(russian!.length);
+        // As much of the example as the message has room for: one character more in each half would not fit.
+        expect(visibleLength(text)).toBeGreaterThan(TELEGRAM_TEXT_LIMIT - 2);
+      }
+    });
+
+    it("drops the example when even a short one would not fit, and only then shortens the translation", () => {
+      const text = card({ word: WORD, translation: "я".repeat(9000), exampleTt: "ә".repeat(9000), exampleRu: "я".repeat(9000) }, LEAD);
+      fits(text);
+      expect(text).toContain(`<b>${WORD}</b>`);
+      expect(text).not.toContain("<blockquote>");
+      expect(text).not.toContain("ә");
+      expect(text).toMatch(/<tg-spoiler><b>я+…<\/b><\/tg-spoiler>/);
+      expect(visibleLength(text)).toBe(TELEGRAM_TEXT_LIMIT);
+      // A long translation that fits once the example is shortened is not touched.
+      const whole = card({ word: WORD, translation: "я".repeat(3000), exampleTt: "ә".repeat(9000), exampleRu: "я".repeat(9000) });
+      fits(whole);
+      expect(whole).toContain(`<b>${"я".repeat(3000)}</b>`);
+      expect(whole).toMatch(/<blockquote><tg-spoiler><i>ә+…<\/i>\nя+…<\/tg-spoiler><\/blockquote>/);
+    });
+
+    it.each(["ru", "tt"] as const)("never shortens the word while anything else can go, both directions, %s", (lang) => {
+      const word = "ә".repeat(3000);
+      for (const direction of ["tt_ru", "ru_tt"] as const) {
+        const text = card({ direction, word, transcription: "ә".repeat(3000), pos: "post", translation: "я".repeat(3000), exampleTt: "ә".repeat(3000), exampleRu: "я".repeat(3000), sourceUrl: `https://${"a".repeat(480)}.example/x` },
+          (lang === "ru" ? ru : tt).levelUp(19, 20, 79), lang);
+        fits(text);
+        expect(text).toContain(`<b>${word}</b>`);
+        expect(text).not.toContain("<blockquote>");
+        // The transcription of such a word has no room; the translation is cut to what is left, never below 40 characters.
+        expect(text).not.toContain("[");
+        expect(text).not.toContain("<i>");
+        const shown = text.match(/<b>(я+…)<\/b>/)![1]!;
+        expect(shown.length).toBeGreaterThanOrEqual(40);
+        expect(visibleLength(text)).toBe(TELEGRAM_TEXT_LIMIT);
+        expect(text).toContain(`🔗 <a href="https://${"a".repeat(480)}.example/x">${"a".repeat(39)}…</a>`);
+      }
+    });
+
+    it("keeps at least 40 characters of the translation when the word leaves less room than that", () => {
+      // Without the transcription the word fills the message up to 30 characters short of the limit.
+      const bare = card({ word: "ә", transcription: null, pos: "", translation: "я", exampleTt: "", exampleRu: "" });
+      const word = "ә".repeat(TELEGRAM_TEXT_LIMIT - visibleLength(bare) - 30);
+      const text = card({ word, transcription: null, pos: "", translation: "я".repeat(500), exampleTt: "ә".repeat(500), exampleRu: "" });
+      fits(text);
+      // Now the word has to give way: it is cut in the middle so that 40 characters of the translation fit.
+      expect(text).toContain(`<b>${"я".repeat(39)}…</b>`);
+      expect(text).toMatch(/<b>ә+…ә+<\/b>/);
+    });
+
+    it("a word that alone is longer than a message is cut in the middle, as the last resort", () => {
+      const word = `башы${"ә".repeat(6000)}ахыры`;
+      for (const direction of ["tt_ru", "ru_tt"] as const) {
+        const text = card({ direction, word, transcription: word, translation: "я".repeat(6000), exampleTt: "ә".repeat(6000), exampleRu: "я".repeat(6000) }, LEAD);
+        fits(text);
+        const shown = text.match(/<b>(башы[^<]*ахыры)<\/b>/)![1]!;
+        expect(shown).toContain("…");
+        expect(shown.length).toBeGreaterThan(3500);
+        expect(visibleLength(text)).toBeGreaterThan(TELEGRAM_TEXT_LIMIT - 2);
+      }
+    });
+
+    it("counts what Telegram counts: an escaped character is one character, and a cut never splits one", () => {
+      const escaped = card({ translation: "<&>".repeat(3000), exampleTt: "", exampleRu: "" });
+      fits(escaped);
+      expect(visibleLength(escaped)).toBe(TELEGRAM_TEXT_LIMIT);
+      expect(escaped).toContain(`<b>${"&lt;&amp;&gt;".repeat(1000)}`);
+      expect(escaped).not.toMatch(/&(?!lt;|gt;|amp;|quot;)/);
+      const emoji = card({ exampleTt: "😀".repeat(3000), exampleRu: "" });
+      fits(emoji);
+      expect(emoji).toMatch(/<i>(😀)+…<\/i>/u);
+      expect(emoji).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    });
+  });
+
   it("gen preview lists the words with transcription and part of speech and ends with the AI note", () => {
     const items = [
       draft({ word: "сәяхәт", transcription: "сәйәхә́т", pos: "n", translation: "путешествие", ai: true }),

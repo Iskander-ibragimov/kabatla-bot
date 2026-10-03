@@ -209,6 +209,22 @@ describe("bot handlers", () => {
     expect((await repo.getSession(u.id))!.lastVoiceMessageId).toBeNull();
   });
 
+  it("a note stored with fields longer than a message is still sent as a card, also under the line about a new level", async () => {
+    await seedUser(env.DB, { now: T, level: 1, words: 1, tgId: 42 });
+    await seedLevels(env.DB, { 2: ["авыл"] }, { 1: 31 });
+    await env.DB.prepare("UPDATE notes SET translation = ?, example_tt = ?, example_ru = ?").bind("я".repeat(5000), "ә".repeat(5000), "я".repeat(5000)).run();
+    const h = harness(env.DB, { now: T });
+    await h.text("/learn");
+    expect(h.lastText()).toContain("<b>китап</b>");
+    expect(visibleLength(h.lastText())).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+    await h.press(easyButton(h), h.tg.lastMessageId());
+    expect(h.lastText().startsWith(`${ru.levelUp(1, 2, 31)}\n\n🔵 1 · 🔴 0 · 🟢 0\n<b>авыл</b>`)).toBe(true);
+    expect(visibleLength(h.lastText())).toBe(TELEGRAM_TEXT_LIMIT);
+    // The learner's queue is not blocked: the card can be graded and the session goes on.
+    await h.press(easyButton(h), h.tg.lastMessageId());
+    expect(h.lastText()).toContain(ru.doneTitle);
+  });
+
   it("undo answers the tap once, with the note that the grade was undone, within the Telegram budget", async () => {
     const { h, cardMsg, grade } = await startSession();
     await h.press(grade, cardMsg);
