@@ -20,6 +20,11 @@ describe("sources", () => {
     expect(parseWordformLine("сирәк\t\t3", 3)).toBe("сирәк");
     expect(parseWordformLine("", 3)).toBeNull();
     expect(parseWordformLine("сүз", 3)).toBeNull();
+    // full list layout: rank, form, count; non-words are dropped
+    expect(parseWordformLine("5001\tвакыт\t291672", 3)).toBe("вакыт");
+    expect(parseWordformLine("1\t!\t357485", 3)).toBeNull();
+    expect(parseWordformLine("77\t2014\t900", 3)).toBeNull();
+    expect(parseWordformLine("78\tсүз\t2", 3)).toBeNull();
   });
 
   it("pairs Tatar sentences with Russian translations", () => {

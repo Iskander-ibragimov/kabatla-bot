@@ -13,11 +13,17 @@ export function parseLemmaLine(line: string, pos: string): LemmaRow | null {
   return { count: Number(m[1]), lemma: m[2]!, pos };
 }
 
-/** One line of the word-form list: `<form>\t\t<count>`. Returns the form if its count is at least `minCount`. */
+/**
+ * One line of the full word-form list: `<rank>\t<form>\t<count>` (the top-5000 list is `<form>\t\t<count>`).
+ * Returns the form if its count is at least `minCount` and it is a word (letters, optional inner hyphen/apostrophe);
+ * punctuation, numbers and other tokens are skipped.
+ */
 export function parseWordformLine(line: string, minCount: number): string | null {
-  const m = /^\s*(\S+)\s+(\d+)\s*$/u.exec(line.replace(/\r$/, ""));
-  if (!m || Number(m[2]) < minCount) return null;
-  return m[1]!;
+  const parts = line.replace(/\r$/, "").split("\t").map((p) => p.trim()).filter((p) => p !== "");
+  if (parts.length < 2 || !/^\d+$/.test(parts[parts.length - 1]!)) return null;
+  const form = parts.length >= 3 ? parts[1]! : parts[0]!;
+  if (Number(parts[parts.length - 1]) < minCount) return null;
+  return /^\p{L}[\p{L}\p{M}'’-]*$/u.test(form) ? form : null;
 }
 
 /** Tatoeba `*_sentences.tsv`: `id\tlang\ttext`. */
