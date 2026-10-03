@@ -94,7 +94,7 @@ jobs:
       - name: Detect catalog
         id: catalog
         run: |
-          LEVELS=$(ls data/levels/l*.csv 2>/dev/null | wc -l)
+          LEVELS=$(ls data/levels/l[0-9][0-9].csv 2>/dev/null | wc -l)
           echo "levels=$LEVELS" >> "$GITHUB_OUTPUT"
           if [ -f scripts/csv-to-sql.ts ] && [ "$LEVELS" -gt 0 ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -113,7 +113,8 @@ jobs:
       - name: Deploy worker
         id: deploy
         run: |
-          npx wrangler deploy | tee deploy.log
+          set -o pipefail
+          npx wrangler deploy 2>&1 | tee deploy.log
           URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
           if [ -z "$URL" ]; then URL="https://kabatla-bot.${{ steps.subdomain.outputs.sub }}.workers.dev"; fi
           echo "url=$URL" >> "$GITHUB_OUTPUT"
@@ -195,10 +196,21 @@ jobs:
             INFO=$(curl -s --max-time 20 "https://api.telegram.org/bot$BOT_TOKEN/getWebhookInfo" || true)
             WH_URL=$(printf '%s' "$INFO" | jq -r '.result.url // ""' 2>/dev/null || true)
             PENDING=$(printf '%s' "$INFO" | jq -r '.result.pending_update_count // "n/a"' 2>/dev/null || echo n/a)
-            LAST_ERR=$(printf '%s' "$INFO" | jq -r '.result.last_error_message // "(none)"' 2>/dev/null || echo n/a)
+            LAST_ERR=$(printf '%s' "$INFO" | jq -r '.result.last_error_message // "(none)" | .[0:200]' 2>/dev/null || echo n/a)
             if [ -n "$WORKER_HOST" ]; then
               case "$WH_URL" in "https://$WORKER_HOST/"*) MATCH=yes;; *) MATCH=no;; esac
             fi
+          fi
+          CMDS="- commands: n/a"$'\n'
+          if [ -n "$BOT_TOKEN" ]; then
+            CMDS=""
+            for L in default ru tt en; do
+              if [ "$L" = default ]; then Q=""; else Q="?language_code=$L"; fi
+              R=$(curl -s --max-time 20 "https://api.telegram.org/bot$BOT_TOKEN/getMyCommands$Q" || true)
+              N=$(printf '%s' "$R" | jq -r '.result | length' 2>/dev/null || echo n/a)
+              NAMES=$(printf '%s' "$R" | jq -r '[.result[].command] | join(",")' 2>/dev/null || echo n/a)
+              CMDS="$CMDS- commands ($L): ${N:-n/a}: ${NAMES}"$'\n'
+            done
           fi
           mkdir -p report
           {
@@ -226,7 +238,7 @@ jobs:
             echo
             echo "## Worker"
             echo "- LLM providers selected: ${PROVIDERS:-n/a}"
-            echo "- catalog levels: ${LEVELS:-0}"
+            echo "- level files in repo: ${LEVELS:-n/a} (load catalog step: ${S_SEED})"
             echo "- worker host: ${WORKER_HOST:-n/a}"
             echo
             echo "## Telegram"
@@ -234,6 +246,7 @@ jobs:
             echo "- webhook host matches worker: ${MATCH}"
             echo "- pending_update_count: ${PENDING}"
             echo "- last_error_message: ${LAST_ERR}"
+            printf '%s' "$CMDS"
             echo
             echo "## Self-check"
             echo "- POST /tg without secret header: HTTP ${SC_NO:-n/a} (expected: not 2xx)"

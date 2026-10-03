@@ -23,8 +23,11 @@ await api("setWebhook", {
   url: `${WORKER_URL.replace(/\/$/, "")}/tg`, secret_token: WEBHOOK_SECRET,
   allowed_updates: ["message", "callback_query"], drop_pending_updates: false, max_connections: 40,
 });
-// Russian is the default; Telegram shows the Tatar texts to users whose app language is Tatar.
+// Default scope = Russian, "ru" = Russian explicitly, "tt" = Tatar for users whose app language is Tatar.
 await api("setMyCommands", { commands: commands(ru) });
+await api("setMyCommands", { commands: commands(ru), language_code: "ru" });
 await api("setMyCommands", { commands: commands(tt), language_code: "tt" });
 await api("setMyDescription", { description: ru.botAbout });
+await api("setMyDescription", { description: ru.botAbout, language_code: "ru" });
+await api("setChatMenuButton", { menu_button: { type: "commands" } });
 await api("setMyDescription", { description: tt.botAbout, language_code: "tt" });
