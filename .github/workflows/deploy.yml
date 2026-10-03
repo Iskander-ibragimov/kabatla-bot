@@ -115,7 +115,7 @@ jobs:
         run: |
           set -o pipefail
           npx wrangler deploy 2>&1 | tee deploy.log
-          URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
+          URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1 || true)
           if [ -z "$URL" ]; then URL="https://kabatla-bot.${{ steps.subdomain.outputs.sub }}.workers.dev"; fi
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
@@ -148,7 +148,8 @@ jobs:
             sleep 10
           done
           test -n "$ok" || { echo "Worker did not answer at its URL"; exit 1; }
-          npx tsx scripts/set-webhook.ts
+          set -o pipefail
+          npx tsx scripts/set-webhook.ts 2>&1 | tee "$RUNNER_TEMP/webhook.log"
 
       - name: Self-check the webhook endpoint
         id: selfcheck
@@ -168,6 +169,7 @@ jobs:
         if: always()
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_TG_ID: ${{ secrets.ADMIN_TG_ID }}
           SHA: ${{ github.sha }}
           S_INSTALL: ${{ steps.install.outcome }}
           S_TYPECHECK: ${{ steps.typecheck.outcome }}
@@ -212,6 +214,13 @@ jobs:
               CMDS="$CMDS- commands ($L): ${N:-n/a}: ${NAMES}"$'\n'
             done
           fi
+          WH_OUT=""
+          if [ -f "$RUNNER_TEMP/webhook.log" ]; then
+            WH_OUT=$(tail -n 15 "$RUNNER_TEMP/webhook.log" | sed -E 's#bot[0-9]+:[A-Za-z0-9_-]+#bot<scrubbed>#g; s#https://api\.telegram\.org[^ ]*#<telegram url>#g')
+            for secret in "$BOT_TOKEN" "$WEBHOOK_SECRET" "$ADMIN_TG_ID"; do
+              if [ -n "$secret" ]; then WH_OUT="${WH_OUT//"$secret"/<scrubbed>}"; fi
+            done
+          fi
           mkdir -p report
           {
             echo "# deploy report"
@@ -247,6 +256,11 @@ jobs:
             echo "- pending_update_count: ${PENDING}"
             echo "- last_error_message: ${LAST_ERR}"
             printf '%s' "$CMDS"
+            echo
+            echo "## webhook and commands output (last 15 lines)"
+            echo '```'
+            echo "${WH_OUT:-(none)}"
+            echo '```'
             echo
             echo "## Self-check"
             echo "- POST /tg without secret header: HTTP ${SC_NO:-n/a} (expected: not 2xx)"
