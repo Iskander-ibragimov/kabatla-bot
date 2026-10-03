@@ -1,0 +1,115 @@
+name: voice-catalog
+# Voices the rows of data/levels/*.csv that have no audio_file_id (speech API -> ffmpeg -> sendVoice to the service chat),
+# commits the filled CSV files to master and starts the deploy, which loads the ids into the database.
+# Re-running continues from the rows still empty. Publishes voice-catalog.md (counts only) to the orphan branch `voice-catalog-report`.
+# Start: Actions -> voice-catalog -> Run workflow (optional input `level`), or commit a change to .github/trigger/voice-catalog.
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "Level number 1..20 (empty: all levels)"
+        required: false
+        default: ""
+  push:
+    paths:
+      - .github/trigger/voice-catalog
+permissions:
+  contents: write
+  actions: write
+concurrency: voice-catalog
+jobs:
+  voice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install
+        id: install
+        run: corepack enable pnpm && pnpm install --frozen-lockfile
+      - name: Install ffmpeg
+        id: ffmpeg
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+      - name: Voice the level files
+        id: voice
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_TG_ID: ${{ secrets.ADMIN_TG_ID }}
+          AUDIO_CHAT_ID: ${{ secrets.AUDIO_CHAT_ID }}
+          LEVEL: ${{ inputs.level }}
+          REPORT_FILE: out/voice-run.md
+        run: |
+          args=()
+          if [ -n "$LEVEL" ]; then args+=(--level "$LEVEL"); fi
+          pnpm exec tsx scripts/voice.ts catalog "${args[@]}"
+      - name: Commit the level files and start the deploy
+        id: commit
+        if: always() && steps.install.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Only the level files: whatever else is modified in the checkout is not ours to commit.
+          git add -- data/levels/l*.csv
+          if git diff --cached --quiet; then
+            echo "pushed=no (no new audio ids)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -q -m "chore(data): voice level files"
+          pushed=""
+          for i in 1 2 3; do
+            git fetch -q origin master
+            if git rebase origin/master && git push origin HEAD:master; then pushed=1; break; fi
+            git rebase --abort 2>/dev/null || true
+            sleep 15
+          done
+          if [ -z "$pushed" ]; then
+            echo "pushed=FAILED (could not rebase onto master and push; the voiced ids are lost, run again)" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "pushed=yes" >> "$GITHUB_OUTPUT"
+          # A push made with GITHUB_TOKEN does not start other workflows: start the deploy by hand.
+          gh workflow run deploy.yml --ref master
+          echo "deploy=started" >> "$GITHUB_OUTPUT"
+      - name: Publish diagnostics to the voice-catalog-report branch
+        if: always()
+        env:
+          S_INSTALL: ${{ steps.install.outcome }}
+          S_FFMPEG: ${{ steps.ffmpeg.outcome }}
+          S_VOICE: ${{ steps.voice.outcome }}
+          S_COMMIT: ${{ steps.commit.outcome }}
+          PUSHED: ${{ steps.commit.outputs.pushed }}
+          DEPLOY: ${{ steps.commit.outputs.deploy }}
+          AUDIO_CHAT_SET: ${{ secrets.AUDIO_CHAT_ID != '' }}
+          LEVEL: ${{ inputs.level }}
+        run: |
+          mkdir -p out report
+          {
+            echo "# voice-catalog diagnostics"
+            echo
+            echo "Run: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "Level input: ${LEVEL:-all}"
+            echo "Target chat: $([ "$AUDIO_CHAT_SET" = true ] && echo 'AUDIO_CHAT_ID' || echo 'ADMIN_TG_ID (no AUDIO_CHAT_ID secret)')"
+            echo
+            echo "## Steps"
+            echo "- install: ${S_INSTALL}"
+            echo "- ffmpeg: ${S_FFMPEG}"
+            echo "- voice: ${S_VOICE}"
+            echo "- commit and deploy: ${S_COMMIT}"
+            echo "- pushed to master: ${PUSHED:-n/a}"
+            echo "- deploy: ${DEPLOY:-not started}"
+            echo
+            cat out/voice-run.md 2>/dev/null || printf "## Catalog run\n\n(voice.ts wrote no report)\n"
+          } > report/voice-catalog.md
+          cd report
+          git init -q -b voice-catalog-report
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add voice-catalog.md
+          git commit -q -m "reports: voice-catalog $(date -u +%Y-%m-%d)"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" voice-catalog-report

@@ -88,7 +88,7 @@ describe("i18n dictionaries", () => {
 
   it("writes Tatar texts with Tatar letters only", () => {
     // Names that stay in Latin script. Everything else Latin is a look-alike or a leftover.
-    const LATIN_OK = /AI|Anki|Tatoeba|CC BY 2\.0 FR|corpus\.tatar|UTC/g;
+    const LATIN_OK = /AI|Anki|Tatoeba|CC BY 2\.0 FR|corpus\.tatar|speech\.tatar|UTC/g;
     // Tags, commands, emoji (with the variation selector) and symbols that isTatarText does not know.
     const NOT_TEXT = /<[^>]+>|\/\w+|\p{Extended_Pictographic}|[️\n·≈%№~+→↑<„“]/gu;
     for (const k of KEYS) {
