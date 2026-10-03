@@ -1,8 +1,10 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Repo } from "../../src/db/repo";
+import { tt } from "../../src/i18n/tt";
 import { tick } from "../../src/reminders/service";
-import { harness } from "../helpers/botHarness";
+import { easyButton, harness } from "../helpers/botHarness";
+import { countingDb } from "../helpers/countingDb";
 import { fakeTelegram } from "../helpers/fakeTelegram";
 import { WORDS, seedLevels } from "../helpers/seed";
 
@@ -73,5 +75,58 @@ describe("first day and next day", () => {
     }
     expect(await maxDays()).toBeGreaterThan(before);
     void sessionMsg;
+  });
+
+  it("Tatar interface: onboarding → 100 words of the level → level-up with coverage → a level 2 card", async () => {
+    const words100 = Array.from({ length: 100 }, (_, i) => `сүз${i + 1}`);
+    await seedLevels(env.DB, { 1: words100, 2: ["авыл"] }, { 1: 31 });
+    const db = countingDb(env.DB);
+    const h = harness(db, { now: T });
+    let maxTelegramCallsPerUpdate = 0, maxD1CallsPerUpdate = 0;
+    /** Runs one update and keeps the largest number of Telegram and D1 calls a single update made. */
+    const update = async (run: () => Promise<unknown>) => {
+      const telegramBefore = h.tg.calls.length;
+      db.calls = 0;
+      await run();
+      maxTelegramCallsPerUpdate = Math.max(maxTelegramCallsPerUpdate, h.tg.calls.length - telegramBefore);
+      maxD1CallsPerUpdate = Math.max(maxD1CallsPerUpdate, db.calls);
+    };
+    const press = (data: string) => update(() => h.press(data, h.tg.lastMessageId()));
+
+    await update(() => h.text("/start"));
+    await press("ob:tt");
+    expect(h.lastText()).toBe(tt.placementQ(1, "бар"));
+    for (let i = 0; i < 10; i++) {
+      expect((h.lastMarkup().inline_keyboard ?? []).flat().map((b) => b.text)).toEqual([tt.knowBtn, "Белмим"]);
+      await press("ob:0");
+    }
+    expect(h.lastText()).toBe(tt.goalQ(1));
+    await press("ob:20");
+    await press("ob:09:00");
+    await press("ob:180");
+    expect(h.tg.of("editMessageText").at(-1)!.payload.text).toBe(`${tt.finished("09:00", "UTC+3")}\n\n${tt.easyHint}`);
+    expect(h.lastText()).toContain(`<b>${words100[0]}</b>`);
+    expect(h.lastText().startsWith("🔵 20 · 🔴 0 · 🟢 0\n")).toBe(true);
+
+    for (let i = 0; i < 100; i++) {
+      expect(h.lastText()).toContain(`<b>${words100[i]}</b>`);
+      expect(h.lastText()).not.toContain(tt.levelUp(1, 2, 31));
+      const easy = (h.lastMarkup().inline_keyboard ?? []).flat().find((b) => b.callback_data === easyButton(h))!;
+      expect(easy.text.startsWith(`${tt.easy} `)).toBe(true);
+      await press(easy.callback_data);
+    }
+    expect(h.lastText()).toContain(tt.levelUp(1, 2, 31));
+    expect(h.lastText().startsWith(`${tt.levelUp(1, 2, 31)}\n\n🔵 1 · 🔴 0 · 🟢 0\n<b>авыл</b>`)).toBe(true);
+    expect(h.lastText()).toContain("авыл");
+    expect(tt.levelUp(1, 2, 31)).toContain("≈31%");
+    expect(maxTelegramCallsPerUpdate).toBeLessThanOrEqual(3);
+    expect(maxD1CallsPerUpdate).toBeLessThanOrEqual(8);
+
+    const repo = new Repo(env.DB);
+    const u = (await repo.getUserByTg(42))!;
+    expect(u).toMatchObject({ lang: "tt", level: 2, newPerDay: 20, onboardingStep: null });
+    expect(await repo.userDeckIds(u.id)).toEqual([(await repo.getDeckBySlug("l01"))!.id, (await repo.getDeckBySlug("l02"))!.id]);
+    const log = await env.DB.prepare("SELECT COUNT(*) AS n, SUM(was_new) AS fresh, MIN(rating) AS lo FROM review_log WHERE user_id = ?").bind(u.id).first<{ n: number; fresh: number; lo: number }>();
+    expect(log).toEqual({ n: 100, fresh: 100, lo: 4 });
   });
 });

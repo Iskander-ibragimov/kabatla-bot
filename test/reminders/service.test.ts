@@ -189,6 +189,60 @@ describe("reminders tick", () => {
     expect(db.calls).toBeLessThanOrEqual(10);
   });
 
+  it("a tick with 40 users due for a reminder makes at most 35 sends and 10 D1 calls", async () => {
+    for (let i = 0; i < 40; i++) await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 4000 + i });
+    // Pushes that an earlier tick put off wait in the queue as well.
+    for (let i = 0; i < 10; i++) await enqueue(env.DB, "push", { chat_id: 5000 + i, text: "x" }, local(30, 9, 0));
+    const db = countingDb(env.DB);
+    const first = fakeTelegram();
+    expect(await run(db, first, local(30, 9, 1))).toEqual({ sent: 35 });
+    expect(first.calls).toHaveLength(35);
+    expect(first.calls.every((c) => c.method === "sendMessage")).toBe(true);
+    expect(db.calls).toBeLessThanOrEqual(10);
+    // The next minute: the five users left and the queued pushes, again within the budget.
+    db.calls = 0;
+    const second = fakeTelegram();
+    expect(await run(db, second, local(30, 9, 2))).toEqual({ sent: 15 });
+    expect(second.calls).toHaveLength(15);
+    expect(db.calls).toBeLessThanOrEqual(10);
+    const reminded = [...first.calls, ...second.calls].map((c) => c.payload.chat_id as number).filter((id) => id < 5000);
+    expect(new Set(reminded).size).toBe(40);
+  });
+
+  it("stays within 10 D1 calls when Telegram refuses some users and limits the rest", async () => {
+    for (let i = 0; i < 40; i++) await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 6000 + i });
+    const db = countingDb(env.DB);
+    const tg = fakeTelegram();
+    // The first user has blocked the bot; then Telegram asks to slow down: the rest of the plan is queued in one batch.
+    let n = 0;
+    const flaky = { call: async <T>(method: string, payload: Record<string, unknown>) => {
+      n++;
+      if (n === 1) throw Object.assign(new Error("Forbidden: bot was blocked by the user"), { error_code: 403 });
+      if (n === 3) throw Object.assign(new Error("Too Many Requests"), { error_code: 429, parameters: { retry_after: 5 } });
+      return tg.call<T>(method, payload);
+    } };
+    expect(await tick({ repo: new Repo(db), tg: flaky, now: local(30, 9, 1) })).toEqual({ sent: 1 });
+    expect(n).toBeLessThanOrEqual(35);
+    expect(db.calls).toBeLessThanOrEqual(10);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE kind = 'push' AND run_at = ?").bind(local(30, 9, 1) + 5000).first<{ n: number }>())!.n).toBe(33);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM users WHERE active = 0").first<{ n: number }>())!.n).toBe(1);
+  });
+
+  it("does not voice words: a voice job left in the queue costs no Telegram call and writes nothing to the note", async () => {
+    const { repo, noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 1, patch: { nextDailyAt: local(30, 9, 0) + 10 * 86_400_000 } });
+    await enqueue(env.DB, "voice", { noteId: noteIds[0] }, local(30, 9, 0));
+    const db = countingDb(env.DB);
+    const tg = fakeTelegram();
+    expect(await run(db, tg, local(30, 9, 1))).toEqual({ sent: 0 });
+    expect(tg.calls).toEqual([]);
+    expect(db.calls).toBeLessThanOrEqual(10);
+    expect(await repo.getNote(noteIds[0]!)).toMatchObject({ audioFileId: null });
+    expect(await env.DB.prepare("SELECT audio_tries FROM notes WHERE id = ?").bind(noteIds[0]).first()).toEqual({ audio_tries: 0 });
+    // The job is closed, not retried every minute: voicing happens in GitHub Actions, the tick only clears the queue.
+    const job = await env.DB.prepare("SELECT attempts, error, done_at FROM jobs").first<{ attempts: number; error: string | null; done_at: number | null }>();
+    expect(job).toEqual({ attempts: 0, error: null, done_at: local(30, 9, 1) });
+  });
+
   it("a failed send is not retried every minute", async () => {
     await seedUser(env.DB, { now: local(30, 8, 0), words: 1 });
     const tg = fakeTelegram();

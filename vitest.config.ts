@@ -20,7 +20,17 @@ export default defineConfig(async () => {
     ],
     test: {
       setupFiles: ["./test/apply-migrations.ts"],
-      coverage: { provider: "istanbul" as const, include: ["src/**"] },
+      coverage: {
+        provider: "istanbul" as const,
+        include: ["src/**"],
+        // Spec §11: the scheduler, the review session and the transcription rules at 90% of lines, the whole bot at 70%.
+        thresholds: {
+          lines: 70,
+          "src/srs/**": { lines: 90 },
+          "src/review/**": { lines: 90 },
+          "src/content/transcribe.ts": { lines: 90 },
+        },
+      },
     },
   };
 });
