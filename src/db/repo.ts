@@ -476,7 +476,7 @@ export class Repo {
     void now;
   }
 
-  /** Cumulative numbers for /stats in one D1 call; `coveragePct` is the coverage of the level below the user's current one. */
+  /** Cumulative numbers for /stats in one D1 call; `coveragePct` is the coverage of the nearest level the catalog has below the user's current one. */
   async statsExtra(userId: number, now: number, dayStartMs: number, direction: Direction): Promise<{ memory: number; total: number; r30: number; rev30: number; ok30: number; coveragePct: number | null; forecast: { d: number; n: number }[] }> {
     const since = now - 30 * 86_400_000;
     const [a, f] = await this.db.batch<Record<string, number | null>>([
@@ -487,7 +487,7 @@ export class Repo {
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3) AS r30,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3 AND json_extract(state_before, '$.state') = 'review') AS rev30,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3 AND json_extract(state_before, '$.state') = 'review' AND rating > 1) AS ok30,
-          (SELECT d.coverage_pct FROM decks d JOIN users u ON u.id = ?1 WHERE d.level_no = u.level - 1) AS coverage`)
+          (SELECT d.coverage_pct FROM decks d JOIN users u ON u.id = ?1 WHERE d.level_no < u.level ORDER BY d.level_no DESC LIMIT 1) AS coverage`)
         .bind(userId, direction, since),
       this.db.prepare(`SELECT MAX(0, CAST((due - ?2) / 86400000 AS INTEGER)) AS d, COUNT(*) AS n FROM cards
           WHERE user_id = ?1 AND state != 'new' AND due < ?2 + 7 * 86400000 GROUP BY d`).bind(userId, dayStartMs),

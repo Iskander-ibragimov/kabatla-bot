@@ -105,11 +105,40 @@ describe("levels view", () => {
     expect(await levelsView(repo, user)).toEqual({
       passed: [1, 2],
       inProgress: [{ levelNo: 3, seen: 1, total: 2 }, { levelNo: 4, seen: 2, total: 3 }],
-      ahead: 16,
+      ahead: 1,
       own: [{ kind: "custom", titleRu: "Мои слова", titleTt: "Минем сүзләр", total: 1 }],
       coveragePct: 54,
       skipped: [1],
     });
+  });
+
+  it("counts only the levels the catalog has above the current one as ahead", async () => {
+    // Production today: level 1 is the only level published.
+    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 3 });
+    expect(await levelsView(repo, user)).toEqual({ passed: [], inProgress: [{ levelNo: 1, seen: 0, total: 3 }], ahead: 0, own: [], coveragePct: null, skipped: [] });
+    await seedLevels(env.DB, { 2: ["авыл"], 3: ["су"], 7: ["юл"] });
+    expect((await levelsView(repo, user)).ahead).toBe(3);
+    await repo.updateUser(user.id, { level: 3 });
+    expect((await levelsView(repo, (await repo.getUser(user.id))!)).ahead).toBe(1);
+  });
+
+  it("has no line for the current level when its deck is not in the catalog", async () => {
+    // A learner placed at level 4 while only level 1 was published: nothing is open.
+    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 3 });
+    await env.DB.prepare("DELETE FROM user_decks").run();
+    await repo.updateUser(user.id, { level: 4 });
+    expect(await levelsView(repo, (await repo.getUser(user.id))!)).toEqual({ passed: [1], inProgress: [], ahead: 0, own: [], coveragePct: null, skipped: [1] });
+  });
+
+  it("takes the coverage from the nearest level below the current one when the catalog has a gap, in /levels and in /stats", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 1 });
+    await seedLevels(env.DB, { 3: ["авыл"], 6: ["су"] }, { 1: 31, 3: 54 });
+    const at = async (level: number) => { await repo.updateUser(user.id, { level }); return (await repo.getUser(user.id))!; };
+    for (const [level, pct] of [[1, null], [3, 31], [6, 54], [21, null]] as const) {
+      const u = await at(level);
+      expect((await levelsView(repo, u)).coveragePct, `levels at ${level}`).toBe(pct);
+      expect((await cumulative(repo, u, T)).coveragePct, `stats at ${level}`).toBe(pct);
+    }
   });
 
   it("after level 20 has no level in progress unless words are left", async () => {

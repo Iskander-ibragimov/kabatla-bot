@@ -1,5 +1,5 @@
 import type { DeckRow, Repo, User } from "../db/repo";
-import { LAST_LEVEL, displayDirection } from "../review/service";
+import { displayDirection } from "../review/service";
 import { dayWindow } from "../users/service";
 
 export interface Cumulative {
@@ -7,7 +7,7 @@ export interface Cumulative {
   memory: number; total: number; r30: number; retention30: number | null; forecast7: number[];
   /** Current level, 1…20; 21 when every level is done. */
   level: number;
-  /** Share of ordinary text covered by the levels below the current one, in percent. */
+  /** Share of ordinary text covered by the levels below the current one, in percent: the coverage of the nearest level below it. */
   coveragePct: number | null;
 }
 
@@ -29,9 +29,9 @@ export async function cumulative(repo: Repo, user: User, now: number): Promise<C
 export interface LevelsView {
   /** Levels below the current one that are finished, or were skipped at the placement test and never opened. */
   passed: number[];
-  /** The current level and the opened levels below it that still have unseen words, by level number. */
+  /** The current level (when the catalog has it and it is open) and the opened levels below it that still have unseen words, by level number. */
   inProgress: { levelNo: number; seen: number; total: number }[];
-  /** How many levels come after the current one. */
+  /** How many levels the catalog has after the current one; levels that are not published yet are not counted. */
   ahead: number;
   /** «Мои слова» and the AI decks. */
   own: Pick<DeckRow, "kind" | "titleRu" | "titleTt" | "total">[];
@@ -41,6 +41,7 @@ export interface LevelsView {
   skipped: number[];
 }
 
+/** Everything here is built from the levels the catalog has (ordered by number), so an unfinished catalog or one with gaps shows only what exists. */
 export async function levelsView(repo: Repo, user: Pick<User, "id" | "level">): Promise<LevelsView> {
   const [levels, own] = await Promise.all([repo.levelsOverview(user.id), repo.ownDecks(user.id)]);
   const below = levels.filter((l) => l.levelNo < user.level);
@@ -48,9 +49,9 @@ export async function levelsView(repo: Repo, user: Pick<User, "id" | "level">): 
     passed: below.filter((l) => !l.open || l.seen >= l.total).map((l) => l.levelNo),
     inProgress: levels.filter((l) => l.open && (l.levelNo === user.level || (l.levelNo < user.level && l.seen < l.total)))
       .map((l) => ({ levelNo: l.levelNo, seen: l.seen, total: l.total })),
-    ahead: Math.max(0, LAST_LEVEL - user.level),
+    ahead: levels.filter((l) => l.levelNo > user.level).length,
     own: own.map((d) => ({ kind: d.kind, titleRu: d.titleRu, titleTt: d.titleTt, total: d.total })),
-    coveragePct: levels.find((l) => l.levelNo === user.level - 1)?.coveragePct ?? null,
+    coveragePct: below.at(-1)?.coveragePct ?? null,
     skipped: below.filter((l) => !l.open).map((l) => l.levelNo),
   };
 }

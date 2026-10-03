@@ -18,10 +18,11 @@ const buttons = (m: { inline_keyboard?: { text: string; callback_data: string }[
 /**
  * The picture from the brief: the learner (Telegram id 42) started at level 4 of 100 words; 36 words are graded, one more
  * is a copy in «Мои слова» (12 words), one was shown but not graded; an AI deck of 20 words; levels 1–3 cover 54%.
+ * The catalog has six levels so far, so two are ahead.
  */
 async function learnerAtLevel4(db: D1Database) {
   const level4 = Array.from({ length: 100 }, (_, i) => `сүз${i + 1}`);
-  await seedLevels(db, { 1: ["китап", "вакыт"], 2: ["авыл", "су"], 3: ["юл", "көн"], 4: level4 }, { 3: 54, 4: 61 });
+  await seedLevels(db, { 1: ["китап", "вакыт"], 2: ["авыл", "су"], 3: ["юл", "көн"], 4: level4, 5: ["өй"], 6: ["эш"] }, { 3: 54, 4: 61 });
   const { repo, user, noteIds } = await seedUser(db, { now: T, level: 4, tgId: 42 });
   await repo.batch(noteIds.slice(0, 36).map((id) => repo.insertCardStmt(user.id, id, "tt_ru", gradedMem(T))));
   await repo.insertCard(user.id, noteIds[36]!, "tt_ru", newMem(T));
@@ -42,7 +43,7 @@ describe("/levels", () => {
       "📚 <b>Уровни</b>",
       "✅ Пройдено: 1–3",
       "▶️ Уровень 4 · 37 из 100",
-      "🔒 Впереди: 16",
+      "🔒 Впереди: 2",
       "📝 Мои слова · 12",
       "🤖 Путешествия · 20",
       "📖 Покрытие текста ≈54%",
@@ -72,7 +73,7 @@ describe("/levels", () => {
       "▶️ Уровень 2 · 0 из 2",
       "▶️ Уровень 3 · 0 из 2",
       "▶️ Уровень 4 · 37 из 100",
-      "🔒 Впереди: 16",
+      "🔒 Впереди: 2",
       "📝 Мои слова · 12",
       "🤖 Путешествия · 20",
       "📖 Покрытие текста ≈54%",
@@ -94,7 +95,7 @@ describe("/levels", () => {
       "📚 <b>Дәрәҗәләр</b>",
       tt.levelsPassed("1–3"),
       "▶️ 4 нче дәрәҗә · 37/100",
-      tt.levelsAhead(16),
+      tt.levelsAhead(2),
       "📝 Минем сүзләр · 12",
       "🤖 Путешествия · 20",
       tt.levelsCoverage(54),
@@ -110,8 +111,21 @@ describe("/levels", () => {
     expect(h.lastText()).toContain(ru.doneTitle);
     expect(buttons(h.lastMarkup())).toEqual([[ru.addWords, "help:add"], ["📚 Уровни", "levels"]]);
     await h.press("levels", h.tg.lastMessageId());
-    expect(h.lastText()).toBe(["📚 <b>Уровни</b>", "▶️ Уровень 1 · 1 из 1", "🔒 Впереди: 19"].join("\n"));
+    // Level 1 is the only level published: nothing is said about levels ahead.
+    expect(h.lastText()).toBe(["📚 <b>Уровни</b>", "▶️ Уровень 1 · 1 из 1"].join("\n"));
     expect(buttons(h.lastMarkup())).toEqual([]);
+  });
+
+  it("a learner placed above the only published level sees it as skipped, with no current level and nothing ahead", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 2, tgId: 42 });
+    await env.DB.prepare("DELETE FROM user_decks").run();
+    await repo.updateUser(user.id, { level: 7 });
+    const h = harness(env.DB, { now: T });
+    await h.text("/levels");
+    expect(h.lastText()).toBe(["📚 <b>Уровни</b>", "✅ Пройдено: 1"].join("\n"));
+    expect(buttons(h.lastMarkup())).toEqual([["Открыть пропущенные (1)", "lv:skip"]]);
+    await h.press("lv:skip", h.tg.lastMessageId());
+    expect(h.tg.of("editMessageText").at(-1)!.payload.text).toBe(["📚 <b>Уровни</b>", "▶️ Уровень 1 · 0 из 2"].join("\n"));
   });
 
   it("the empty screen offers the levels", async () => {
