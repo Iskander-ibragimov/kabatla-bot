@@ -77,14 +77,75 @@ describe("users", () => {
     expect(user).toMatchObject({ onboardingStep: null, onboardingData: null, level: 4, newPerDay: 10 });
   });
 
-  it("finishes without a subscription when the start level is not in the catalog", async () => {
-    const repo = new Repo(env.DB);
-    let { user } = await getOrCreate(repo, 13, 13, "ru", T);
-    await repo.updateUser(user.id, { onboardingStep: "tz", level: 4 });
-    user = (await repo.getUser(user.id))!;
-    expect(await advanceOnboarding(repo, user, "180", T)).toMatchObject({ kind: "finished", level: 4 });
-    expect(await repo.userDeckIds(user.id)).toEqual([]);
-    expect(await repo.getUser(user.id)).toMatchObject({ onboardingStep: null, level: 4 });
+  /** A user on the time-zone step who was placed at `level`. */
+  async function placedAt(repo: Repo, tgId: number, level: number) {
+    const { user } = await getOrCreate(repo, tgId, tgId, "ru", T);
+    await repo.updateUser(user.id, { onboardingStep: "tz", level });
+    return (await repo.getUser(user.id))!;
+  }
+
+  describe("start level on an incomplete catalog (ruling T16b)", () => {
+    it("starts at the highest existing level not above the placed one", async () => {
+      const repo = new Repo(env.DB);
+      const deckIds = await seedLevels(env.DB, { 1: ["бер"], 2: ["ике"], 9: ["тугыз"] });
+      const user = await placedAt(repo, 13, 7);
+      expect(await advanceOnboarding(repo, user, "180", T)).toEqual({ kind: "finished", remindAt: "09:00", tzOffsetMin: 180, level: 2 });
+      expect(await repo.userDeckIds(user.id)).toEqual([deckIds[2]]);
+      expect(await repo.getUser(user.id)).toMatchObject({ onboardingStep: null, level: 2 });
+    });
+
+    it("with only level 1 published everybody starts at level 1", async () => {
+      const repo = new Repo(env.DB);
+      const deckIds = await seedLevels(env.DB, { 1: ["бер"] });
+      for (const [tgId, placed] of [[21, 1], [22, 2], [23, 4], [24, 7], [25, 10]] as const) {
+        const user = await placedAt(repo, tgId, placed);
+        expect(await advanceOnboarding(repo, user, "180", T)).toMatchObject({ kind: "finished", level: 1 });
+        expect(await repo.userDeckIds(user.id)).toEqual([deckIds[1]]);
+        expect((await repo.getUser(user.id))!.level).toBe(1);
+      }
+    });
+
+    it("starts at the lowest existing level when there is none at or below the placed one", async () => {
+      const repo = new Repo(env.DB);
+      const deckIds = await seedLevels(env.DB, { 5: ["биш"], 8: ["сигез"] });
+      const user = await placedAt(repo, 14, 2);
+      expect(await advanceOnboarding(repo, user, "180", T)).toMatchObject({ kind: "finished", level: 5 });
+      expect(await repo.userDeckIds(user.id)).toEqual([deckIds[5]]);
+      expect((await repo.getUser(user.id))!.level).toBe(5);
+    });
+
+    it("keeps the placed level without a subscription when the catalog is empty", async () => {
+      const repo = new Repo(env.DB);
+      const user = await placedAt(repo, 15, 4);
+      expect(await advanceOnboarding(repo, user, "180", T)).toMatchObject({ kind: "finished", level: 4 });
+      expect(await repo.userDeckIds(user.id)).toEqual([]);
+      expect(await repo.getUser(user.id)).toMatchObject({ onboardingStep: null, level: 4 });
+    });
+
+    it("own decks and AI decks are not levels to start from", async () => {
+      const repo = new Repo(env.DB);
+      const other = await getOrCreate(repo, 16, 16, "ru", T);
+      await repo.customDeck(other.user.id, T);
+      expect(await repo.startLevel(4)).toBeNull();
+      const deckIds = await seedLevels(env.DB, { 3: ["өч"] });
+      expect(await repo.startLevel(4)).toEqual({ deckId: deckIds[3], levelNo: 3 });
+      expect(await repo.startLevel(3)).toEqual({ deckId: deckIds[3], levelNo: 3 });
+      expect(await repo.startLevel(1)).toEqual({ deckId: deckIds[3], levelNo: 3 });
+    });
+
+    it("the placement test already names the level that will be opened", async () => {
+      const repo = new Repo(env.DB);
+      await seedLevels(env.DB, { 1: ["бер"], 2: ["ике"] });
+      let { user } = await getOrCreate(repo, 17, 17, "ru", T);
+      const step = async (answer: string) => { const s = await advanceOnboarding(repo, user, answer, T); user = (await repo.getUser(user.id))!; return s; };
+      await step("ru");
+      let last = await step("1");
+      for (let i = 1; i < 10; i++) last = await step("1");
+      // Ten known words place at level 10; the catalog ends at level 2.
+      expect(last).toEqual({ kind: "goal", level: 2, known: 10 });
+      expect(user).toMatchObject({ level: 2, onboardingStep: "goal" });
+      expect(startOnboarding(user)).toEqual({ kind: "goal", level: 2, known: 10 });
+    });
   });
 
   it("first reminder is scheduled for the next occurrence, not right after onboarding", async () => {

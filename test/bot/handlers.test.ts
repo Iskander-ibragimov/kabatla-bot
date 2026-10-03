@@ -27,8 +27,9 @@ describe("bot handlers", () => {
     expect(h.lastText()).toContain("1/10");
     expect(h.lastText()).toContain(PLACEMENT[0]!.word);
     for (let i = 0; i < 10; i++) await h.press("ob:1");
-    expect(h.lastText()).toContain("уровня <b>10</b>");
-    expect((await new Repo(env.DB).getUserByTg(42))!.level).toBe(10);
+    // Ten known words place at level 10; the catalog of this test ends at level 4.
+    expect(h.lastText()).toContain("уровня <b>4</b>");
+    expect((await new Repo(env.DB).getUserByTg(42))!.level).toBe(4);
     await h.press("ob:10");
     expect(callbacks(h.lastMarkup())).toContain("ob:09:00");
     await h.press("ob:09:00");
@@ -90,6 +91,28 @@ describe("bot handlers", () => {
     expect(textsOf(update)[0]).toContain(tt.easyHint);
     expect(telegramCalls).toBeLessThanOrEqual(3);
     expect(d1Calls).toBeLessThanOrEqual(8);
+  });
+
+  it("with only level 1 published a learner who knows every placement word starts at level 1, within budget", async () => {
+    await seedLevels(env.DB, { 1: ["бер", "ике"] });
+    const db = countingDb(env.DB);
+    const h = harness(db, { now: T });
+    await h.text("/start");
+    await h.press("ob:ru");
+    for (let i = 0; i < 10; i++) await h.press("ob:1");
+    expect(h.lastText()).toBe(ru.goalQ(1));
+    await h.press("ob:10");
+    await h.press("ob:09:00");
+    const tgBefore = h.tg.calls.length;
+    db.calls = 0;
+    await h.press("ob:180");
+    expect(h.tg.calls.slice(tgBefore).map((c) => c.method)).toEqual(["editMessageText", "sendMessage", "answerCallbackQuery"]);
+    expect(db.calls).toBeLessThanOrEqual(8);
+    expect(h.lastText()).toContain("<b>бер</b>");
+    const repo = new Repo(env.DB);
+    const u = (await repo.getUserByTg(42))!;
+    expect(u).toMatchObject({ onboardingStep: null, level: 1 });
+    expect(await repo.userDeckIds(u.id)).toEqual([(await repo.getDeckBySlug("l01"))!.id]);
   });
 
   it("without a seeded start level onboarding still finishes and shows the empty screen", async () => {

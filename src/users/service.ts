@@ -130,7 +130,9 @@ export async function advanceOnboarding(repo: Repo, user: User, answer: string, 
       await repo.updateUser(user.id, { onboardingData: JSON.stringify(next) });
       return { kind: "placement", index: next.i, word: PLACEMENT[next.i]!.word };
     }
-    const level = placementLevel(next.known);
+    // The level named on the next screen is the one that will be opened, see the time-zone step.
+    const placed = placementLevel(next.known);
+    const level = (await repo.startLevel(placed))?.levelNo ?? placed;
     await repo.updateUser(user.id, { level, onboardingStep: "goal", onboardingData: JSON.stringify(next) });
     return { kind: "goal", level, known: next.known };
   }
@@ -153,14 +155,17 @@ export async function advanceOnboarding(repo: Repo, user: User, answer: string, 
       if (h < 24 && m < 60) offset = offsetFromReported(h, m, now);
     } else if (/^-?\d+$/.test(answer) && TZ_CHOICES.includes(Number(answer))) offset = Number(answer);
     if (offset == null) return invalid;
-    const deck = await repo.getDeckBySlug(levelSlug(user.level));
+    // The catalog may not hold the placed level yet (ruling T16b): the learner starts at the nearest level that exists,
+    // and `users.level` is the level actually opened. With an empty catalog the placed level stays, with nothing opened.
+    const start = await repo.startLevel(user.level);
+    const level = start?.levelNo ?? user.level;
     const stmts = [repo.updateUserStmt(user.id, {
-      tzOffsetMin: offset, onboardingStep: null, onboardingData: null,
+      level, tzOffsetMin: offset, onboardingStep: null, onboardingData: null,
       nextDailyAt: nextOccurrence(offset, user.remindAt, now), nextEveningAt: nextOccurrence(offset, EVENING_AT, now),
     })];
-    if (deck) stmts.unshift(repo.subscribeStmt(user.id, deck.id, now));
+    if (start) stmts.unshift(repo.subscribeStmt(user.id, start.deckId, now));
     await repo.batch(stmts);
-    return { kind: "finished", remindAt: user.remindAt, tzOffsetMin: offset, level: user.level };
+    return { kind: "finished", remindAt: user.remindAt, tzOffsetMin: offset, level };
   }
   return invalid;
 }

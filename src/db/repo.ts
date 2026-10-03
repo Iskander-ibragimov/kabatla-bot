@@ -186,6 +186,17 @@ export class Repo {
     ).bind(userId).all<Record<string, unknown>>();
     return results.map((r) => ({ levelNo: r.level_no as number, total: r.total as number, coveragePct: (r.coverage_pct as number) ?? null, open: r.open === 1, seen: r.seen as number }));
   }
+  /**
+   * The level a learner placed at `placed` starts from while the catalog is not complete: the highest existing level
+   * not above `placed`, or the lowest existing one when there is none; null when the catalog has no levels at all.
+   */
+  async startLevel(placed: number): Promise<{ deckId: number; levelNo: number } | null> {
+    const r = await this.db.prepare(
+      `SELECT id, level_no FROM decks WHERE level_no IS NOT NULL
+       ORDER BY (level_no <= ?1) DESC, CASE WHEN level_no <= ?1 THEN -level_no ELSE level_no END LIMIT 1`,
+    ).bind(placed).first<{ id: number; level_no: number }>();
+    return r ? { deckId: r.id, levelNo: r.level_no } : null;
+  }
   /** Opens every level below the user's current one; returns how many were opened. */
   async openSkippedLevels(userId: number, now: number): Promise<number> {
     const r = await this.db.prepare(
