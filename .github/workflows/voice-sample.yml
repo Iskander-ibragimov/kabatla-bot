@@ -1,0 +1,85 @@
+name: voice-sample
+# Sends 20 Tatar words in 4 candidate voices (2 API, 2 Piper) to the owner in Telegram.
+# Publishes a diagnostics file voice-sample.md (no secrets) as the only file of the orphan branch `reports`.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/trigger/voice-sample
+permissions:
+  contents: write
+concurrency: voice-sample
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: corepack enable pnpm && pnpm install --frozen-lockfile
+      - name: Install ffmpeg
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+      - name: Install Piper and gdown (optional, the API voices work without them)
+        id: piper
+        continue-on-error: true
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet piper-tts gdown
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+      - name: Download TatarTTS models (optional)
+        id: models
+        continue-on-error: true
+        run: |
+          mkdir -p out models
+          gdown --folder "https://drive.google.com/drive/folders/1YmtDVYLVogEfw3SE7GUl0LHZaIojAeap" -O models 2>&1 | tee out/gdown.log | tail -n 20
+          test "${PIPESTATUS[0]}" -eq 0
+      - name: Send the sample
+        id: sample
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_TG_ID: ${{ secrets.ADMIN_TG_ID }}
+        run: pnpm exec tsx scripts/voice.ts sample
+      - name: Publish diagnostics to the reports branch
+        if: always()
+        env:
+          PIPER_STEP: ${{ steps.piper.outcome }}
+          MODELS_STEP: ${{ steps.models.outcome }}
+          SAMPLE_STEP: ${{ steps.sample.outcome }}
+        run: |
+          mkdir -p out report
+          {
+            echo "# voice-sample diagnostics"
+            echo
+            echo "Run: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo "## Steps"
+            echo "- install piper+gdown: ${PIPER_STEP}"
+            echo "- download models: ${MODELS_STEP}"
+            echo "- send sample: ${SAMPLE_STEP}"
+            echo
+            echo "## Versions"
+            echo "- ffmpeg: $(ffmpeg -version 2>&1 | head -n 1)"
+            echo "- piper-tts: $(pip show piper-tts 2>/dev/null | grep -i '^Version' || echo 'not installed')"
+            echo "- piper binary: $(command -v piper || echo 'not on PATH')"
+            echo "- gdown: $(gdown --version 2>&1 | head -n 1 || echo 'not installed')"
+            echo
+            echo "## Model files (models/)"
+            echo '```'
+            (cd models 2>/dev/null && find . -type f -printf '%P  %s bytes\n' | sort) || echo "(no models directory)"
+            echo '```'
+            echo
+            echo "## gdown log (tail)"
+            echo '```'
+            tail -n 15 out/gdown.log 2>/dev/null || echo "(none)"
+            echo '```'
+            echo
+            cat out/voice-run.md 2>/dev/null || printf "## Sample run\n\n(voice.ts wrote no report)\n"
+          } > report/voice-sample.md
+          cd report
+          git init -q -b reports
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add voice-sample.md
+          git commit -q -m "reports: voice-sample $(date -u +%Y-%m-%d)"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" reports
