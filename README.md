@@ -11,5 +11,6 @@ Telegram-бот @Kabatlabot: учит русскоязычных татарск�
 - `pnpm test` — тесты
 - `pnpm validate` — проверка файлов уровней `data/levels/*.csv`
 - `pnpm typecheck` — проверка типов
+- `pnpm depcruise` — проверка границ слоёв
 
-Каждый push в `master` запускает выкладку (`.github/workflows/deploy.yml`); итог лежит в файле `deploy.md` ветки `deploy-report`.
+Каждый push в `master` запускает выкладку (`.github/workflows/deploy.yml`), кроме правок только документации (`docs/`, файлы `.md`); итог лежит в файле `deploy.md` ветки `deploy-report`.
