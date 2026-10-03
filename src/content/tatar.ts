@@ -1,14 +1,14 @@
 /**
  * Tatar Cyrillic alphabet helpers. Pure: no I/O, no imports.
- * Character classes are spelled as code points wherever a look-alike could hide in the source.
+ * The character classes are spelled as escapes, so that no look-alike can hide in the source.
  */
 
-/** ә ө ү җ ң һ and their capitals: the six letters Tatar adds to the Russian alphabet. */
-const TATAR_ONLY = "ӘәӨөҮүҖҗҢңҺһ";
+/** Ә ә Ө ө Ү ү Җ җ Ң ң Һ һ: the six letters Tatar adds to the Russian alphabet, in both cases. */
+const TATAR_ONLY = "\u04D8\u04D9\u04E8\u04E9\u04AE\u04AF\u0496\u0497\u04A2\u04A3\u04BA\u04BB";
 /** А–я (U+0410–U+044F), Ё, ё and the six Tatar letters: the whole Tatar Cyrillic alphabet. */
-const TATAR_LETTERS = `А-яЁё${TATAR_ONLY}`;
-/** Punctuation allowed next to Tatar words: . , ! ? : ; - – — « » " ' ( ) … */
-const PUNCTUATION = `.,!?:;\\-–—«»"'()…`;
+const TATAR_LETTERS = `\u0410-\u044F\u0401\u0451${TATAR_ONLY}`;
+/** Punctuation allowed next to Tatar words: . , ! ? : ; - – (U+2013) — (U+2014) « » " ' ( ) … (U+2026) */
+const PUNCTUATION = `.,!?:;\\-\u2013\u2014\u00AB\u00BB"'()\u2026`;
 
 const HAS_TATAR_LETTER = new RegExp(`[${TATAR_ONLY}]`);
 const TATAR_TEXT = new RegExp(`^[${TATAR_LETTERS}0-9 ${PUNCTUATION}]*$`);

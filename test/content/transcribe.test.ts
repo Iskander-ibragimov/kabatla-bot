@@ -4,10 +4,13 @@ import { transcribe } from "../../src/content/transcribe";
 import { EXCEPTIONS } from "../../src/content/transcribe-exceptions";
 import { SECTIONS, TABLE } from "./transcribe.table";
 
-/** Lower-case Tatar Cyrillic plus the three marks of the notation: w, ʼ (U+02BC) and the acute U+0301. */
-const TRANSCRIPTION = /^[а-яёәөүҗңһwʼ́]+$/;
-const CYRILLIC_WORD = /^[Ѐ-ӿ]+$/;
-const stressMarks = (s: string) => s.split("́").length - 1;
+/** Lower-case Tatar Cyrillic plus the three marks of the notation: Latin w, ʼ (U+02BC) and the acute U+0301. */
+const TRANSCRIPTION = /^[\u0430-\u044F\u0451\u04D9\u04E9\u04AF\u0497\u04A3\u04BBw\u02BC\u0301]+$/;
+const CYRILLIC_WORD = /^[\u0400-\u04FF]+$/;
+const ACUTE = "\u0301";
+const ALPHABET = [..."аәбвгдеёжҗзийклмнңоөпрстуүфхһцчшщъыьэюя"];
+const VOWEL_LETTERS = "аәеёиоөуүыэюя";
+const stressMarks = (s: string) => s.split(ACUTE).length - 1;
 
 describe("transcribe: reference table", () => {
   it.each(TABLE)("%s → %s", (word, expected) => expect(transcribe(word)).toBe(expected));
@@ -62,6 +65,34 @@ describe("transcribe: text", () => {
     for (const s of ["", "   ", "hello", "123", "🙂", "wifi роутер", "а".repeat(500)]) expect(() => transcribe(s)).not.toThrow();
     expect(transcribe("hello")).toBe("hello"); expect(transcribe("")).toBe("");
   });
+  it("never throws on broken or hostile strings", () => {
+    const hostile = ["\uD83D", "\uDC00а", "а\uD83D", "\u0000", "\u0301", "а\u0301", "ьъьъ", "къ", "гъ", "кь", "ъя", "ьеъю",
+      "\u04C0", "\u0487\u0488", "\u0130stanbul", "constructor", "__proto__", "toString", "к".repeat(100_000), "я".repeat(100_000)];
+    for (const s of hostile) expect(() => transcribe(s), JSON.stringify(s.slice(0, 12))).not.toThrow();
+    expect(transcribe("constructor")).toBe("constructor");
+    expect(transcribe("__proto__")).toBe("__proto__");
+    expect(transcribe("\uD83D")).toBe("\uD83D");
+  });
+  it("keeps the notation well formed for every string of one to three Tatar letters", () => {
+    const broken: string[] = [];
+    const check = (word: string): void => {
+      const t = transcribe(word);
+      const vowels = [...t].filter((c) => VOWEL_LETTERS.includes(c)).length;
+      const at = t.indexOf(ACUTE);
+      const wellFormed = (t === "" || TRANSCRIPTION.test(t))
+        && stressMarks(t) === (vowels > 1 ? 1 : 0)
+        && (at === -1 || VOWEL_LETTERS.includes(t[at - 1] ?? " "));
+      if (!wellFormed && broken.length < 10) broken.push(`${word} → ${t}`);
+    };
+    for (const a of ALPHABET) {
+      check(a);
+      for (const b of ALPHABET) {
+        check(a + b);
+        for (const c of ALPHABET) check(a + b + c);
+      }
+    }
+    expect(broken).toEqual([]);
+  });
   it("lower-cases Cyrillic words and leaves everything else untouched", () => {
     expect(transcribe("Вакыт")).toBe("wакъы́т");
     expect(transcribe("ТАУ")).toBe("таw");
@@ -94,6 +125,8 @@ describe("transcribe: rule details", () => {
   });
   it("rule 4: needs к/г before the vowel and ь after the next consonant", () => {
     expect(transcribe("сәгатьне")).toBe("сәгъәтне́");
+    expect(transcribe("мәшгульлек")).toBe("мәшгъүлле́к");   // у is read [ү] the same way
+    expect(transcribe("тугыз")).toBe("тугъы́з");           // no ь: у and ы stay back
     expect(transcribe("медаль")).toBe("меда́л");        // not after к/г: а stays
     expect(transcribe("бакыр")).toBe("бакъы́р");        // no ь: the vowel stays
   });

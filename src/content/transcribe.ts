@@ -21,10 +21,12 @@
 import { BACK_VOWELS, IOTATED_VOWELS, isBackWord, isConsonant, isSign, isVowel } from "./tatar";
 import { EXCEPTIONS } from "./transcribe-exceptions";
 
-const STRESS = "́";
+/** Stress mark, COMBINING ACUTE ACCENT, written right after the stressed vowel. */
+const STRESS = "\u0301";
 /** Glottal stop, MODIFIER LETTER APOSTROPHE. */
-const GLOTTAL_STOP = "ʼ";
-const CYRILLIC_WORD = /[Ѐ-ӿ]+/g;
+const GLOTTAL_STOP = "\u02BC";
+/** A run of letters of the Cyrillic block, U+0400–U+04FF. */
+const CYRILLIC_WORD = /[\u0400-\u04FF]+/g;
 
 /** я, ю, е as «й + vowel»: [in a back word, in a front word]. */
 const IOTATION: Readonly<Record<string, readonly [back: string, front: string]>> = {
