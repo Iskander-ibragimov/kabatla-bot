@@ -53,7 +53,7 @@ export type NoteInput = Pick<NoteFields, "word" | "transcription" | "pos" | "tra
 export interface NoteRow extends NoteFields { id: number; deckId: number }
 export interface CardRow extends NoteFields { id: number; noteId: number; direction: Direction; mem: Mem; buriedDay: string | null }
 export interface NewNote extends NoteFields { noteId: number; direction: Direction }
-export interface QueueCounts { learning: number; review: number; newAvailable: number; newDoneToday: number }
+export interface QueueCounts { learning: number; review: number; newAvailable: number; newDoneToday: number; easyNewToday: number }
 export interface Candidates { learning: CardRow[]; review: CardRow[]; newNotes: NewNote[]; counts: QueueCounts }
 export interface DayWindow { dayStartMs: number; dayEndMs: number; today: string; directions: Direction[]; limitEach?: number }
 export interface Session { userId: number; chatId: number; messageId: number | null; cardId: number | null; stale: boolean; lastVoiceMessageId: number | null }
@@ -79,6 +79,9 @@ function rowToUser(r: Record<string, unknown>): User {
 const NOTE_COLS = "n.word, n.transcription, n.pos, n.translation, n.example_tt, n.example_ru, n.example_src, n.audio_file_id, n.source_url";
 /** A note/direction is "new" unless its card was started, or any card of the note is buried today. Binds: userId, today. */
 const NEW_FILTER = `NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ? AND c.note_id = n.id AND ((c.direction = d.value AND c.state != 'new') OR c.buried_day = ?))`;
+/** Excludes a level word when the user owns a note with the same word_key; `n` and `dk` are the outer note and deck aliases. */
+const skipOwned = (user: string) =>
+  `NOT (dk.kind = 'catalog' AND EXISTS (SELECT 1 FROM notes o JOIN decks od ON od.id = o.deck_id WHERE od.owner_id = ${user} AND o.word_key = n.word_key))`;
 const CARD_COLS = `c.id, c.note_id, c.direction, c.state, c.step, c.stability, c.difficulty, c.due, c.last_review, c.scheduled_days, c.reps, c.lapses, c.buried_day, ${NOTE_COLS}`;
 
 function noteFields(r: Record<string, unknown>): NoteFields {
@@ -319,14 +322,17 @@ export class Repo {
       this.db.prepare(`SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
         WHERE c.user_id = ? AND c.state = 'review' AND c.due < ? AND ${inDirs} AND ${notBuried} AND ${inDecks} ORDER BY c.due LIMIT ?`)
         .bind(userId, w.dayEndMs, dirs, w.today, userId, lim),
-      // d.key is the position in w.directions, so a note's directions come in the order the caller asked for
-      this.db.prepare(`SELECT n.id AS note_id, d.value AS direction, ${NOTE_COLS} FROM notes n JOIN json_each(?) d
-        WHERE ${inDecks} AND ${NEW_FILTER} ORDER BY n.deck_id, n.id, d.key LIMIT ?`).bind(dirs, userId, userId, w.today, lim),
+      // Own and AI decks first, then levels by number; d.key is the position in w.directions, so a note's directions come in the order the caller asked for.
+      // A level word the user already owns (same word_key in a deck with owner_id = user) counts as shown and is skipped.
+      this.db.prepare(`SELECT n.id AS note_id, d.value AS direction, ${NOTE_COLS} FROM notes n JOIN decks dk ON dk.id = n.deck_id JOIN json_each(?) d
+        WHERE ${inDecks} AND ${NEW_FILTER} AND ${skipOwned("?")}
+        ORDER BY (dk.kind = 'catalog'), COALESCE(dk.level_no, 0), n.id, d.key LIMIT ?`).bind(dirs, userId, userId, w.today, userId, lim),
       this.db.prepare(`SELECT
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state IN ('learning','relearning') AND c.direction IN (SELECT value FROM json_each(?2)) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS learning,
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state = 'review' AND c.due < ?3 AND c.direction IN (SELECT value FROM json_each(?2)) AND (c.buried_day IS NULL OR c.buried_day != ?4) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS review,
-          (SELECT COUNT(*) FROM notes n JOIN json_each(?2) d WHERE n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1) AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ?1 AND c.note_id = n.id AND ((c.direction = d.value AND c.state != 'new') OR c.buried_day = ?4))) AS new_available,
-          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND was_new = 1 AND undone = 0 AND reviewed_at >= ?5) AS new_done_today`)
+          (SELECT COUNT(*) FROM notes n JOIN decks dk ON dk.id = n.deck_id JOIN json_each(?2) d WHERE n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1) AND ${skipOwned("?1")} AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ?1 AND c.note_id = n.id AND ((c.direction = d.value AND c.state != 'new') OR c.buried_day = ?4))) AS new_available,
+          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND was_new = 1 AND rating < 4 AND undone = 0 AND reviewed_at >= ?5) AS new_done_today,
+          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND was_new = 1 AND rating = 4 AND undone = 0 AND reviewed_at >= ?5) AS easy_new_today`)
         .bind(userId, dirs, w.dayEndMs, w.today, w.dayStartMs),
     ]);
     const c = counts!.results[0]!;
@@ -334,7 +340,7 @@ export class Repo {
       learning: learning!.results.map(rowToCard),
       review: review!.results.map(rowToCard),
       newNotes: fresh!.results.map((r) => ({ ...noteFields(r), noteId: r.note_id as number, direction: r.direction as Direction })),
-      counts: { learning: c.learning as number, review: c.review as number, newAvailable: c.new_available as number, newDoneToday: c.new_done_today as number },
+      counts: { learning: c.learning as number, review: c.review as number, newAvailable: c.new_available as number, newDoneToday: c.new_done_today as number, easyNewToday: c.easy_new_today as number },
     };
     void now;
   }

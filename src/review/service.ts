@@ -23,6 +23,13 @@ export type Screen =
   | { kind: "noundo" }
   | { kind: "nothing" };
 
+/** At most this many new words per day may be graded Easy on first sight; after that no new words are offered. */
+export const EASY_NEW_CAP = 200;
+
+/** New words still allowed today: Easy-on-first-sight grades are free of the daily limit but capped. */
+export const newLeftOf = (user: Pick<User, "newPerDay">, c: { newDoneToday: number; easyNewToday: number }): number =>
+  c.easyNewToday >= EASY_NEW_CAP ? 0 : Math.max(0, user.newPerDay - c.newDoneToday);
+
 /** D1 rows written per grade, index updates included (card, log, user, usage). */
 const ROWS_PER_REVIEW = 8;
 
@@ -53,7 +60,7 @@ export class ReviewService {
   async nextScreen(user: User, feedback: Feedback | null = null): Promise<Screen> {
     const w = dayWindow(user.tzOffsetMin, this.now);
     const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user) });
-    const newLeft = Math.max(0, user.newPerDay - c.counts.newDoneToday);
+    const newLeft = newLeftOf(user, c.counts);
     const p = pick(c, newLeft, this.now, user.mixCounter);
     const counts: Counts = { n: Math.min(newLeft, c.counts.newAvailable), l: c.counts.learning, r: c.counts.review };
     if (!p) {
@@ -124,7 +131,7 @@ export class ReviewService {
     for (const g of [1, 2, 3, 4] as Rating[]) intervals[g] = formatInterval(pv[g] - this.now, user.lang);
     const w = dayWindow(user.tzOffsetMin, this.now);
     const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user) });
-    const newLeft = Math.max(0, user.newPerDay - c.counts.newDoneToday);
+    const newLeft = newLeftOf(user, c.counts);
     return { kind: "card", view: toView(card), intervals, feedback: null, canUndo: false,
       counts: { n: Math.min(newLeft, c.counts.newAvailable), l: c.counts.learning, r: c.counts.review } };
   }

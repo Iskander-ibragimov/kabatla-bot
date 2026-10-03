@@ -7,7 +7,7 @@ const T = Date.UTC(2026, 8, 30, 6);
 const note = { word: "сүз", transcription: null, pos: "", translation: "слово", exampleTt: "", exampleRu: "", exampleSrc: "", audioFileId: null, sourceUrl: null };
 const card = (id: number, state: CardRow["mem"]["state"], due: number): CardRow => ({ ...note, id, noteId: id, direction: "tt_ru", buriedDay: null, mem: { ...newMem(T), state, due } });
 const fresh = (id: number): NewNote => ({ ...note, noteId: 100 + id, direction: "tt_ru" });
-const cands = (learning: CardRow[], review: CardRow[], newNotes: NewNote[]): Candidates => ({ learning, review, newNotes, counts: { learning: learning.length, review: review.length, newAvailable: newNotes.length, newDoneToday: 0 } });
+const cands = (learning: CardRow[], review: CardRow[], newNotes: NewNote[]): Candidates => ({ learning, review, newNotes, counts: { learning: learning.length, review: review.length, newAvailable: newNotes.length, newDoneToday: 0, easyNewToday: 0 } });
 
 describe("pick", () => {
   it("due learning card comes first", () => {

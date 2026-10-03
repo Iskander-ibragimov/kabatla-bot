@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { Repo } from "../../src/db/repo";
+import { type NoteInput, Repo, type User } from "../../src/db/repo";
 import { ReviewService, type Screen } from "../../src/review/service";
 import { newMem } from "../../src/srs/fsrs";
 import { countingDb } from "../helpers/countingDb";
@@ -71,10 +71,11 @@ describe("review service", () => {
     let now = local(3, 30);
     for (let i = 0; i < 2; i++) {
       const s = asCard(await new ReviewService(repo, now).nextScreen((await repo.getUser(user.id))!));
-      await new ReviewService(repo, now).grade((await repo.getUser(user.id))!, s.view.cardId, 0, 4);
+      await new ReviewService(repo, now).grade((await repo.getUser(user.id))!, s.view.cardId, 0, 3);
     }
+    // Good (not Easy) spends the limit; the two learning cards come back, no third new word
     now = local(3, 50);
-    expect((await new ReviewService(repo, now).nextScreen((await repo.getUser(user.id))!)).kind).toBe("done");
+    expect(asCard(await new ReviewService(repo, now).nextScreen((await repo.getUser(user.id))!)).counts.n).toBe(0);
     now = local(4, 10);
     const s = asCard(await new ReviewService(repo, now).nextScreen((await repo.getUser(user.id))!));
     expect(s.counts.n).toBe(2);
@@ -135,5 +136,33 @@ describe("review service", () => {
     const u = (await repo.getUser(user.id))!;
     expect(u.streak).toBe(3);
     expect(u.mixCounter).toBe(1);
+  });
+
+  describe("new-word queue", () => {
+    const gradeShown = async (repo: Repo, user: User, s: Screen, rating: 1 | 2 | 3 | 4): Promise<Screen> => {
+      const c = asCard(s);
+      return new ReviewService(repo, T).grade((await repo.getUser(user.id))!, c.view.cardId, c.view.reps, rating);
+    };
+    const insertEasyNewLogs = async (db: D1Database, userId: number, n: number, now: number) => {
+      await db.batch(Array.from({ length: n }, () => db.prepare(
+        `INSERT INTO review_log (card_id, user_id, rating, state_before, interval_before_days, interval_after_ms, reviewed_at, was_new)
+         VALUES (0, ?, 4, '{}', 0, 0, ?, 1)`).bind(userId, now)));
+    };
+
+    it("does not spend the daily limit on a new word graded Easy", async () => {
+      const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 12, patch: { newPerDay: 5 } });
+      let s = await new ReviewService(repo, T).nextScreen(user);
+      for (let i = 0; i < 3; i++) s = await gradeShown(repo, user, s, 4);
+      expect(s.kind === "card" && s.counts.n).toBe(5);
+      s = await gradeShown(repo, user, s, 3);
+      expect(s.kind === "card" && s.counts.n).toBe(4);
+    });
+
+    it("stops new words after 200 Easy-on-first-sight grades in a day", async () => {
+      const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 5 });
+      await insertEasyNewLogs(env.DB, user.id, 200, T);
+      const s = await new ReviewService(repo, T).nextScreen(user);
+      expect(s.kind).not.toBe("card");
+    });
   });
 });

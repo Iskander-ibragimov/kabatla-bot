@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { Repo } from "../../src/db/repo";
 import { countingDb } from "../helpers/countingDb";
 import { newMem } from "../../src/srs/fsrs";
-import { seedLevels } from "../helpers/seed";
+import { dayWindow } from "../../src/users/service";
+import { seedLevels, seedUser } from "../helpers/seed";
+import type { NoteInput } from "../../src/db/repo";
 
 const T = Date.UTC(2026, 8, 30, 6, 0, 0);
 const DAY = 86_400_000;
@@ -42,7 +44,7 @@ describe("repo", () => {
     expect(c.learning.map((x) => x.word)).toEqual(["китап"]);
     expect(c.review.map((x) => x.word)).toEqual(["Алма"]);
     expect(c.newNotes.map((x) => x.word)).toEqual(["зур"]);
-    expect(c.counts).toEqual({ learning: 1, review: 1, newAvailable: 1, newDoneToday: 0 });
+    expect(c.counts).toEqual({ learning: 1, review: 1, newAvailable: 1, newDoneToday: 0, easyNewToday: 0 });
     expect(c.learning[0]!.mem.state).toBe("learning");
     expect(c.learning[0]).toMatchObject({ transcription: "кита́п", exampleTt: "Бу китап яңа.", exampleSrc: "own", audioFileId: null });
     expect(c.newNotes[0]).toMatchObject({ transcription: null, exampleTt: "Өй зур.", exampleSrc: "" });
@@ -52,6 +54,28 @@ describe("repo", () => {
     const { userId } = await seed(repo);
     const c = await repo.candidateCards(userId, T, { dayStartMs: T - 3_600_000, dayEndMs: T + 20 * 3_600_000, today: "2026-09-30", directions: ["tt_ru", "ru_tt"] });
     expect(c.newNotes.slice(0, 4).map((x) => [x.word, x.direction])).toEqual([["китап", "tt_ru"], ["китап", "ru_tt"], ["Алма", "tt_ru"], ["Алма", "ru_tt"]]);
+  });
+
+  const note = (word: string): NoteInput => ({ word, transcription: null, pos: "n", translation: `${word}-ru`, exampleTt: `${word}.`, exampleRu: `${word}.`, exampleSrc: "own" });
+
+  it("gives own and AI words before level words, levels by number", async () => {
+    const now = Date.UTC(2026, 8, 30, 6, 0);
+    const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 2 }); // l01: китап, вакыт
+    const l2 = (await seedLevels(env.DB, { 2: ["авыл"] }))[2]!;
+    await repo.subscribe(user.id, l2, now);
+    const own = await repo.customDeck(user.id, now);
+    await repo.insertNotes(own, [note("рәхмәт")]); // added after all level words
+    const c = await repo.candidateCards(user.id, now, { ...dayWindow(180, now), directions: ["tt_ru"] });
+    expect(c.newNotes.map((n) => n.word)).toEqual(["рәхмәт", "китап", "вакыт", "авыл"]);
+  });
+
+  it("skips a level word the user already has among own words", async () => {
+    const now = Date.UTC(2026, 8, 30, 6, 0);
+    const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 2 });
+    await repo.insertNotes(await repo.customDeck(user.id, now), [note("Китап")]);
+    const c = await repo.candidateCards(user.id, now, { ...dayWindow(180, now), directions: ["tt_ru"] });
+    expect(c.newNotes.map((n) => n.word)).toEqual(["Китап", "вакыт"]);
+    expect(c.counts.newAvailable).toBe(2);
   });
 
   it("reads a deck with its level number, coverage and both titles", async () => {
