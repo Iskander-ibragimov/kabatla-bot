@@ -95,7 +95,8 @@ describe("content service: own words", () => {
   it("a link that was left on a catalog note is shown to nobody and is not copied", async () => {
     const STRAY = "https://stray.example/left-by-someone";
     const a = await seedUser(env.DB, { now: T, level: 1, words: 1, tgId: 1 }); // l01: китап
-    const b = await seedUser(env.DB, { now: T, level: 1, words: 1, tgId: 2 });
+    // One new word a day: once «китап» is graded the limit is spent, so level 5 (the next level the catalog has) stays closed for b.
+    const b = await seedUser(env.DB, { now: T, level: 1, words: 1, tgId: 2, patch: { newPerDay: 1 } });
     await seedLevels(env.DB, { 5: ["бәхет", "шатлык"] });
     await env.DB.prepare("UPDATE notes SET source_url = ? WHERE deck_id IN (SELECT id FROM decks WHERE owner_id IS NULL)").bind(STRAY).run();
     const svc = service(b.repo, failingLlm());

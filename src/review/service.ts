@@ -16,7 +16,7 @@ export interface DaySummary {
   totals: { learned: number; known: number; learning: number; new: number };
   nextLearningInMs: number | null; streak: number;
 }
-/** The level that has just been opened; `to` is null when level 20 is finished and nothing is left to open. */
+/** The level that has just been opened, not always `from + 1`: a catalog may have gaps. `to` is null when level 20 is finished and nothing is left to open. */
 export interface LevelUp { from: number; to: number | null; coveragePct: number | null }
 export type Screen =
   | { kind: "card"; view: CardView; counts: Counts; intervals: Record<Rating, string>; feedback: Feedback | null; canUndo: boolean; levelUp: LevelUp | null }
@@ -67,13 +67,15 @@ export class ReviewService {
     const opts = { ...w, directions: directionsOf(user) };
     let c: Candidates = await this.repo.candidateCards(user.id, this.now, opts);
     let levelUp: LevelUp | null = null;
-    // The open levels have no unseen words and today's limit is not spent: open the next level in the same D1 call
-    // that re-reads the queue. Only the call whose UPDATE moved users.level announces it (double taps, stale `user`).
+    // The open levels have no unseen words and today's limit is not spent: open the next level the catalog has in the
+    // same D1 call that re-reads the queue. Only the call whose UPDATE moved users.level gets the new level back and
+    // announces it (double taps, stale `user`). While no higher level is published nothing moves and nothing is said.
     if (c.counts.newAvailable === 0 && newLeftOf(user, c.counts) > 0 && user.level <= LAST_LEVEL) {
       const from = user.level;
-      const reread = await this.repo.candidateCards(user.id, this.now, opts, this.repo.openLevelStmts(user.id, from, from + 1, this.now));
+      const reread = await this.repo.candidateCards(user.id, this.now, opts, this.repo.openLevelStmts(user.id, from, LAST_LEVEL, this.now));
       const [, moved, coverage] = reread.pre;
-      if (moved!.meta.changes) levelUp = { from, to: from < LAST_LEVEL ? from + 1 : null, coveragePct: (coverage!.results[0]?.coverage_pct as number | null | undefined) ?? null };
+      const opened = moved!.results[0]?.level as number | undefined;
+      if (opened != null) levelUp = { from, to: opened <= LAST_LEVEL ? opened : null, coveragePct: (coverage!.results[0]?.coverage_pct as number | null | undefined) ?? null };
       c = reread;
     }
     const newLeft = newLeftOf(user, c.counts);

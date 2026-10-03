@@ -220,15 +220,18 @@ export class Repo {
     return r.meta.changes ?? 0;
   }
   /**
-   * Moves a user from level `from` to `to` (`to` = 21: every level is done). Three statements for one batch:
-   * the subscription to the deck of `to`, the level change, and the coverage of `from` for the announcement.
-   * The level change touches a row only if the user is still on `from` and the deck of `to` exists,
-   * so its `meta.changes` tells whether this call opened the level.
+   * Opens the level that follows `from`: the next level the catalog has (the smallest `level_no` above `from`, up to
+   * `last`), so a gap in the catalog is stepped over. Three statements for one batch: the subscription to that deck,
+   * the level change, which returns the new level, and the coverage of `from` for the announcement.
+   * The level change touches a row only if the user is still on `from`, so only one of several concurrent calls gets
+   * the new level back. While no higher level exists nothing changes, except on the last level: from there the user
+   * moves to `last + 1`, which means every level is done.
    */
-  openLevelStmts(userId: number, from: number, to: number, now: number): D1PreparedStatement[] {
+  openLevelStmts(userId: number, from: number, last: number, now: number): D1PreparedStatement[] {
+    const next = "(SELECT MIN(level_no) FROM decks WHERE level_no > ?1 AND level_no <= ?2)";
     return [
-      this.db.prepare("INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) SELECT ?, id, ? FROM decks WHERE level_no = ?").bind(userId, now, to),
-      this.db.prepare("UPDATE users SET level = ?1 WHERE id = ?2 AND level = ?3 AND (?1 = 21 OR EXISTS (SELECT 1 FROM decks WHERE level_no = ?1))").bind(to, userId, from),
+      this.db.prepare(`INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) SELECT ?3, id, ?4 FROM decks WHERE level_no = ${next}`).bind(from, last, userId, now),
+      this.db.prepare(`UPDATE users SET level = COALESCE(${next}, ?2 + 1) WHERE id = ?3 AND level = ?1 AND (?1 = ?2 OR ${next} IS NOT NULL) RETURNING level`).bind(from, last, userId),
       this.db.prepare("SELECT coverage_pct FROM decks WHERE level_no = ?").bind(from),
     ];
   }
