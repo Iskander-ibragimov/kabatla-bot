@@ -1,15 +1,15 @@
 # Кабатла
 
-Telegram-бот для изучения татарских слов по интервальным повторениям (FSRS).
-Код начат с копии бота английских слов `bot-anki@deab0ff`; татарская версия делается поэтапно.
+Telegram-бот @Kabatlabot: учит русскоязычных татарским словам по интервальным повторениям (FSRS). Слова идут уровнями по 100, у каждой карточки есть транскрипция, пример и озвучка.
 
-Стек: Cloudflare Workers, D1, grammy, ts-fsrs.
+Стек: Cloudflare Workers, база D1, grammy, ts-fsrs. Код начат с копии бота английских слов `bot-anki@deab0ff`.
+
+- Памятка владельца (секреты, правка слов, озвучка, резервная копия): [docs/OPERATIONS.md](docs/OPERATIONS.md)
+- Спецификация: [docs/superpowers/specs/2026-10-03-tatar-srs-bot-design.md](docs/superpowers/specs/2026-10-03-tatar-srs-bot-design.md)
 
 Команды:
 - `pnpm test` — тесты
+- `pnpm validate` — проверка файлов уровней `data/levels/*.csv`
 - `pnpm typecheck` — проверка типов
-- `pnpm depcruise` — проверка границ слоёв
 
-Спецификация: `docs/` (дизайн и план MVP).
-
-Выкладка: `.github/workflows/deploy.yml` (push в `master`, вручную или правкой `.github/trigger/deploy`). Итог каждого запуска — файл `deploy.md` в ветке `deploy-report`.
+Каждый push в `master` запускает выкладку (`.github/workflows/deploy.yml`); итог лежит в файле `deploy.md` ветки `deploy-report`.
