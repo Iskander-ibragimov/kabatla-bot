@@ -1,11 +1,14 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { LlmClient } from "../../src/content/llm";
+import { ContentService } from "../../src/content/service";
 import { Repo } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
 import { PLACEMENT } from "../../src/users/placement";
 import { countingDb } from "../helpers/countingDb";
 import { easyButton, harness } from "../helpers/botHarness";
+import { echoLlm } from "../helpers/llm";
 import { note, seedLevels, seedUser } from "../helpers/seed";
 import { TELEGRAM_TEXT_LIMIT, visibleLength } from "../helpers/visible";
 
@@ -474,6 +477,93 @@ describe("bot handlers", () => {
       await h.text("большой");
       expect(h.lastText()).toContain("<b>большой</b>");
       expect(h.lastText()).not.toContain(ru.aiNote);
+    });
+  });
+
+  describe("a preview that is being edited", () => {
+    const HOUR = 3_600_000;
+    /** The learner typed «матур», got the preview and pressed ✏️: the bot waits for a translation. */
+    async function editing() {
+      const h = harness(env.DB, { now: T, fetch: echoLlm() });
+      await h.text("/start");
+      const repo = new Repo(env.DB);
+      const u = (await repo.getUserByTg(42))!;
+      await repo.updateUser(u.id, { onboardingStep: null });
+      await h.text("матур");
+      const preview = h.tg.lastMessageId();
+      const [add, edit, cancel] = callbacks(h.lastMarkup()) as [string, string, string];
+      await h.press(edit, preview);
+      expect(h.lastText()).toBe(ru.editAsk("матур"));
+      expect((await repo.getUser(u.id))!.pendingEdit).not.toBeNull();
+      return { h, repo, u, preview, add, cancel };
+    }
+    /** The next typed word is answered with its own preview: the add flow works. */
+    async function expectNewWordIsPreviewed(h: ReturnType<typeof harness>, word = "зур") {
+      await h.text(word);
+      expect(h.lastText()).toContain(`<b>${word}</b>`);
+      expect(h.lastText()).not.toBe(ru.previewExpired);
+      expect(callbacks(h.lastMarkup())[0]).toMatch(/^add:ok:\d+$/);
+    }
+
+    it("✏️, then ✅: the word is added and the next typed word starts a new preview", async () => {
+      const { h, repo, u, preview, add } = await editing();
+      await h.press(add, preview);
+      expect(h.lastText()).toBe(ru.added("<b>матур</b>"));
+      expect((await repo.getUser(u.id))!.pendingEdit).toBeNull();
+      await expectNewWordIsPreviewed(h);
+      await expectNewWordIsPreviewed(h, "кечкенә");
+      expect(await env.DB.prepare("SELECT word, translation FROM notes ORDER BY id").all().then((r) => r.results)).toEqual([{ word: "матур", translation: "перевод" }]);
+    });
+
+    it("✏️, then ✖️: nothing is added and the next typed word starts a new preview", async () => {
+      const { h, repo, u, preview, cancel } = await editing();
+      await h.press(cancel, preview);
+      expect(h.lastText()).toBe(ru.notAdded);
+      expect((await repo.getUser(u.id))!.pendingEdit).toBeNull();
+      await expectNewWordIsPreviewed(h);
+      expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM notes").first()).toEqual({ n: 0 });
+    });
+
+    it("✏️, then the preview expires: the next typed word starts a new preview", async () => {
+      const { h, repo, u } = await editing();
+      h.setNow(T + 25 * HOUR);
+      await expectNewWordIsPreviewed(h);
+      expect((await repo.getUser(u.id))!.pendingEdit).toBeNull();
+      // The old preview was not touched by the text.
+      expect(await env.DB.prepare("SELECT payload FROM previews ORDER BY id LIMIT 1").first<{ payload: string }>().then((r) => r!.payload)).toContain("перевод");
+    });
+
+    it("✏️, then the preview is gone: a message longer than a translation may be is still taken as words", async () => {
+      const { h, repo, u } = await editing();
+      await env.DB.prepare("DELETE FROM previews").run();
+      const words = Array.from({ length: 20 }, (_, i) => `озынсүз${"а".repeat(i + 1)}`);
+      expect(words.join("\n").length).toBeGreaterThan(200);
+      await h.text(words.join("\n"));
+      expect(h.lastText()).toContain(ru.foundN(20));
+      expect((await repo.getUser(u.id))!.pendingEdit).toBeNull();
+    });
+
+    it("a state left by an earlier version of the bot (a preview that was added long ago) no longer blocks adding", async () => {
+      const h = harness(env.DB, { now: T, fetch: echoLlm() });
+      await h.text("/start");
+      const repo = new Repo(env.DB);
+      const u = (await repo.getUserByTg(42))!;
+      await repo.updateUser(u.id, { onboardingStep: null, pendingEdit: JSON.stringify({ preview: { previewId: 12345 } }) });
+      await expectNewWordIsPreviewed(h);
+      expect((await repo.getUser(u.id))!.pendingEdit).toBeNull();
+    });
+
+    it("✅ on another preview leaves the edit alone: the typed text is still the translation of the edited one", async () => {
+      const { h, repo, u } = await editing();
+      const other = await new ContentService(repo, { llm: new LlmClient([{ baseUrl: "https://llm/v1", apiKey: "k", model: "m" }], echoLlm()) }, T).prepareAdd((await repo.getUser(u.id))!, "зур", []);
+      if (other.kind !== "preview") throw new Error(other.kind);
+      await h.press(`add:ok:${other.previewId}`, 900);
+      expect(h.lastText()).toBe(ru.added("<b>зур</b>"));
+      expect((await repo.getUser(u.id))!.pendingEdit).not.toBeNull();
+      await h.text("красивый");
+      expect(h.lastText()).toContain("<b>матур</b>");
+      expect(h.lastText()).toContain("<b>красивый</b>");
+      expect((await repo.getUser(u.id))!.pendingEdit).toBeNull();
     });
   });
 

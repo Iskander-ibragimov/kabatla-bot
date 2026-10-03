@@ -265,18 +265,18 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     }
     const svc = content();
     const pending = svc.pendingKind(ctx.user);
-    // The text is a translation typed by hand. One that is too long is not stored; the bot keeps waiting for a shorter one.
-    if (pending && typedTranslation(text) === null) { await ctx.reply(t.tooLong(MAX_TYPED.translation)); return; }
     if (pending === "manual") {
+      // The text is a translation typed by hand. One that is too long is not stored; the bot keeps waiting for a shorter one.
+      if (typedTranslation(text) === null) { await ctx.reply(t.tooLong(MAX_TYPED.translation)); return; }
       const word = await svc.completeManual(ctx.user, text);
       if (word) { await send(ctx, { text: t.added(`<b>${esc(word)}</b>`), keyboard: learnKeyboard(ctx.user.lang) }); return; }
     }
     if (pending === "preview") {
-      try {
-        const r = await svc.editPreviewTranslation(ctx.user, text);
-        await send(ctx, renderAddPreview(r.items, r.previewId, ctx.user.lang));
-      } catch { await ctx.reply(t.previewExpired); }
-      return;
+      const r = await svc.editPreviewTranslation(ctx.user, text);
+      if (r.kind === "too-long") { await ctx.reply(t.tooLong(MAX_TYPED.translation)); return; }
+      if (r.kind === "edited") { await send(ctx, renderAddPreview(r.items, r.previewId, ctx.user.lang)); return; }
+      // The preview that was being edited is gone and the state is dropped: the text is a message with words like any other.
+      ctx.user = { ...ctx.user, pendingEdit: null };
     }
     const m = await ctx.reply(t.searching);
     const user = ctx.user;

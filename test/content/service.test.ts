@@ -36,6 +36,12 @@ async function catalogLinks() {
   return results;
 }
 const jobsCount = async () => (await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs").first<{ n: number }>())!.n;
+/** The preview after a translation was typed for it; throws when the text was not applied. */
+const edit = async (svc: ContentService, user: User, text: string) => {
+  const r = await svc.editPreviewTranslation(user, text);
+  if (r.kind !== "edited") throw new Error(`expected edited, got ${r.kind}`);
+  return r;
+};
 const preview = async (svc: ContentService, user: User, text: string) => {
   const r = await svc.prepareAdd(user, text, []);
   if (r.kind !== "preview") throw new Error(`expected preview, got ${r.kind}`);
@@ -439,12 +445,50 @@ describe("content service: own words", () => {
     const r = await preview(svc, user, "матур");
     expect(r.items[0]!.ai).toBe(true);
     await svc.startEdit(user, r.previewId);
-    const edited = await svc.editPreviewTranslation(await fresh(repo, user), "красивый, прекрасный");
+    const edited = await edit(svc, await fresh(repo, user), "красивый, прекрасный");
     expect(edited.previewId).toBe(r.previewId);
     expect(edited.items[0]).toMatchObject({ word: "матур", translation: "красивый, прекрасный", ai: false, exampleSrc: "ai" });
     expect(renderAddPreview(edited.items, edited.previewId, "ru").text).not.toContain(ru.aiNote);
     await svc.confirmAdd(user, r.previewId);
     expect((await ownNotes(user.id)).map((n) => [n.word, n.translation])).toEqual([["матур", "красивый, прекрасный"]]);
+  });
+
+  it("adding or cancelling the preview that is being edited ends the edit; another preview does not", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const svc = service(repo, llmReturning([card("матур", "красивый"), card("зур", "большой"), card("яшел", "зелёный")]));
+    const [a, b, c] = [await preview(svc, user, "матур"), await preview(svc, user, "зур"), await preview(svc, user, "яшел")];
+
+    await svc.startEdit(user, a.previewId);
+    await svc.confirmAdd(await fresh(repo, user), b.previewId);
+    expect(svc.pendingKind(await fresh(repo, user))).toBe("preview");
+    await svc.confirmAdd(await fresh(repo, user), a.previewId);
+    expect((await fresh(repo, user)).pendingEdit).toBeNull();
+
+    await svc.startEdit(user, c.previewId);
+    expect(svc.pendingKind(await fresh(repo, user))).toBe("preview");
+    await svc.cancel(await fresh(repo, user), c.previewId);
+    expect((await fresh(repo, user)).pendingEdit).toBeNull();
+    expect((await ownNotes(user.id)).map((n) => n.word)).toEqual(["зур", "матур"]);
+  });
+
+  it("a typed text for a preview that is gone or expired changes nothing and ends the edit", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const svc = service(repo, llmReturning([card("матур", "красивый")]));
+    const r = await preview(svc, user, "матур");
+    await svc.startEdit(user, r.previewId);
+    const editing = await fresh(repo, user);
+    const later = service(repo, failingLlm(), T + 24 * 3_600_000 + 1);
+    expect(await later.editPreviewTranslation(editing, "красивый")).toEqual({ kind: "gone" });
+    expect((await fresh(repo, user)).pendingEdit).toBeNull();
+    expect((await repo.getPreview<{ translation: string }[]>(user.id, r.previewId, "add", 0))![0]!.translation).toBe("красивый");
+    // Without a preview in edit there is nothing to apply the text to.
+    expect(await svc.editPreviewTranslation(await fresh(repo, user), "красивый")).toEqual({ kind: "gone" });
+
+    await svc.startEdit(user, r.previewId);
+    await env.DB.prepare("DELETE FROM previews").run();
+    // The length of the text does not matter once the preview is gone.
+    expect(await svc.editPreviewTranslation(await fresh(repo, user), "я".repeat(500))).toEqual({ kind: "gone" });
+    expect((await fresh(repo, user)).pendingEdit).toBeNull();
   });
 
   it("answers a line longer than 80 characters with too-long and touches nothing", async () => {
@@ -486,10 +530,10 @@ describe("content service: own words", () => {
     const r = await preview(ai, await fresh(repo, user), "зур");
     await ai.startEdit(user, r.previewId);
     const editing = await fresh(repo, user);
-    await expect(ai.editPreviewTranslation(editing, "я".repeat(201))).rejects.toThrow(/too long/);
+    expect(await ai.editPreviewTranslation(editing, "я".repeat(201))).toEqual({ kind: "too-long" });
     expect((await fresh(repo, user)).pendingEdit).toBe(editing.pendingEdit);
     expect((await repo.getPreview<{ translation: string; ai: boolean }[]>(user.id, r.previewId, "add", 0))![0]).toMatchObject({ translation: "большой", ai: true });
-    const edited = await ai.editPreviewTranslation(editing, " большой,\r\nкрупный ");
+    const edited = await edit(ai, editing, " большой,\r\nкрупный ");
     expect(edited.items[0]).toMatchObject({ translation: "большой, крупный", ai: false });
   });
 

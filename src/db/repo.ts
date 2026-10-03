@@ -585,9 +585,16 @@ export class Repo {
   async updatePreview(id: number, payload: unknown): Promise<void> {
     await this.db.prepare("UPDATE previews SET payload = ? WHERE id = ?").bind(JSON.stringify(payload), id).run();
   }
+  /**
+   * Deletes a preview and, in the same D1 call, forgets that the user was editing it: a `pending_edit` that points to
+   * a preview that is gone would take the user's next message for a translation of nothing.
+   */
   async deletePreview(userId: number, id: number): Promise<boolean> {
-    const r = await this.db.prepare("DELETE FROM previews WHERE id = ? AND user_id = ?").bind(id, userId).run();
-    return (r.meta.changes ?? 0) > 0;
+    const [deleted] = await this.db.batch([
+      this.db.prepare("DELETE FROM previews WHERE id = ? AND user_id = ?").bind(id, userId),
+      this.db.prepare("UPDATE users SET pending_edit = NULL WHERE id = ?1 AND json_extract(pending_edit, '$.preview.previewId') = ?2").bind(userId, id),
+    ]);
+    return (deleted!.meta.changes ?? 0) > 0;
   }
   /** The user's own "My words" deck, created and subscribed on first use. */
   async customDeck(userId: number, now: number): Promise<number> {

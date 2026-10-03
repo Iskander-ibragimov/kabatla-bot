@@ -18,6 +18,7 @@ export type AddResult =
   | { kind: "duplicates-only"; duplicates: Duplicate[] }
   | { kind: "preview"; previewId: number; items: CardDraft[]; duplicates: Duplicate[]; manual: string[] }
   | { kind: "manual"; word: string; others: string[]; duplicates: Duplicate[] };
+export type EditResult = { kind: "edited"; previewId: number; items: CardDraft[] } | { kind: "too-long" } | { kind: "gone" };
 export type GenResult = { kind: "limit" } | { kind: "failed" } | { kind: "preview"; previewId: number; topic: string; items: CardDraft[] };
 
 interface Deps { llm: LlmClient }
@@ -194,20 +195,28 @@ export class ContentService {
     return items;
   }
 
-  /** Applies a typed translation to the preview being edited; returns the updated items and preview id. Throws on a translation that `typedTranslation` refuses. */
-  async editPreviewTranslation(user: User, text: string): Promise<{ previewId: number; items: CardDraft[] }> {
+  /**
+   * Applies a typed translation to the preview being edited.
+   * `gone`: the preview no longer exists (added, cancelled, expired); the state that pointed to it is dropped, and the
+   * caller treats the text as an ordinary message. `too-long`: `typedTranslation` refuses the text; the bot keeps waiting.
+   */
+  async editPreviewTranslation(user: User, text: string): Promise<EditResult> {
     const pending = user.pendingEdit ? (JSON.parse(user.pendingEdit) as { preview?: PendingPreviewEdit }) : null;
-    if (!pending?.preview) throw new Error("no preview in edit");
-    const translation = storedTranslation(text);
+    if (!pending?.preview) return { kind: "gone" };
     const id = pending.preview.previewId;
     const items = await this.repo.getPreview<CardDraft[]>(user.id, id, "add", this.now - PREVIEW_TTL_MS);
-    if (!items?.length) throw new Error("preview expired");
+    if (!items?.length) {
+      await this.repo.updateUser(user.id, { pendingEdit: null });
+      return { kind: "gone" };
+    }
+    const translation = typedTranslation(text);
+    if (translation === null) return { kind: "too-long" };
     const edited = items[0]!;
     edited.translation = translation;
     edited.ai = false; // the translation is the user's now, there is nothing of the model's left to check
     await this.repo.updatePreview(id, items);
     await this.repo.updateUser(user.id, { pendingEdit: null });
-    return { previewId: id, items };
+    return { kind: "edited", previewId: id, items };
   }
 
   pendingKind(user: User): "manual" | "preview" | null {
@@ -216,6 +225,7 @@ export class ContentService {
     return p.manual ? "manual" : p.preview ? "preview" : null;
   }
 
+  /** Saves the words of a preview and deletes it; if the user was editing it, the bot stops waiting for its translation. */
   async confirmAdd(user: User, previewId: number): Promise<{ words: string[] }> {
     const items = await this.repo.getPreview<CardDraft[]>(user.id, previewId, "add", this.now - PREVIEW_TTL_MS);
     if (!items) throw new Error("preview not found");
@@ -225,6 +235,7 @@ export class ContentService {
     return { words: items.map((i) => i.word) };
   }
 
+  /** Drops a preview; if the user was editing it, the bot stops waiting for its translation (see `Repo.deletePreview`). */
   async cancel(user: User, previewId: number): Promise<void> { await this.repo.deletePreview(user.id, previewId); }
 
   async generateDeck(user: User, topic: string, n: number): Promise<GenResult> {

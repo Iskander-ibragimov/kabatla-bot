@@ -29,6 +29,11 @@ export const card = (input: string, translation = "перевод", word = input
 
 /** A model that answers every request with these cards. */
 export const llmReturning = (cards: unknown[]): FakeFetch => fakeFetch(() => chat(JSON.stringify({ cards })));
+/** A model that answers every line it is asked about with a card for that line as typed. */
+export const echoLlm = (): FakeFetch => fakeFetch((_url, init) => {
+  const prompt = (JSON.parse(String(init?.body)) as { messages: { role: string; content: string }[] }).messages.find((m) => m.role === "user")!.content;
+  return chat(JSON.stringify({ cards: prompt.split("\n").slice(1).map((line) => card(line)) }));
+});
 /** A model that is down: every request ends with HTTP 500. */
 export const failingLlm = (): FakeFetch => fakeFetch(() => json({}, 500));
 export const client = (f: typeof fetch, ...urls: string[]) => new LlmClient((urls.length ? urls : ["https://llm/v1"]).map(provider), f);
