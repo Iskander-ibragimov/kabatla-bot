@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { Repo } from "../../src/db/repo";
+import { Repo, wordKey } from "../../src/db/repo";
 import { countingDb } from "../helpers/countingDb";
 import { newMem } from "../../src/srs/fsrs";
 import { dayWindow } from "../../src/users/service";
@@ -137,5 +137,75 @@ describe("schema", () => {
     await report(1, 2);
     await expect(report(1, 1)).rejects.toThrow();
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM reports").first<{ n: number }>())!.n).toBe(3);
+  });
+});
+
+describe("wordKey", () => {
+  it("ignores case, extra spaces and the punctuation at the edges of a word or phrase", () => {
+    expect(wordKey("Рәхмәт!")).toBe("рәхмәт");
+    expect(wordKey(" Хәлләр  ничек? ")).toBe("хәлләр ничек");
+    expect(wordKey("Минем исемем …")).toBe("минем исемем");
+    expect(wordKey("Мин белмим.")).toBe("мин белмим");
+    expect(wordKey("«Сүз»")).toBe("сүз");
+    expect(wordKey("(\"сүз\")")).toBe("сүз");
+    expect(wordKey("'сүз'")).toBe("сүз");
+    expect(wordKey("— сүз: ")).toBe("сүз");
+    expect(wordKey("сүз – ")).toBe("сүз");
+    expect(wordKey("сүз;,-")).toBe("сүз");
+    expect(wordKey("?! ...")).toBe("");
+  });
+  it("keeps the punctuation inside", () => {
+    expect(wordKey("Юк, рәхмәт!")).toBe("юк, рәхмәт");
+    expect(wordKey("кул'язма, кулъязма")).toBe("кул'язма, кулъязма");
+    expect(wordKey("ак-кара")).toBe("ак-кара");
+    expect(wordKey("Әйе… юк.")).toBe("әйе… юк");
+  });
+});
+
+describe("migration 0002: word keys without the punctuation at the edges", () => {
+  const migration = () => env.TEST_MIGRATIONS.find((m) => m.name === "0002_word_key_punctuation.sql")!;
+  /** The key as it was built before the migration: trimmed, lower case, single spaces. */
+  const oldKey = (w: string) => w.trim().toLowerCase().replace(/\s+/g, " ");
+  const insert = (deckId: number, word: string) =>
+    env.DB.prepare("INSERT INTO notes (deck_id, word, word_key, translation) VALUES (?, ?, ?, 'перевод')").bind(deckId, word, oldKey(word)).run();
+  const keys = async (deckId: number) =>
+    (await env.DB.prepare("SELECT word, word_key FROM notes WHERE deck_id = ? ORDER BY id").bind(deckId).all<{ word: string; word_key: string }>()).results;
+  const run = async () => { for (const q of migration().queries) await env.DB.prepare(q).run(); };
+
+  it("rewrites the stored keys the way wordKey builds them now", async () => {
+    const repo = new Repo(env.DB);
+    const l1 = (await seedLevels(env.DB, { 1: [] }))[1]!;
+    const words = ["Рәхмәт!", "Хәлләр ничек?", "Мин белмим.", "Минем исемем …", "Юк, рәхмәт!", "китап", "«Сүз»", "(\"авыл\")", "'су'", "— юл:", "ак-кара;", "көн –"];
+    for (const w of words) await insert(l1, w);
+    expect((await keys(l1)).map((r) => r.word_key)).toContain("рәхмәт!");
+    await run();
+    expect(await keys(l1)).toEqual(words.map((word) => ({ word, word_key: wordKey(word) })));
+    expect((await keys(l1)).map((r) => r.word_key)).toEqual(
+      ["рәхмәт", "хәлләр ничек", "мин белмим", "минем исемем", "юк, рәхмәт", "китап", "сүз", "авыл", "су", "юл", "ак-кара", "көн"]);
+    // The lookup that missed the phrase before now finds it.
+    expect((await repo.findCatalogNotes(["рәхмәт"])).get("рәхмәт")).toMatchObject({ word: "Рәхмәт!", levelNo: 1 });
+    // A second run changes nothing.
+    await run();
+    expect((await keys(l1)).map((r) => r.word_key)).toContain("минем исемем");
+    expect(await keys(l1)).toHaveLength(words.length);
+  });
+
+  it("leaves a row alone when its new key is taken in the same deck, and does not fail", async () => {
+    const ids = await seedLevels(env.DB, { 1: [], 2: [] });
+    for (const w of ["сау бул", "Сау бул!", "Сау бул…", "Әйе!"]) await insert(ids[1]!, w);
+    await insert(ids[2]!, "Әйе.");
+    await run();
+    expect(await keys(ids[1]!)).toEqual([
+      { word: "сау бул", word_key: "сау бул" }, { word: "Сау бул!", word_key: "сау бул!" }, { word: "Сау бул…", word_key: "сау бул…" }, { word: "Әйе!", word_key: "әйе" },
+    ]);
+    // The same word in another deck is not a collision.
+    expect(await keys(ids[2]!)).toEqual([{ word: "Әйе.", word_key: "әйе" }]);
+  });
+
+  it("keeps a key that is nothing but punctuation", async () => {
+    const l1 = (await seedLevels(env.DB, { 1: [] }))[1]!;
+    await insert(l1, "?!");
+    await run();
+    expect(await keys(l1)).toEqual([{ word: "?!", word_key: "?!" }]);
   });
 });

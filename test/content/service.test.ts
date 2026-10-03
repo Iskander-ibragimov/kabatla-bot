@@ -93,6 +93,27 @@ describe("content service: own words", () => {
     expect(llm.urls).toEqual([]);
   });
 
+  it("finds a catalog phrase that is stored with punctuation when it is typed without", async () => {
+    // Level 1 (open) and level 5 (not open yet) keep their phrases the way they are shown: «Рәхмәт!», «Хәлләр ничек?».
+    const { repo, user } = await seedUser(env.DB, { now: T, level: 1 });
+    await seedLevels(env.DB, { 1: ["Рәхмәт!"], 5: ["Хәлләр ничек?"] });
+    const llm = failingLlm();
+    const svc = service(repo, llm);
+    expect(await svc.prepareAdd(user, "рәхмәт", [])).toEqual({ kind: "duplicates-only", duplicates: [{ word: "рәхмәт", deckTitle: "Уровень 1", linkAdded: false }] });
+    const r = await preview(svc, user, "хәлләр ничек");
+    expect(r.items).toEqual([{
+      word: "Хәлләр ничек?", transcription: null, pos: "n", translation: "Хәлләр ничек?-ru", exampleTt: "Хәлләр ничек?.", exampleRu: "Хәлләр ничек?-ru.",
+      exampleSrc: "own", audioFileId: null, sourceUrl: null, ai: false,
+    }]);
+    expect(llm.urls).toEqual([]);
+    // The copy keeps the catalog spelling, and the level word is not shown again when level 5 opens.
+    await svc.confirmAdd(user, r.previewId);
+    expect((await ownNotes(user.id)).map((n) => n.word)).toEqual(["Хәлләр ничек?"]);
+    await repo.subscribe(user.id, (await repo.getDeckBySlug("l05"))!.id, T);
+    const c = await repo.candidateCards(user.id, T, { ...dayWindow(180, T), directions: ["tt_ru"] });
+    expect(c.newNotes.filter((n) => n.word === "Хәлләр ничек?")).toHaveLength(1);
+  });
+
   it("copies the catalog card with its voice into My words under the user's link, in the catalog spelling", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, level: 1 });
     await seedLevels(env.DB, { 5: ["бәхет"] });

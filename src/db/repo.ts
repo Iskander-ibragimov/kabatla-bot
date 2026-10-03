@@ -106,7 +106,13 @@ function rowToCard(r: Record<string, unknown>): CardRow {
     },
   };
 }
-export const wordKey = (w: string) => w.trim().toLowerCase().replace(/\s+/g, " ");
+/** Spaces and . , ! ? … : ; « » " ' ( ) - – — at either end of a word or phrase. migrations/0002_word_key_punctuation.sql trims the same set. */
+const KEY_EDGES = /^[ .,!?\u2026:;\u00AB\u00BB"'()\-\u2013\u2014]+|[ .,!?\u2026:;\u00AB\u00BB"'()\-\u2013\u2014]+$/g;
+/**
+ * The key a word is found by (`notes.word_key`): lower case, single spaces, no punctuation at the edges, so that a
+ * typed «рәхмәт» finds the phrase stored as «Рәхмәт!». Punctuation inside stays («юк, рәхмәт»). The shown `word` is not changed.
+ */
+export const wordKey = (w: string) => w.trim().toLowerCase().replace(/\s+/g, " ").replace(KEY_EDGES, "");
 
 export class Repo {
   constructor(readonly db: D1Database) {}
