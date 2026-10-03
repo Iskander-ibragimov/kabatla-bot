@@ -223,4 +223,96 @@ describe("bot handlers", () => {
     expect(h.lastText()).toContain("Настройки");
     expect(labels()).toContain("🌐 Язык: Русский");
   });
+
+  describe("reports", () => {
+    const adminSends = (h: ReturnType<typeof harness>) => h.tg.of("sendMessage").filter((c) => c.payload.chat_id === 999);
+    const answers = (h: ReturnType<typeof harness>) => h.tg.of("answerCallbackQuery").map((c) => c.payload.text);
+    const noteId = async (word: string) => (await env.DB.prepare("SELECT id FROM notes WHERE word = ?").bind(word).first<{ id: number }>())!.id;
+
+    it("stores one report per user and word and notifies the admin once", async () => {
+      const { h, repo, cardMsg } = await startSession();
+      const id = await noteId("китап");
+      await h.press(`r:${id}`, cardMsg);
+      await h.press(`r:${id}`, cardMsg);
+      expect(adminSends(h)).toHaveLength(1);
+      const msg = adminSends(h)[0]!;
+      expect(String(msg.payload.text)).toContain("китап");
+      expect(String(msg.payload.text)).toContain("китап-ru");
+      expect(String(msg.payload.text)).toContain("42");
+      expect(msg.payload.parse_mode).toBe("HTML");
+      expect(answers(h)).toEqual([ru.reportSent, ru.reportAlready]);
+      expect((await repo.recentReports(10))[0]).toMatchObject({ noteId: id, word: "китап", translation: "китап-ru", count: 1 });
+      expect(h.tg.of("editMessageText")).toHaveLength(0);
+      expect(h.tg.of("deleteMessage")).toHaveLength(0);
+    });
+
+    it("answers in the interface language", async () => {
+      const { h, repo, u, cardMsg } = await startSession();
+      await repo.updateUser(u.id, { lang: "tt" });
+      await h.press(`r:${await noteId("китап")}`, cardMsg);
+      expect(answers(h)).toEqual([tt.reportSent]);
+    });
+
+    it("escapes the word, translation and example in the admin message", async () => {
+      const { h, repo, cardMsg } = await startSession();
+      const [id] = await repo.insertNotes((await repo.getDeckBySlug("l01"))!.id, [
+        { word: "<b>x&y", transcription: null, pos: "n", translation: "a<i>b", exampleTt: "<u>q", exampleRu: "r&s" },
+      ]);
+      await h.press(`r:${id}`, cardMsg);
+      const text = String(adminSends(h)[0]!.payload.text);
+      expect(text).toContain("&lt;b&gt;x&amp;y");
+      expect(text).toContain("a&lt;i&gt;b");
+      expect(text).toContain("&lt;u&gt;q");
+      expect(text).toContain("r&amp;s");
+      expect(text).not.toContain("<b>x");
+    });
+
+    it("keeps the report when the admin cannot be reached", async () => {
+      const { h, repo, cardMsg } = await startSession();
+      h.tg.failNext("sendMessage", 403, "Forbidden: bot was blocked by the user");
+      await h.press(`r:${await noteId("китап")}`, cardMsg);
+      expect(answers(h)).toEqual([ru.reportSent]);
+      expect(await repo.recentReports(10)).toHaveLength(1);
+    });
+
+    it("ignores a forged report for a word the user cannot see", async () => {
+      const { h, repo, cardMsg } = await startSession();
+      const other = await repo.insertUser({ tgId: 77, chatId: 77, lang: "ru", now: T });
+      const secret = await repo.customDeck(other, T);
+      const [id] = await repo.insertNotes(secret, [{ word: "серсүз", transcription: null, pos: "", translation: "тайна", exampleTt: "", exampleRu: "" }]);
+      await h.press(`r:${id}`, cardMsg);
+      await h.press("r:999999", cardMsg);
+      expect(answers(h)).toEqual([ru.staleButton, ru.staleButton]);
+      expect(adminSends(h)).toHaveLength(0);
+      expect(await repo.recentReports(10)).toEqual([]);
+      expect(JSON.stringify(h.tg.calls)).not.toContain("серсүз");
+    });
+
+    it("lets the user report a note they have a card for even after leaving its deck", async () => {
+      const { h, repo, u, cardMsg } = await startSession();
+      const id = await noteId("китап");
+      expect(await repo.getCardByNote(u.id, id, "tt_ru")).not.toBeNull();
+      await env.DB.prepare("DELETE FROM user_decks WHERE user_id = ?").bind(u.id).run();
+      await h.press(`r:${id}`, cardMsg);
+      expect(answers(h)).toEqual([ru.reportSent]);
+    });
+
+    it("stays within the Telegram and D1 budget and does not redraw the card", async () => {
+      await seedCatalog(env.DB);
+      const db = countingDb(env.DB);
+      const h = harness(db, { now: T });
+      await h.text("/start");
+      const repo = new Repo(env.DB);
+      const u = (await repo.getUserByTg(42))!;
+      await repo.updateUser(u.id, { onboardingStep: null });
+      await repo.subscribe(u.id, (await repo.getDeckBySlug("l01"))!.id, T);
+      await h.text("/learn");
+      const id = await noteId("китап");
+      const tgBefore = h.tg.calls.length;
+      db.calls = 0;
+      await h.press(`r:${id}`, h.tg.lastMessageId());
+      expect(h.tg.calls.slice(tgBefore).map((c) => c.method).sort()).toEqual(["answerCallbackQuery", "sendMessage"]);
+      expect(db.calls).toBe(3); // user row, visible note, insert report
+    });
+  });
 });

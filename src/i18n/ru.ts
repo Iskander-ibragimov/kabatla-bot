@@ -92,7 +92,9 @@ export const ru = {
   saveStreakBtn: "▶ Спасти серию",
   continueBtn: "▶ Продолжить",
   /** Part of speech by its catalog code; an unknown code is shown as is. */
-  posName: (code: string) => POS[code] ?? code,
+  posName: (code: string) => Object.hasOwn(POS, code) ? POS[code]! : code,
+  reportSent: "Жалоба отправлена, спасибо",
+  reportAlready: "Вы уже сообщали об этой карточке",
   levelTitle: (n: number) => `Уровень ${n}`,
   /** First line of the card that follows the opening of level `to`; every level has 100 words. */
   levelUp: (from: number, to: number, pct: number | null) => `Все 100 слов уровня ${from} в работе. Открываю уровень ${to}.${covered(pct)}`,

@@ -19,7 +19,7 @@ describe("views", () => {
   it("translation and example are inside tg-spoiler", () => {
     const { text } = renderCard(view(), counts, iv, false, "ru");
     expect(text).toContain("🔵 4 · 🔴 1 · 🟢 12");
-    expect(text).toContain("<b>ышанычлы</b>\nышанычлы́ · <i>adj</i>\n<tg-spoiler><b>надёжный</b></tg-spoiler>");
+    expect(text).toContain("<b>ышанычлы</b>\n[ышанычлы́] · <i>прил.</i>\n<tg-spoiler><b>надёжный</b></tg-spoiler>");
     expect(text).toContain("<blockquote><tg-spoiler><i>Ул ышанычлы кеше.</i>\nОн надёжный человек.</tg-spoiler></blockquote>");
   });
 
@@ -32,12 +32,34 @@ describe("views", () => {
     expect(flat.map((b) => b.callback_data)).toEqual(["g:7:3:1", "g:7:3:2", "g:7:3:3", "g:7:3:4"]);
     expect(flat.map((b) => b.text)).toEqual(["Снова <10м", "Трудно 1д", "Хорошо 2д", "Легко 4д"]);
     for (const b of flat) expect(new TextEncoder().encode(b.callback_data).length).toBeLessThanOrEqual(64);
-    expect(keyboard[2]!.map((b) => b.callback_data)).toEqual(["v:3", "u"]);
+    expect(keyboard[2]!.map((b) => b.callback_data)).toEqual(["v:3", "u", "r:3"]);
   });
 
   it("voice button only when audio exists; undo only when allowed", () => {
-    const { keyboard } = renderCard(view({ hasAudio: false }), counts, iv, false, "ru");
-    expect(keyboard).toHaveLength(2);
+    expect(renderCard(view({ hasAudio: false }), counts, iv, false, "ru").keyboard[2]!.map((b) => b.callback_data)).toEqual(["r:3"]);
+    expect(renderCard(view({ hasAudio: true }), counts, iv, true, "ru").keyboard[2]!.map((b) => b.callback_data)).toEqual(["v:3", "u", "r:3"]);
+    expect(renderCard(view({ hasAudio: true }), counts, iv, false, "ru").keyboard[2]!.map((b) => b.text)).toEqual(["🔊", "⚑"]);
+  });
+
+  it("shows transcription in brackets and the part of speech in the interface language", () => {
+    const r = renderCard(view({ word: "вакыт", transcription: "wакъы́т", pos: "n" }), counts, iv, false, "ru");
+    expect(r.text).toContain("<b>вакыт</b>\n[wакъы́т] · <i>сущ.</i>");
+    expect(renderCard(view({ pos: "n" }), counts, iv, false, "tt").text).toContain("<i>исем</i>");
+  });
+
+  it("leaves out the second line when there is neither transcription nor part of speech, and joins no dangling dot", () => {
+    const none = renderCard(view({ transcription: null, pos: "" }), counts, iv, false, "ru").text;
+    expect(none).toContain("<b>ышанычлы</b>\n<tg-spoiler>");
+    expect(renderCard(view({ transcription: "ышанычлы́", pos: "" }), counts, iv, false, "ru").text).toContain("<b>ышанычлы</b>\n[ышанычлы́]\n<tg-spoiler>");
+    const posOnly = renderCard(view({ transcription: null, pos: "v" }), counts, iv, false, "ru").text;
+    expect(posOnly).toContain("<b>ышанычлы</b>\n<i>гл.</i>\n<tg-spoiler>");
+    expect(posOnly).not.toContain("·  ");
+    expect(renderCard(view({ transcription: null, pos: "Моя пометка" }), counts, iv, false, "ru").text).toContain("<i>Моя пометка</i>");
+  });
+
+  it("hides the word and transcription under the spoiler in ru→tt", () => {
+    const r = renderCard(view({ direction: "ru_tt", word: "вакыт", transcription: "wакъы́т", translation: "время" }), counts, iv, false, "ru");
+    expect(r.text).toContain("<b>время</b>\n<tg-spoiler><b>вакыт</b> [wакъы́т]</tg-spoiler>");
   });
 
   it("html in word is escaped", () => {
@@ -63,7 +85,7 @@ describe("views", () => {
 
   it("ru to tt direction hides the Tatar word and its transcription", () => {
     const { text } = renderCard(view({ direction: "ru_tt" }), counts, iv, false, "ru");
-    expect(text).toContain("<b>надёжный</b>\n<tg-spoiler><b>ышанычлы</b> ышанычлы́</tg-spoiler>");
+    expect(text).toContain("<b>надёжный</b>\n<tg-spoiler><b>ышанычлы</b> [ышанычлы́]</tg-spoiler>");
   });
 
   it("done screen shows day and cumulative totals", () => {
@@ -99,7 +121,7 @@ describe("views", () => {
   it("card buttons, progress line and done screen are in Tatar for a tt user", () => {
     const card = renderCard(view(), counts, { 1: "<10мин", 2: "1көн", 3: "2көн", 4: "4көн" }, true, "tt");
     expect(card.keyboard.slice(0, 2).flat().map((b) => b.text)).toEqual(["Яңадан <10мин", "Авыр 1көн", "Яхшы 2көн", "Җиңел 4көн"]);
-    expect(card.keyboard[2]!.map((b) => b.text)).toEqual(["🔊", "↩️ Кире алу"]);
+    expect(card.keyboard[2]!.map((b) => b.text)).toEqual(["🔊", "↩️ Кире алу", "⚑"]);
     expect(card.text).toContain("🌿 Өйрәнәм · хәтердә ~2 көн · кабатлау №4");
     const done = renderDone({ reviewsToday: 24, learnedToday: 3, totals: { learned: 37, known: 20, learning: 14, new: 429 }, nextLearningInMs: 480_000, streak: 5 }, "tt");
     expect(done.text).toContain("Бүген: 24 кабатлау · +3 өйрәнелде");

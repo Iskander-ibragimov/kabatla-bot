@@ -245,6 +245,28 @@ export class Repo {
     const r = await this.db.prepare(`SELECT n.id, n.deck_id, ${NOTE_COLS} FROM notes n WHERE n.id = ?`).bind(id).first<Record<string, unknown>>();
     return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number } : null;
   }
+  /** The note when the user can see it: it is in one of their decks or they have a card for it. */
+  async visibleNote(userId: number, noteId: number): Promise<NoteRow | null> {
+    const r = await this.db.prepare(
+      `SELECT n.id, n.deck_id, ${NOTE_COLS} FROM notes n WHERE n.id = ?1
+       AND (n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?2)
+            OR EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ?2 AND c.note_id = ?1))`,
+    ).bind(noteId, userId).first<Record<string, unknown>>();
+    return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number } : null;
+  }
+  /** Stores a mistake report; false when this user has already reported this note. */
+  async insertReport(userId: number, noteId: number, now: number): Promise<boolean> {
+    const r = await this.db.prepare("INSERT OR IGNORE INTO reports (user_id, note_id, created_at) VALUES (?, ?, ?)").bind(userId, noteId, now).run();
+    return r.meta.changes > 0;
+  }
+  /** The most recently reported words, one row per word with the number of reports. */
+  async recentReports(limit: number): Promise<{ noteId: number; word: string; translation: string; count: number; lastAt: number }[]> {
+    const { results } = await this.db.prepare(
+      `SELECT n.id AS note_id, n.word, n.translation, COUNT(*) AS cnt, MAX(r.created_at) AS last_at
+       FROM reports r JOIN notes n ON n.id = r.note_id GROUP BY n.id ORDER BY last_at DESC, n.id DESC LIMIT ?`,
+    ).bind(limit).all<{ note_id: number; word: string; translation: string; cnt: number; last_at: number }>();
+    return results.map((r) => ({ noteId: r.note_id, word: r.word, translation: r.translation, count: r.cnt, lastAt: r.last_at }));
+  }
   async setNoteSourceUrl(noteId: number, url: string): Promise<void> {
     await this.db.prepare("UPDATE notes SET source_url = ? WHERE id = ? AND source_url IS NULL").bind(url, noteId).run();
   }

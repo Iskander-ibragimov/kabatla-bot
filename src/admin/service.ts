@@ -1,5 +1,6 @@
 import type { Repo, User } from "../db/repo";
 import type { Config } from "../env";
+import { esc } from "../tg/html";
 import type { TgApi } from "../tg/client";
 
 export const FREE_ROWS_WRITTEN_PER_DAY = 100_000;
@@ -20,7 +21,11 @@ export async function adminStatsText(repo: Repo, now: number): Promise<string> {
             (SELECT COUNT(*) FROM jobs WHERE error IS NOT NULL AND done_at >= ?1) AS failed`,
   ).bind(since, day).first<Record<string, number>>();
   const pct = Math.round((100 * r!.rows!) / FREE_ROWS_WRITTEN_PER_DAY);
-  return `🛠 <b>Админ</b> · ${day} (UTC)\n\nПользователей: ${r!.users}\nАктивных за сутки: ${r!.active}\nНовых за сутки: ${r!.new_users}\nПовторов сегодня: ${r!.reviews}\nЗаписей в D1 (оценка): ${r!.rows} · ${pct}% лимита\nОшибок задач за сутки: ${r!.failed}`;
+  const reports = await repo.recentReports(10);
+  const complaints = reports.length
+    ? `Жалобы ⚑ (последние ${reports.length}):\n${reports.map((x) => `• <b>${esc(x.word)}</b> — ${esc(x.translation)} · ${x.count}`).join("\n")}`
+    : "Жалобы ⚑: нет";
+  return `🛠 <b>Админ</b> · ${day} (UTC)\n\nПользователей: ${r!.users}\nАктивных за сутки: ${r!.active}\nНовых за сутки: ${r!.new_users}\nПовторов сегодня: ${r!.reviews}\nЗаписей в D1 (оценка): ${r!.rows} · ${pct}% лимита\nОшибок задач за сутки: ${r!.failed}\n\n${complaints}`;
 }
 
 /** Warns the admin once a day when D1 writes pass 80% of the free limit. */

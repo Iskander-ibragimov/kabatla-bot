@@ -147,6 +147,16 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await show(ctx, s, "replace");
   });
   c.command("undo", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().undo(ctx.user), "send"); });
+  c.callbackQuery(/^r:(\d+)$/, async (ctx) => {
+    const t = dict(ctx.user.lang);
+    const note = await repo.visibleNote(ctx.user.id, Number(ctx.match[1]));
+    if (!note) return toast(ctx, t.staleButton);
+    if (!(await repo.insertReport(ctx.user.id, note.id, deps.now()))) return toast(ctx, t.reportAlready);
+    await toast(ctx, t.reportSent);
+    const text = `⚑ <b>${esc(note.word)}</b> — ${esc(note.translation)}\n<i>${esc(note.exampleTt)}</i>\n${esc(note.exampleRu)}\n\nnote #${note.id} · user ${ctx.user.tgId}`;
+    // The report is already stored; an unreachable admin must not turn into an error for the user.
+    await ctx.api.sendMessage(config.adminTgId, text, HTML).catch((e) => console.error("report notification failed", e));
+  });
   c.callbackQuery(/^v:(\d+)$/, async (ctx) => { await toast(ctx); await playVoice(repo, tg, ctx.user, Number(ctx.match[1])); });
 
   /* levels */

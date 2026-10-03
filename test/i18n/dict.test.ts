@@ -98,6 +98,30 @@ describe("i18n dictionaries", () => {
     }
   });
 
+  it("has the same HTML tags in Russian and Tatar, and balanced", () => {
+    const TAG = /<\/?[a-z-]+>/g;
+    for (const k of KEYS) {
+      const r = texts(ru, k), t = texts(tt, k);
+      r.forEach((rt, i) => {
+        const rTags = (rt.match(TAG) ?? []).sort(), tTags = (t[i]!.match(TAG) ?? []).sort();
+        expect(tTags, `${k}[${i}] tags`).toEqual(rTags);
+      });
+      for (const text of [...r, ...t]) {
+        const open: string[] = [];
+        for (const m of text.match(TAG) ?? []) {
+          const name = m.replace(/[<>/]/g, "");
+          if (m.startsWith("</")) expect(open.pop(), `${k}: ${text}`).toBe(name);
+          else open.push(name);
+        }
+        expect(open, `${k}: ${text}`).toEqual([]);
+      }
+    }
+  });
+
+  it("has the report answers", () => {
+    for (const d of [ru, tt]) { expect(d.reportSent.length).toBeGreaterThan(3); expect(d.reportAlready.length).toBeGreaterThan(3); expect(d.reportSent.length).toBeLessThanOrEqual(200); expect(d.reportAlready.length).toBeLessThanOrEqual(200); }
+  });
+
   it("keeps the Russian texts free of the English bot", () => {
     const all = KEYS.flatMap((k) => texts(ru, k)).join("\n");
     expect(all).not.toMatch(/англ|English|Hi!|resilient|Повтор<|\bEN\b|\bRU\b|\bTT\b/);
@@ -137,6 +161,7 @@ describe("i18n dictionaries", () => {
     expect(POS_CODES.map((c) => ru.posName(c))).toEqual(["сущ.", "гл.", "прил.", "нареч.", "мест.", "числ.", "послелог", "союз", "частица", "межд.", "фраза"]);
     expect(POS_CODES.map((c) => tt.posName(c))).toEqual(["исем", "фигыль", "сыйфат", "рәвеш", "алмашлык", "сан", "бәйлек", "теркәгеч", "кисәкчә", "ымлык", "гыйбарә"]);
     expect(tt.posName("zzz")).toBe("zzz");
+    for (const d of [ru, tt]) for (const code of ["constructor", "toString", "__proto__", "hasOwnProperty"]) expect(d.posName(code)).toBe(code);
   });
 
   it("names the language and the direction in settings", () => {

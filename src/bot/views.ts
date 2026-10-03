@@ -1,6 +1,7 @@
 import type { InlineKeyboardButton } from "grammy/types";
 import { type Lang, type Mem, type Rating, memoryDays, stage } from "../srs/fsrs";
 import { dict } from "../i18n";
+import { esc } from "../tg/html";
 
 export type Button = InlineKeyboardButton.CallbackButton;
 export type Keyboard = Button[][];
@@ -10,7 +11,7 @@ import type { CardView, Counts, DaySummary, Feedback, LevelUp } from "../review/
 export type { CardView, Counts, DaySummary, Feedback, LevelUp };
 export interface PreviewItem { word: string; transcription: string | null; pos: string; translation: string; exampleTt: string; exampleRu: string; sourceUrl: string | null }
 
-export const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+export { esc };
 const btn = (text: string, data: string, style?: Button["style"]): Button => (style ? { text, callback_data: data, style } : { text, callback_data: data });
 
 export function hostOf(url: string): string {
@@ -42,8 +43,8 @@ export function progressLine(m: Mem, lang: Lang): string {
 export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, string>, canUndo: boolean, lang: Lang): Rendered {
   const t = dict(lang);
   const lines: string[] = [`🔵 ${c.n} · 🔴 ${c.l} · 🟢 ${c.r}`];
-  const transcription = v.transcription ? esc(v.transcription) : "";
-  const pos = v.pos ? `<i>${esc(v.pos)}</i>` : "";
+  const transcription = v.transcription ? `[${esc(v.transcription)}]` : "";
+  const pos = v.pos ? `<i>${esc(t.posName(v.pos))}</i>` : "";
   if (v.direction === "tt_ru") {
     lines.push(`<b>${esc(v.word)}</b>`);
     if (transcription || pos) lines.push([transcription, pos].filter(Boolean).join(" · "));
@@ -66,7 +67,8 @@ export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, str
   const extra: Button[] = [];
   if (v.hasAudio) extra.push(btn(t.speak, `v:${v.noteId}`));
   if (canUndo) extra.push(btn(t.undo, "u"));
-  if (extra.length) keyboard.push(extra);
+  extra.push(btn("⚑", `r:${v.noteId}`));
+  keyboard.push(extra);
   return { text, keyboard };
 }
 
