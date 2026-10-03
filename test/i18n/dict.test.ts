@@ -9,6 +9,8 @@ type FnKey = { [K in Key]: Dict[K] extends string ? never : K }[Key];
 
 const POS_CODES = ["n", "v", "adj", "adv", "pron", "num", "post", "conj", "part", "intj", "phr"];
 
+const STATS = { streak: 5, learned: 37, known: 20, learning: 14, fresh: 429, memory: 812, total: 950, r30: 400, retention: "92%", forecast: "3 · 5 · 0 · 12 · 7 · 1 · 4" };
+
 /**
  * Sample arguments for every function key; several tuples where the text has branches.
  * Free-text arguments are Tatar-safe on purpose, so that the letter check looks at the template only.
@@ -36,9 +38,7 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   genTitle: [["сәяхәт", 20]],
   genLeft: [[2]],
   genAdded: [["сәяхәт", 20]],
-  deckLine: [["1 нче дәрәҗә", 100, true, 90, 4], ["2 нче дәрәҗә", 100, false, 0, 0]],
-  deckSubscribed: [["2 нче дәрәҗә"]],
-  statsText: [[{ streak: 5, learned: 37, known: 20, learning: 14, fresh: 429, memory: 812, total: 950, r30: 400, retention: "92%", forecast: "3 · 5 · 0 · 12 · 7 · 1 · 4" }]],
+  statsText: [[{ ...STATS, level: 4, coverage: 54 }], [{ ...STATS, level: 1, coverage: null }], [{ ...STATS, level: 6, coverage: 61 }], [{ ...STATS, level: 21, coverage: 80 }]],
   setMode: [[0.85], [0.9], [0.95]],
   setNew: [[10]],
   setRemind: [["09:00"]],
@@ -49,6 +49,13 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   pushStep: [[4]],
   posName: POS_CODES.map((c): [string] => [c]),
   levelTitle: [[1], [6], [20]],
+  levelUp: [[3, 4, 54], [5, 6, null], [19, 20, 79]],
+  levelsDone: [[80], [null]],
+  levelsPassed: [["1–3, 5"]],
+  levelProgress: [[4, 37, 100], [6, 0, 100]],
+  levelsAhead: [[16]],
+  levelsCoverage: [[54]],
+  openSkippedBtn: [["1–6"]],
 };
 
 /** Every text a key can produce: the string itself, or the function applied to each sample. */
@@ -105,6 +112,26 @@ describe("i18n dictionaries", () => {
     expect(ru.levelTitle(3)).toBe("Уровень 3");
   });
 
+  it("announces a new level with the coverage, and the end of the levels once", () => {
+    expect(ru.levelUp(3, 4, 54)).toBe("Все 100 слов уровня 3 в работе. Открываю уровень 4. Пройденные слова покрывают ≈54% обычного текста.");
+    expect(ru.levelUp(3, 4, null)).toBe("Все 100 слов уровня 3 в работе. Открываю уровень 4.");
+    expect(ru.levelsDone(null)).toBe("Все 2 000 слов в работе! 🎉 Дальше — повторения по расписанию. Свои слова можно добавлять в любой момент.");
+    expect(ru.levelsDone(80)).toBe(`${ru.levelsDone(null)} Пройденные слова покрывают ≈80% обычного текста.`);
+    expect(tt.levelUp(5, 6, 61)).toMatch(/^5 нче дәрәҗә.*6 нчы дәрәҗә.*≈61%/);
+    expect(tt.levelUp(5, 6, null)).not.toContain("%");
+    expect(tt.levelsDone(80)).toBe(`${tt.levelsDone(null)}${tt.levelUp(5, 6, 80).slice(tt.levelUp(5, 6, null).length)}`);
+    expect(tt.levelsDone(80)).toContain("2 000");
+  });
+
+  it("names the levels screen and its button", () => {
+    expect([ru.decksBtn, tt.decksBtn]).toEqual(["📚 Уровни", "📚 Дәрәҗәләр"]);
+    expect([ru.levelsTitle, tt.levelsTitle]).toEqual(["📚 <b>Уровни</b>", "📚 <b>Дәрәҗәләр</b>"]);
+    expect(ru.levelProgress(4, 37, 100)).toBe("▶️ Уровень 4 · 37 из 100");
+    expect(tt.levelProgress(6, 37, 100)).toBe("▶️ 6 нчы дәрәҗә · 37/100");
+    expect(ru.openSkippedBtn("1–6")).toBe("Открыть пропущенные (1–6)");
+    for (const d of [ru, tt]) expect(Object.keys(d).filter((k) => /^deck|Decks$/.test(k) && k !== "decksBtn" && k !== "noDecks")).toEqual([]);
+  });
+
   it("names parts of speech in the interface language", () => {
     expect(ru.posName("n")).toBe("сущ."); expect(tt.posName("v")).toBe("фигыль"); expect(ru.posName("zzz")).toBe("zzz");
     expect(POS_CODES.map((c) => ru.posName(c))).toEqual(["сущ.", "гл.", "прил.", "нареч.", "мест.", "числ.", "послелог", "союз", "частица", "межд.", "фраза"]);
@@ -131,7 +158,7 @@ describe("i18n dictionaries", () => {
   });
 
   it("describes the bot and its commands in both languages", () => {
-    const cmds: Key[] = ["cmdLearn", "cmdDecks", "cmdGen", "cmdStats", "cmdSettings", "cmdUndo", "cmdHelp"];
+    const cmds: Key[] = ["cmdLearn", "cmdLevels", "cmdGen", "cmdStats", "cmdSettings", "cmdUndo", "cmdHelp"];
     for (const d of [ru, tt]) {
       for (const k of cmds) expect((d[k] as string).length, k).toBeGreaterThanOrEqual(3);
       for (const k of cmds) expect((d[k] as string).length, k).toBeLessThanOrEqual(256);

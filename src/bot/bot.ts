@@ -10,11 +10,11 @@ import type { Config } from "../env";
 import { dict } from "../i18n";
 import { ReviewService, type Screen } from "../review/service";
 import type { Rating } from "../srs/fsrs";
-import { cumulative } from "../stats/service";
+import { cumulative, levelsView } from "../stats/service";
 import type { TgApi } from "../tg/client";
 import { REMIND_TIMES, RETENTIONS, advanceOnboarding, getOrCreate, langFromTelegram, setSetting, startOnboarding } from "../users/service";
-import { deckTitle, learnKeyboard, renderDecks, renderGenPreview, renderOnboarding, renderSettings, renderStats } from "./screens";
-import { type Keyboard, type Rendered, esc, hostOf, renderAddPreview, renderCard, renderDone } from "./views";
+import { learnKeyboard, renderGenPreview, renderLevels, renderOnboarding, renderSettings, renderStats } from "./screens";
+import { type Keyboard, type Rendered, esc, hostOf, renderAddPreview, renderCard, renderDone, renderLevelUp } from "./views";
 
 export interface BotDeps {
   config: Config;
@@ -61,10 +61,12 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     const t = dict(ctx.user.lang);
     if (s.kind === "stale") return toast(ctx, t.staleButton);
     if (s.kind === "noundo") { if (ctx.callbackQuery) return toast(ctx, t.nothingToUndo); await ctx.reply(t.nothingToUndo); return; }
-    if (s.kind === "nothing") { await toast(ctx); await send(ctx, { text: t.noDecks, keyboard: [[{ text: t.decksBtn, callback_data: "decks" }]] }); return; }
+    if (s.kind === "nothing") { await toast(ctx); await send(ctx, { text: t.noDecks, keyboard: [[{ text: t.decksBtn, callback_data: "levels" }]] }); return; }
     const r = s.kind === "card"
       ? renderCard(s.view, s.counts, s.intervals, s.canUndo, ctx.user.lang)
       : renderDone(s.summary, ctx.user.lang);
+    // The news about a level opens the same message: a separate one would not fit the Telegram budget of an update.
+    if (s.levelUp) r.text = `${renderLevelUp(s.levelUp, ctx.user.lang)}\n\n${r.text}`;
     const cardId = s.kind === "card" ? s.view.cardId : null;
     const chatId = ctx.user.chatId;
     const old = mode === "replace" ? clickedId(ctx) : undefined;
@@ -147,16 +149,18 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   c.command("undo", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().undo(ctx.user), "send"); });
   c.callbackQuery(/^v:(\d+)$/, async (ctx) => { await toast(ctx); await playVoice(repo, tg, ctx.user, Number(ctx.match[1])); });
 
-  /* decks */
-  c.command("decks", async (ctx) => { if (await ready(ctx)) await send(ctx, renderDecks(await repo.listDecksForUser(ctx.user.id, deps.now()), ctx.user.lang)); });
-  c.callbackQuery("decks", async (ctx) => { await toast(ctx); await send(ctx, renderDecks(await repo.listDecksForUser(ctx.user.id, deps.now()), ctx.user.lang)); });
-  c.callbackQuery(/^sub:(\d+)$/, async (ctx) => {
-    const deck = await repo.getDeck(Number(ctx.match[1]));
-    if (!deck || (deck.kind !== "catalog" && deck.ownerId !== ctx.user.id)) return toast(ctx);
-    await repo.subscribe(ctx.user.id, deck.id, deps.now());
-    await editOrSend(ctx, clickedId(ctx), { text: dict(ctx.user.lang).deckSubscribed(esc(deckTitle(deck, ctx.user.lang))), keyboard: learnKeyboard(ctx.user.lang) });
+  /* levels */
+  const levels = async (ctx: Ctx) => renderLevels(await levelsView(repo, ctx.user), ctx.user.lang);
+  c.command("levels", async (ctx) => { if (await ready(ctx)) await send(ctx, await levels(ctx)); });
+  c.callbackQuery("levels", async (ctx) => { await toast(ctx); await send(ctx, await levels(ctx)); });
+  c.callbackQuery("lv:skip", async (ctx) => {
+    if (ctx.user.onboardingStep) return toast(ctx);
+    await repo.openSkippedLevels(ctx.user.id, deps.now());
+    await editOrSend(ctx, clickedId(ctx), await levels(ctx));
     await toast(ctx);
   });
+
+  /* AI decks */
   c.command("gen", async (ctx) => {
     if (!(await ready(ctx))) return;
     const t = dict(ctx.user.lang);

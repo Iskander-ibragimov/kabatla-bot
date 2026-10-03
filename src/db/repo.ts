@@ -55,6 +55,8 @@ export interface CardRow extends NoteFields { id: number; noteId: number; direct
 export interface NewNote extends NoteFields { noteId: number; direction: Direction }
 export interface QueueCounts { learning: number; review: number; newAvailable: number; newDoneToday: number; easyNewToday: number }
 export interface Candidates { learning: CardRow[]; review: CardRow[]; newNotes: NewNote[]; counts: QueueCounts }
+/** One level of the catalog as a user sees it; `seen` counts the notes that were started or are skipped as copies of own words. */
+export interface LevelRow { levelNo: number; total: number; coveragePct: number | null; open: boolean; seen: number }
 export interface DayWindow { dayStartMs: number; dayEndMs: number; today: string; directions: Direction[]; limitEach?: number }
 export interface Session { userId: number; chatId: number; messageId: number | null; cardId: number | null; stale: boolean; lastVoiceMessageId: number | null }
 export interface DeckRow {
@@ -79,9 +81,11 @@ function rowToUser(r: Record<string, unknown>): User {
 const NOTE_COLS = "n.word, n.transcription, n.pos, n.translation, n.example_tt, n.example_ru, n.example_src, n.audio_file_id, n.source_url";
 /** A note/direction is "new" unless its card was started, or any card of the note is buried today. Binds: userId, today. */
 const NEW_FILTER = `NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ? AND c.note_id = n.id AND ((c.direction = d.value AND c.state != 'new') OR c.buried_day = ?))`;
-/** Excludes a level word when the user owns a note with the same word_key; `n` and `dk` are the outer note and deck aliases. */
-const skipOwned = (user: string) =>
-  `NOT (dk.kind = 'catalog' AND EXISTS (SELECT 1 FROM notes o JOIN decks od ON od.id = o.deck_id WHERE od.owner_id = ${user} AND o.word_key = n.word_key))`;
+/** True for a level word when the user owns a note with the same word_key; `n` and `dk` are the outer note and deck aliases. */
+const ownedCopy = (user: string) =>
+  `(dk.kind = 'catalog' AND EXISTS (SELECT 1 FROM notes o JOIN decks od ON od.id = o.deck_id WHERE od.owner_id = ${user} AND o.word_key = n.word_key))`;
+/** Excludes such a level word from the new-word queue: it counts as shown. */
+const skipOwned = (user: string) => `NOT ${ownedCopy(user)}`;
 const CARD_COLS = `c.id, c.note_id, c.direction, c.state, c.step, c.stability, c.difficulty, c.due, c.last_review, c.scheduled_days, c.reps, c.lapses, c.buried_day, ${NOTE_COLS}`;
 
 function noteFields(r: Record<string, unknown>): NoteFields {
@@ -148,16 +152,43 @@ export class Repo {
     const r = await this.db.prepare("SELECT * FROM decks WHERE id = ?").bind(id).first<Record<string, unknown>>();
     return r ? this.rowToDeck(r) : null;
   }
-  /** Catalog decks plus the user's own decks, with subscription flag and per-user counters. */
-  async listDecksForUser(userId: number, now: number): Promise<(DeckRow & { subscribed: boolean; newCount: number; dueCount: number })[]> {
+  /** The decks a user owns: «Мои слова» and the AI decks. */
+  async ownDecks(userId: number): Promise<DeckRow[]> {
+    const { results } = await this.db.prepare("SELECT * FROM decks WHERE owner_id = ? ORDER BY id").bind(userId).all<Record<string, unknown>>();
+    return results.map((r) => this.rowToDeck(r));
+  }
+  /** Every level of the catalog with the user's progress in it, in one D1 call. */
+  async levelsOverview(userId: number): Promise<LevelRow[]> {
     const { results } = await this.db.prepare(
-      `SELECT d.*, (ud.user_id IS NOT NULL) AS subscribed,
-         (SELECT COUNT(*) FROM notes n WHERE n.deck_id = d.id AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ?1 AND c.note_id = n.id)) AS new_count,
-         (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND n.deck_id = d.id AND c.state != 'new' AND c.due <= ?2) AS due_count
-       FROM decks d LEFT JOIN user_decks ud ON ud.deck_id = d.id AND ud.user_id = ?1
-       WHERE d.kind = 'catalog' OR d.owner_id = ?1 ORDER BY d.id`,
-    ).bind(userId, now).all<Record<string, unknown>>();
-    return results.map((r) => ({ ...this.rowToDeck(r), subscribed: r.subscribed === 1, newCount: r.new_count as number, dueCount: r.due_count as number }));
+      `SELECT dk.level_no, dk.total, dk.coverage_pct, (ud.user_id IS NOT NULL) AS open,
+         (SELECT COUNT(*) FROM notes n WHERE n.deck_id = dk.id AND (
+            EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ?1 AND c.note_id = n.id AND c.state != 'new')
+            OR ${ownedCopy("?1")})) AS seen
+       FROM decks dk LEFT JOIN user_decks ud ON ud.deck_id = dk.id AND ud.user_id = ?1
+       WHERE dk.level_no IS NOT NULL ORDER BY dk.level_no`,
+    ).bind(userId).all<Record<string, unknown>>();
+    return results.map((r) => ({ levelNo: r.level_no as number, total: r.total as number, coveragePct: (r.coverage_pct as number) ?? null, open: r.open === 1, seen: r.seen as number }));
+  }
+  /** Opens every level below the user's current one; returns how many were opened. */
+  async openSkippedLevels(userId: number, now: number): Promise<number> {
+    const r = await this.db.prepare(
+      `INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at)
+       SELECT u.id, d.id, ?2 FROM users u JOIN decks d ON d.level_no < u.level WHERE u.id = ?1`,
+    ).bind(userId, now).run();
+    return r.meta.changes ?? 0;
+  }
+  /**
+   * Moves a user from level `from` to `to` (`to` = 21: every level is done). Three statements for one batch:
+   * the subscription to the deck of `to`, the level change, and the coverage of `from` for the announcement.
+   * The level change touches a row only if the user is still on `from` and the deck of `to` exists,
+   * so its `meta.changes` tells whether this call opened the level.
+   */
+  openLevelStmts(userId: number, from: number, to: number, now: number): D1PreparedStatement[] {
+    return [
+      this.db.prepare("INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) SELECT ?, id, ? FROM decks WHERE level_no = ?").bind(userId, now, to),
+      this.db.prepare("UPDATE users SET level = ?1 WHERE id = ?2 AND level = ?3 AND (?1 = 21 OR EXISTS (SELECT 1 FROM decks WHERE level_no = ?1))").bind(to, userId, from),
+      this.db.prepare("SELECT coverage_pct FROM decks WHERE level_no = ?").bind(from),
+    ];
   }
   private rowToDeck(r: Record<string, unknown>): DeckRow {
     return { id: r.id as number, slug: (r.slug as string) ?? null, ownerId: (r.owner_id as number) ?? null, kind: r.kind as DeckRow["kind"],
@@ -310,14 +341,15 @@ export class Repo {
     return r ? rowToCard(r) : null;
   }
 
-  /** Everything the session queue needs, in one D1 call. */
-  async candidateCards(userId: number, now: number, w: DayWindow): Promise<Candidates> {
+  /** Everything the session queue needs, in one D1 call. `pre` statements run first in the same batch; their results come back as `pre`. */
+  async candidateCards(userId: number, now: number, w: DayWindow, pre: D1PreparedStatement[] = []): Promise<Candidates & { pre: D1Result<Record<string, unknown>>[] }> {
     const lim = w.limitEach ?? 50;
     const dirs = JSON.stringify(w.directions);
     const inDirs = "c.direction IN (SELECT value FROM json_each(?))";
     const notBuried = "(c.buried_day IS NULL OR c.buried_day != ?)";
     const inDecks = "n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?)";
-    const [learning, review, fresh, counts] = await this.db.batch<Record<string, unknown>>([
+    const res = await this.db.batch<Record<string, unknown>>([
+      ...pre,
       this.db.prepare(`SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
         WHERE c.user_id = ? AND c.state IN ('learning','relearning') AND ${inDirs} AND ${inDecks} ORDER BY c.due LIMIT ?`).bind(userId, dirs, userId, lim),
       this.db.prepare(`SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
@@ -336,8 +368,10 @@ export class Repo {
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND was_new = 1 AND rating = 4 AND undone = 0 AND reviewed_at >= ?5) AS easy_new_today`)
         .bind(userId, dirs, w.dayEndMs, w.today, w.dayStartMs),
     ]);
+    const [learning, review, fresh, counts] = res.slice(pre.length);
     const c = counts!.results[0]!;
     return {
+      pre: res.slice(0, pre.length),
       learning: learning!.results.map(rowToCard),
       review: review!.results.map(rowToCard),
       newNotes: fresh!.results.map((r) => ({ ...noteFields(r), noteId: r.note_id as number, direction: r.direction as Direction })),
@@ -346,23 +380,24 @@ export class Repo {
     void now;
   }
 
-  /** Cumulative numbers for /stats in one D1 call. */
-  async statsExtra(userId: number, now: number, dayStartMs: number, direction: Direction): Promise<{ memory: number; total: number; r30: number; rev30: number; ok30: number; forecast: { d: number; n: number }[] }> {
+  /** Cumulative numbers for /stats in one D1 call; `coveragePct` is the coverage of the level below the user's current one. */
+  async statsExtra(userId: number, now: number, dayStartMs: number, direction: Direction): Promise<{ memory: number; total: number; r30: number; rev30: number; ok30: number; coveragePct: number | null; forecast: { d: number; n: number }[] }> {
     const since = now - 30 * 86_400_000;
-    const [a, f] = await this.db.batch<Record<string, number>>([
+    const [a, f] = await this.db.batch<Record<string, number | null>>([
       this.db.prepare(`SELECT
           (SELECT COALESCE(SUM(CASE WHEN state = 'review' THEN scheduled_days WHEN state = 'relearning' THEN MAX(1, CAST(ROUND(stability) AS INTEGER)) ELSE 0 END), 0)
              FROM cards WHERE user_id = ?1 AND direction = ?2) AS memory,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0) AS total,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3) AS r30,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3 AND json_extract(state_before, '$.state') = 'review') AS rev30,
-          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3 AND json_extract(state_before, '$.state') = 'review' AND rating > 1) AS ok30`)
+          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3 AND json_extract(state_before, '$.state') = 'review' AND rating > 1) AS ok30,
+          (SELECT d.coverage_pct FROM decks d JOIN users u ON u.id = ?1 WHERE d.level_no = u.level - 1) AS coverage`)
         .bind(userId, direction, since),
       this.db.prepare(`SELECT MAX(0, CAST((due - ?2) / 86400000 AS INTEGER)) AS d, COUNT(*) AS n FROM cards
           WHERE user_id = ?1 AND state != 'new' AND due < ?2 + 7 * 86400000 GROUP BY d`).bind(userId, dayStartMs),
     ]);
     const r = a!.results[0]!;
-    return { memory: r.memory!, total: r.total!, r30: r.r30!, rev30: r.rev30!, ok30: r.ok30!, forecast: f!.results.map((x) => ({ d: x.d!, n: x.n! })) };
+    return { memory: r.memory!, total: r.total!, r30: r.r30!, rev30: r.rev30!, ok30: r.ok30!, coveragePct: r.coverage ?? null, forecast: f!.results.map((x) => ({ d: x.d!, n: x.n! })) };
   }
 
   /* review log */

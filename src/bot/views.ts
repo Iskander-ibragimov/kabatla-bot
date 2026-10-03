@@ -6,8 +6,8 @@ export type Button = InlineKeyboardButton.CallbackButton;
 export type Keyboard = Button[][];
 export interface Rendered { text: string; keyboard: Keyboard }
 
-import type { CardView, Counts, DaySummary, Feedback } from "../review/service";
-export type { CardView, Counts, DaySummary, Feedback };
+import type { CardView, Counts, DaySummary, Feedback, LevelUp } from "../review/service";
+export type { CardView, Counts, DaySummary, Feedback, LevelUp };
 export interface PreviewItem { word: string; transcription: string | null; pos: string; translation: string; exampleTt: string; exampleRu: string; sourceUrl: string | null }
 
 export const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -76,7 +76,13 @@ export function renderDone(s: DaySummary, lang: Lang): Rendered {
   lines.push(t.doneTitle, t.doneToday(s.reviewsToday, s.learnedToday), t.doneTotals(s.totals.learned, s.totals.known, s.totals.learning, s.totals.new));
   if (s.nextLearningInMs != null) lines.push("", t.doneNextLearning(formatLong(s.nextLearningInMs, lang)));
   if (s.streak > 0) lines.push(t.streak(s.streak));
-  return { text: lines.join("\n"), keyboard: [[btn(t.addWords, "help:add"), btn(t.decksBtn, "decks")]] };
+  return { text: lines.join("\n"), keyboard: [[btn(t.addWords, "help:add"), btn(t.decksBtn, "levels")]] };
+}
+
+/** The line that opens the first card (or the done screen) after a level was opened or the last level was finished. */
+export function renderLevelUp(l: LevelUp, lang: Lang): string {
+  const t = dict(lang);
+  return l.to == null ? t.levelsDone(l.coveragePct) : t.levelUp(l.from, l.to, l.coveragePct);
 }
 
 export function renderAddPreview(items: PreviewItem[], previewId: number, lang: Lang): Rendered {

@@ -1,4 +1,4 @@
-import type { CardRow, Direction, NewNote, Repo, User } from "../db/repo";
+import type { Candidates, CardRow, Direction, NewNote, Repo, User } from "../db/repo";
 import { type Mem, type Rating, formatInterval, grade as fsrsGrade, memoryDays, newMem, preview, stage } from "../srs/fsrs";
 import { dayWindow, localDay } from "../users/service";
 import { pick } from "./pick";
@@ -16,12 +16,17 @@ export interface DaySummary {
   totals: { learned: number; known: number; learning: number; new: number };
   nextLearningInMs: number | null; streak: number;
 }
+/** The level that has just been opened; `to` is null when level 20 is finished and nothing is left to open. */
+export interface LevelUp { from: number; to: number | null; coveragePct: number | null }
 export type Screen =
-  | { kind: "card"; view: CardView; counts: Counts; intervals: Record<Rating, string>; feedback: Feedback | null; canUndo: boolean }
-  | { kind: "done"; summary: DaySummary; feedback: Feedback | null }
+  | { kind: "card"; view: CardView; counts: Counts; intervals: Record<Rating, string>; feedback: Feedback | null; canUndo: boolean; levelUp: LevelUp | null }
+  | { kind: "done"; summary: DaySummary; feedback: Feedback | null; levelUp: LevelUp | null }
   | { kind: "stale" }
   | { kind: "noundo" }
   | { kind: "nothing" };
+
+/** The catalog has levels 1…LAST_LEVEL; `users.level` one above it means every level is done. */
+export const LAST_LEVEL = 20;
 
 /** At most this many new words per day may be graded Easy on first sight; after that no new words are offered. */
 export const EASY_NEW_CAP = 200;
@@ -59,17 +64,28 @@ export class ReviewService {
 
   async nextScreen(user: User, feedback: Feedback | null = null): Promise<Screen> {
     const w = dayWindow(user.tzOffsetMin, this.now);
-    const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user) });
+    const opts = { ...w, directions: directionsOf(user) };
+    let c: Candidates = await this.repo.candidateCards(user.id, this.now, opts);
+    let levelUp: LevelUp | null = null;
+    // The open levels have no unseen words and today's limit is not spent: open the next level in the same D1 call
+    // that re-reads the queue. Only the call whose UPDATE moved users.level announces it (double taps, stale `user`).
+    if (c.counts.newAvailable === 0 && newLeftOf(user, c.counts) > 0 && user.level <= LAST_LEVEL) {
+      const from = user.level;
+      const reread = await this.repo.candidateCards(user.id, this.now, opts, this.repo.openLevelStmts(user.id, from, from + 1, this.now));
+      const [, moved, coverage] = reread.pre;
+      if (moved!.meta.changes) levelUp = { from, to: from < LAST_LEVEL ? from + 1 : null, coveragePct: (coverage!.results[0]?.coverage_pct as number | null | undefined) ?? null };
+      c = reread;
+    }
     const newLeft = newLeftOf(user, c.counts);
     const p = pick(c, newLeft, this.now, user.mixCounter);
     const counts: Counts = { n: Math.min(newLeft, c.counts.newAvailable), l: c.counts.learning, r: c.counts.review };
     if (!p) {
       const s = await this.repo.summary(user.id, w.dayStartMs, displayDirection(user));
       const totals = { learned: s.learned, known: s.known, learning: s.learning, new: s.new };
-      if (!feedback && Object.values(totals).every((x) => x === 0)) return { kind: "nothing" };
+      if (!feedback && !levelUp && Object.values(totals).every((x) => x === 0)) return { kind: "nothing" };
       const nextDue = c.learning.length ? Math.min(...c.learning.map((x) => x.mem.due)) : null;
       return {
-        kind: "done", feedback,
+        kind: "done", feedback, levelUp,
         summary: { reviewsToday: s.reviewsToday, learnedToday: s.learnedToday, totals, streak: user.streak,
           nextLearningInMs: nextDue == null ? null : Math.max(0, nextDue - this.now) },
       };
@@ -83,7 +99,7 @@ export class ReviewService {
     const pv = preview(row.mem, this.now, user.retention);
     const intervals = { 1: 0, 2: 0, 3: 0, 4: 0 } as Record<Rating, string | number>;
     for (const g of [1, 2, 3, 4] as Rating[]) intervals[g] = formatInterval(pv[g] - this.now, user.lang);
-    return { kind: "card", view: toView(row), counts, intervals: intervals as Record<Rating, string>, feedback, canUndo: feedback != null };
+    return { kind: "card", view: toView(row), counts, intervals: intervals as Record<Rating, string>, feedback, canUndo: feedback != null, levelUp };
   }
 
   async grade(user: User, cardId: number, reps: number, rating: Rating): Promise<Screen> {
@@ -132,7 +148,7 @@ export class ReviewService {
     const w = dayWindow(user.tzOffsetMin, this.now);
     const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user) });
     const newLeft = newLeftOf(user, c.counts);
-    return { kind: "card", view: toView(card), intervals, feedback: null, canUndo: false,
+    return { kind: "card", view: toView(card), intervals, feedback: null, canUndo: false, levelUp: null,
       counts: { n: Math.min(newLeft, c.counts.newAvailable), l: c.counts.learning, r: c.counts.review } };
   }
 }

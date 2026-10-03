@@ -1,14 +1,14 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { type NoteInput, Repo, type User } from "../../src/db/repo";
-import { ReviewService, type Screen } from "../../src/review/service";
+import { Repo } from "../../src/db/repo";
+import { ReviewService } from "../../src/review/service";
 import { newMem } from "../../src/srs/fsrs";
 import { countingDb } from "../helpers/countingDb";
+import { asCard, gradeShown } from "../helpers/review";
 import { seedUser } from "../helpers/seed";
 
 const MIN = 60_000, DAY = 86_400_000;
 const T = Date.UTC(2026, 8, 30, 6, 0); // 09:00 local (+03:00)
-const asCard = (s: Screen) => { if (s.kind !== "card") throw new Error(`expected card, got ${s.kind}`); return s; };
 
 describe("review service", () => {
   it("first card shows reference intervals", async () => {
@@ -139,10 +139,6 @@ describe("review service", () => {
   });
 
   describe("new-word queue", () => {
-    const gradeShown = async (repo: Repo, user: User, s: Screen, rating: 1 | 2 | 3 | 4): Promise<Screen> => {
-      const c = asCard(s);
-      return new ReviewService(repo, T).grade((await repo.getUser(user.id))!, c.view.cardId, c.view.reps, rating);
-    };
     const insertEasyNewLogs = async (db: D1Database, userId: number, n: number, now: number) => {
       await db.batch(Array.from({ length: n }, () => db.prepare(
         `INSERT INTO review_log (card_id, user_id, rating, state_before, interval_before_days, interval_after_ms, reviewed_at, was_new)
@@ -152,9 +148,9 @@ describe("review service", () => {
     it("does not spend the daily limit on a new word graded Easy", async () => {
       const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 12, patch: { newPerDay: 5 } });
       let s = await new ReviewService(repo, T).nextScreen(user);
-      for (let i = 0; i < 3; i++) s = await gradeShown(repo, user, s, 4);
+      for (let i = 0; i < 3; i++) s = await gradeShown(repo, user, s, 4, T);
       expect(s.kind === "card" && s.counts.n).toBe(5);
-      s = await gradeShown(repo, user, s, 3);
+      s = await gradeShown(repo, user, s, 3, T);
       expect(s.kind === "card" && s.counts.n).toBe(4);
     });
 

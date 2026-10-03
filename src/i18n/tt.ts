@@ -4,7 +4,8 @@ import type { Dict } from "./ru";
  * Tatar UI strings: the same keys as `ru`, plain literary Tatar for a reader whose Tatar is weak.
  * Only the letters ә ө ү җ ң һ (U+04D9, U+04E9, U+04AF, U+0497, U+04A3, U+04BB and capitals) besides the Russian
  * alphabet; test/i18n/dict.test.ts rejects look-alikes. Numbers never take a suffix here («кайтканчы 8 минут бар»,
- * «Вакыты: 09:00»), so no text depends on how a number is read aloud; the one exception is the ordinal in `levelTitle`.
+ * «Вакыты: 09:00», «37/100»), so no text depends on how a number is read aloud; the one exception is the ordinal of a
+ * level («4 нче дәрәҗә»), where case endings go on the word «дәрәҗә».
  */
 const POS: Record<string, string> = {
   n: "исем", v: "фигыль", adj: "сыйфат", adv: "рәвеш", pron: "алмашлык", num: "сан",
@@ -14,6 +15,8 @@ const POS: Record<string, string> = {
 /** Numbers 1…20 whose name ends in a back-vowel syllable (алты, тугыз, ун, уналты, унтугыз) take «нчы». */
 const BACK_ORDINALS = [6, 9, 10, 16, 19];
 const levelName = (n: number) => `${n} ${BACK_ORDINALS.includes(n) ? "нчы" : "нче"} дәрәҗә`;
+
+const covered = (pct: number | null) => (pct == null ? "" : ` Үтелгән сүзләр гадәти текстның ≈${pct}% өлешен тәшкил итә.`);
 
 export const tt: Dict = {
   again: "Яңадан",
@@ -39,7 +42,7 @@ export const tt: Dict = {
   doneNextLearning: (after) => `Ныгытудагы карточкалар кайтканчы ${after} бар. Искә төшерермен.`,
   streak: (d) => `🔥 Рәттән ${d} көн`,
   addWords: "➕ Сүз өстәү",
-  decksBtn: "📚 Тупланмалар",
+  decksBtn: "📚 Дәрәҗәләр",
   add: "✅ Өстәү",
   addAll: (n) => `✅ Барысын да өстәү (${n})`,
   edit: "✏️ Үзгәртү",
@@ -80,12 +83,8 @@ export const tt: Dict = {
   addDeckGenBtn: "✅ Тупланманы өстәү",
   genAdded: (title, n) => `✅ «${title}» тупланмасы өстәлде · ${n} сүз`,
   genCancelled: "Тупланма ясау кире кагылды.",
-  decksTitle: "📚 <b>Тупланмалар</b>",
-  deckLine: (title, total, on, fresh, due) => `${on ? "✅" : "▫️"} <b>${title}</b> · ${total} сүз${on ? `\n     яңа ${fresh} · кабатларга ${due}` : ""}`,
-  decksFooter: "<i>Үз AI-тупланмагыз: /gen тема</i>",
-  deckSubscribed: (title) => `✅ <b>${title}</b> тупланмасы өстәлде.`,
   statsText: (s) =>
-    `📊 <b>Алгарыш</b> · бөтен вакыт эчендә\n\n🏆 Өйрәндем: ${s.learned}\n🌳 Беләм: ${s.known}\n🌿 Өйрәнәм: ${s.learning}\n🌱 Алда яңа сүзләр: ${s.fresh}\n\n🧠 Хәтер суммасы: ${s.memory} көн\n<i>башланган барлык сүзләр хәтердә барлыгы ничә көн саклана</i>\n🔥 Рәттән ${s.streak} көн\n🔁 Барлык кабатлаулар: ${s.total} · 30 көндә: ${s.r30}\n🎯 30 көндә истә калу: ${s.retention}\n\n🗓 7 көнгә фараз: ${s.forecast}`,
+    `📊 <b>Алгарыш</b> · бөтен вакыт эчендә\n\n🎓 ${s.level > 20 ? "Барлык 20 дәрәҗә үтелде" : levelName(s.level)}${s.coverage == null ? "" : ` · текстта таныш сүзләр: ≈${s.coverage}%`}\n🏆 Өйрәндем: ${s.learned}\n🌳 Беләм: ${s.known}\n🌿 Өйрәнәм: ${s.learning}\n🌱 Алда яңа сүзләр: ${s.fresh}\n\n🧠 Хәтер суммасы: ${s.memory} көн\n<i>башланган барлык сүзләр хәтердә барлыгы ничә көн саклана</i>\n🔥 Рәттән ${s.streak} көн\n🔁 Барлык кабатлаулар: ${s.total} · 30 көндә: ${s.r30}\n🎯 30 көндә истә калу: ${s.retention}\n\n🗓 7 көнгә фараз: ${s.forecast}`,
   settingsTitle: "⚙️ <b>Көйләүләр</b>\nҮзгәртү өчен төймәгә басыгыз.",
   setLang: "🌐 Тел: Татарча",
   setMode: (r) => `🎯 Режим: ${r === 0.85 ? "Җиңел" : r === 0.95 ? "Көчәйтелгән" : "Оптималь"} · ${Math.round(r * 100)}%`,
@@ -93,7 +92,7 @@ export const tt: Dict = {
   setRemind: (t) => `⏰ Искә төшерү: ${t}`,
   setDir: (d) => `↔️ Юнәлеш: ${d === "both" ? "икесе дә" : d === "ru_tt" ? "русча → татарча" : "татарча → русча"}`,
   setAuto: (on) => `🔊 Автомат тавыш: ${on ? "кабызылган" : "сүндерелгән"}`,
-  help: "<b>Командалар</b>\n/learn — кабатлау\n/decks — тупланмалар\n/gen тема — AI-тупланма\n/stats — алгарыш\n/settings — көйләүләр\n/undo — бәяне кире алу\n\nҮз сүзегезне өстәү өчен, аны чатка языгыз. Исемлек итеп тә була — 20 юлга кадәр. Шул ук хәбәрдәге сылтама карточкага беркетелә.\n\n<i>Чыганаклар: сүзләрнең ешлыгы — corpus.tatar язма корпусы; мисалларның бер өлеше — Tatoeba (CC BY 2.0 FR); тавыш — сөйләм синтезы.</i>",
+  help: "<b>Командалар</b>\n/learn — кабатлау\n/levels — дәрәҗәләр\n/gen тема — AI-тупланма\n/stats — алгарыш\n/settings — көйләүләр\n/undo — бәяне кире алу\n\nҮз сүзегезне өстәү өчен, аны чатка языгыз. Исемлек итеп тә була — 20 юлга кадәр. Шул ук хәбәрдәге сылтама карточкага беркетелә.\n\n<i>Чыганаклар: сүзләрнең ешлыгы — corpus.tatar язма корпусы; мисалларның бер өлеше — Tatoeba (CC BY 2.0 FR); тавыш — сөйләм синтезы.</i>",
   helpAdd: "Сүзне яки гыйбарәне чатка языгыз, мәсәлән <code>рәхмәт</code>. Берьюлы берничә юл язарга була, чыганакка сылтаманы шул ук хәбәргә өстәгез.",
   maintenance: "⏳ Техник тәнәфес: бушлай серверның көнлек лимиты бетте. Яңадан эшли башлау вакыты: 03:00 (Мәскәү вакыты). Алгарыш сакланган.",
   unknownCommand: "Мондый команданы белмим. /help",
@@ -105,8 +104,16 @@ export const tt: Dict = {
   continueBtn: "▶ Дәвам итү",
   posName: (code) => POS[code] ?? code,
   levelTitle: levelName,
+  levelUp: (from, to, pct) => `${levelName(from)}нең барлык 100 сүзе дә өйрәнелә. ${levelName(to)}не ачам.${covered(pct)}`,
+  levelsDone: (pct) => `Барлык 2 000 сүз дә өйрәнелә! 🎉 Алга таба — график буенча кабатлаулар. Үз сүзләрегезне теләсә кайчан өстәп була.${covered(pct)}`,
+  levelsTitle: "📚 <b>Дәрәҗәләр</b>",
+  levelsPassed: (list) => `✅ Үтелгән: ${list}`,
+  levelProgress: (n, seen, total) => `▶️ ${levelName(n)} · ${seen}/${total}`,
+  levelsAhead: (n) => `🔒 Алда: ${n}`,
+  levelsCoverage: (pct) => `📖 Текстта таныш сүзләр: ≈${pct}%`,
+  openSkippedBtn: (range) => `Калдырылган дәрәҗәләрне ачу (${range})`,
   cmdLearn: "Сүзләрне кабатлау",
-  cmdDecks: "Тупланмалар",
+  cmdLevels: "Дәрәҗәләр",
   cmdGen: "Тема буенча AI-тупланма",
   cmdStats: "Алгарыш",
   cmdSettings: "Көйләүләр",

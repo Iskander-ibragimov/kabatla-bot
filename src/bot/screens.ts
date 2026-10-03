@@ -1,7 +1,7 @@
-import type { DeckRow, User } from "../db/repo";
+import type { User } from "../db/repo";
 import { dict } from "../i18n";
 import type { Lang } from "../srs/fsrs";
-import type { Cumulative } from "../stats/service";
+import type { Cumulative, LevelsView } from "../stats/service";
 import type { OnboardingScreen } from "../users/service";
 import { REMIND_TIMES } from "../users/service";
 import type { Button, Keyboard, Rendered } from "./views";
@@ -9,7 +9,16 @@ import { esc } from "./views";
 
 const btn = (text: string, data: string, style?: Button["style"]): Button => (style ? { text, callback_data: data, style } : { text, callback_data: data });
 const tzLabel = (min: number) => `UTC${min >= 0 ? "+" : "−"}${Math.floor(Math.abs(min) / 60)}${Math.abs(min) % 60 ? ":" + String(Math.abs(min) % 60).padStart(2, "0") : ""}`;
-export const deckTitle = (d: Pick<DeckRow, "titleRu" | "titleTt">, lang: Lang) => (lang === "ru" ? d.titleRu : d.titleTt);
+/** Sorted level numbers as ranges: [1, 2, 3, 5] → "1–3, 5". */
+function ranges(levels: number[]): string {
+  const out: string[] = [];
+  for (let i = 0; i < levels.length; i++) {
+    const first = levels[i]!;
+    while (levels[i + 1] === levels[i]! + 1) i++;
+    out.push(levels[i] === first ? `${first}` : `${first}–${levels[i]}`);
+  }
+  return out.join(", ");
+}
 
 export function renderOnboarding(s: OnboardingScreen, lang: Lang): Rendered {
   const t = dict(lang);
@@ -31,13 +40,16 @@ export function renderOnboarding(s: OnboardingScreen, lang: Lang): Rendered {
   }
 }
 
-export function renderDecks(list: (DeckRow & { subscribed: boolean; newCount: number; dueCount: number })[], lang: Lang): Rendered {
+export function renderLevels(v: LevelsView, lang: Lang): Rendered {
   const t = dict(lang);
-  const lines = list.map((d) => t.deckLine(esc(deckTitle(d, lang)), d.total, d.subscribed, d.newCount, d.dueCount));
-  const off = list.filter((d) => !d.subscribed);
-  const kb: Keyboard = [];
-  for (let i = 0; i < off.length; i += 2) kb.push(off.slice(i, i + 2).map((d) => btn(`+ ${deckTitle(d, lang)}`, `sub:${d.id}`)));
-  return { text: [t.decksTitle, "", ...lines, "", t.decksFooter].join("\n"), keyboard: kb };
+  const lines = [t.levelsTitle];
+  if (v.passed.length) lines.push(t.levelsPassed(ranges(v.passed)));
+  for (const l of v.inProgress) lines.push(t.levelProgress(l.levelNo, l.seen, l.total));
+  if (v.ahead > 0) lines.push(t.levelsAhead(v.ahead));
+  // The title of an AI deck already starts with 🤖.
+  for (const d of v.own) lines.push(`${d.kind === "custom" ? "📝 " : ""}${esc(lang === "ru" ? d.titleRu : d.titleTt)} · ${d.total}`);
+  if (v.coveragePct != null) lines.push(t.levelsCoverage(v.coveragePct));
+  return { text: lines.join("\n"), keyboard: v.skipped.length ? [[btn(t.openSkippedBtn(ranges(v.skipped)), "lv:skip")]] : [] };
 }
 
 export function renderSettings(u: User): Rendered {
@@ -54,7 +66,7 @@ export function renderSettings(u: User): Rendered {
 export function renderStats(s: Cumulative, lang: Lang): string {
   const t = dict(lang);
   return t.statsText({
-    streak: s.streak, learned: s.learned, known: s.known, learning: s.learning, fresh: s.fresh, memory: s.memory, total: s.total, r30: s.r30,
+    level: s.level, coverage: s.coveragePct, streak: s.streak, learned: s.learned, known: s.known, learning: s.learning, fresh: s.fresh, memory: s.memory, total: s.total, r30: s.r30,
     retention: s.retention30 == null ? "—" : `${Math.round(s.retention30 * 100)}%`, forecast: s.forecast7.join(" · "),
   });
 }

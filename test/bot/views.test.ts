@@ -73,7 +73,7 @@ describe("views", () => {
     expect(text).toContain("Всего: 🏆 37 · 🌳 20 · 🌿 14 · 🌱 429");
     expect(text).toContain("через 8 мин");
     expect(text).toContain("🔥 Серия: 5 дн.");
-    expect(keyboard.flat().map((b) => b.callback_data)).toEqual(["help:add", "decks"]);
+    expect(keyboard.flat().map((b) => [b.text, b.callback_data])).toEqual([["➕ Добавить слова", "help:add"], ["📚 Уровни", "levels"]]);
   });
 
   it("add preview shows link host and actions", () => {

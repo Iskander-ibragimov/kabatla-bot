@@ -4,6 +4,9 @@ const POS: Record<string, string> = {
   post: "послелог", conj: "союз", part: "частица", intj: "межд.", phr: "фраза",
 };
 
+/** Closing sentence of the level messages; left out while the coverage is unknown. */
+const covered = (pct: number | null) => (pct == null ? "" : ` Пройденные слова покрывают ≈${pct}% обычного текста.`);
+
 export const ru = {
   again: "Снова",
   hard: "Трудно",
@@ -28,7 +31,7 @@ export const ru = {
   doneNextLearning: (after: string) => `Карточки на закреплении вернутся через ${after}. Я напомню.`,
   streak: (d: number) => `🔥 Серия: ${d} дн.`,
   addWords: "➕ Добавить слова",
-  decksBtn: "📚 Колоды",
+  decksBtn: "📚 Уровни",
   add: "✅ Добавить",
   addAll: (n: number) => `✅ Добавить все (${n})`,
   edit: "✏️ Изменить",
@@ -69,12 +72,8 @@ export const ru = {
   addDeckGenBtn: "✅ Добавить колоду",
   genAdded: (title: string, n: number) => `✅ Колода «${title}» добавлена · ${n} слов`,
   genCancelled: "Генерация отменена.",
-  decksTitle: "📚 <b>Колоды</b>",
-  deckLine: (title: string, total: number, on: boolean, fresh: number, due: number) => `${on ? "✅" : "▫️"} <b>${title}</b> · ${total} сл.${on ? `\n     новых ${fresh} · к повтору ${due}` : ""}`,
-  decksFooter: "<i>Своя AI-колода: /gen тема</i>",
-  deckSubscribed: (title: string) => `✅ Колода <b>${title}</b> добавлена.`,
-  statsText: (s: { streak: number; learned: number; known: number; learning: number; fresh: number; memory: number; total: number; r30: number; retention: string; forecast: string }) =>
-    `📊 <b>Прогресс</b> · за всё время\n\n🏆 Выучено: ${s.learned}\n🌳 Знаю: ${s.known}\n🌿 Учу: ${s.learning}\n🌱 Новых впереди: ${s.fresh}\n\n🧠 Сумма памяти: ${s.memory} дн.\n<i>сколько дней в сумме держатся все начатые слова</i>\n🔥 Серия: ${s.streak} дн.\n🔁 Повторов всего: ${s.total} · за 30 дн.: ${s.r30}\n🎯 Удержание за 30 дн.: ${s.retention}\n\n🗓 Прогноз на 7 дней: ${s.forecast}`,
+  statsText: (s: { level: number; coverage: number | null; streak: number; learned: number; known: number; learning: number; fresh: number; memory: number; total: number; r30: number; retention: string; forecast: string }) =>
+    `📊 <b>Прогресс</b> · за всё время\n\n🎓 ${s.level > 20 ? "Все 20 уровней пройдены" : `Уровень ${s.level}`}${s.coverage == null ? "" : ` · покрытие текста ≈${s.coverage}%`}\n🏆 Выучено: ${s.learned}\n🌳 Знаю: ${s.known}\n🌿 Учу: ${s.learning}\n🌱 Новых впереди: ${s.fresh}\n\n🧠 Сумма памяти: ${s.memory} дн.\n<i>сколько дней в сумме держатся все начатые слова</i>\n🔥 Серия: ${s.streak} дн.\n🔁 Повторов всего: ${s.total} · за 30 дн.: ${s.r30}\n🎯 Удержание за 30 дн.: ${s.retention}\n\n🗓 Прогноз на 7 дней: ${s.forecast}`,
   settingsTitle: "⚙️ <b>Настройки</b>\nНажмите на пункт, чтобы изменить.",
   setLang: "🌐 Язык: Русский",
   setMode: (r: number) => `🎯 Режим: ${r === 0.85 ? "Лёгкий" : r === 0.95 ? "Интенсив" : "Оптимальный"} · ${Math.round(r * 100)}%`,
@@ -82,7 +81,7 @@ export const ru = {
   setRemind: (t: string) => `⏰ Напоминание: ${t}`,
   setDir: (d: string) => `↔️ Направление: ${d === "both" ? "оба" : d === "ru_tt" ? "русский → татарский" : "татарский → русский"}`,
   setAuto: (on: boolean) => `🔊 Автоозвучка: ${on ? "вкл" : "выкл"}`,
-  help: "<b>Команды</b>\n/learn — повторять\n/decks — колоды\n/gen тема — AI-колода\n/stats — прогресс\n/settings — настройки\n/undo — отменить оценку\n\nЧтобы добавить своё слово, просто напишите его в чат. Можно списком до 20 строк. Ссылка в том же сообщении прикрепится к карточке.\n\n<i>Источники: частота слов — письменный корпус corpus.tatar; примеры — в том числе из Tatoeba (CC BY 2.0 FR); озвучка — синтез речи.</i>",
+  help: "<b>Команды</b>\n/learn — повторять\n/levels — уровни\n/gen тема — AI-колода\n/stats — прогресс\n/settings — настройки\n/undo — отменить оценку\n\nЧтобы добавить своё слово, просто напишите его в чат. Можно списком до 20 строк. Ссылка в том же сообщении прикрепится к карточке.\n\n<i>Источники: частота слов — письменный корпус corpus.tatar; примеры — в том числе из Tatoeba (CC BY 2.0 FR); озвучка — синтез речи.</i>",
   helpAdd: "Напишите слово или фразу в чат, например <code>рәхмәт</code>. Можно несколько строк сразу, а ссылку на источник — в том же сообщении.",
   maintenance: "⏳ Технический перерыв до 03:00 МСК: исчерпан дневной лимит бесплатного сервера. Прогресс сохранён.",
   unknownCommand: "Не знаю такой команды. /help",
@@ -95,9 +94,20 @@ export const ru = {
   /** Part of speech by its catalog code; an unknown code is shown as is. */
   posName: (code: string) => POS[code] ?? code,
   levelTitle: (n: number) => `Уровень ${n}`,
+  /** First line of the card that follows the opening of level `to`; every level has 100 words. */
+  levelUp: (from: number, to: number, pct: number | null) => `Все 100 слов уровня ${from} в работе. Открываю уровень ${to}.${covered(pct)}`,
+  /** Said once, when the words of level 20 have all been shown. */
+  levelsDone: (pct: number | null) => `Все 2 000 слов в работе! 🎉 Дальше — повторения по расписанию. Свои слова можно добавлять в любой момент.${covered(pct)}`,
+  /** Lines and the button of /levels; `list` and `range` are level numbers like "1–3, 5". */
+  levelsTitle: "📚 <b>Уровни</b>",
+  levelsPassed: (list: string) => `✅ Пройдено: ${list}`,
+  levelProgress: (n: number, seen: number, total: number) => `▶️ Уровень ${n} · ${seen} из ${total}`,
+  levelsAhead: (n: number) => `🔒 Впереди: ${n}`,
+  levelsCoverage: (pct: number) => `📖 Покрытие текста ≈${pct}%`,
+  openSkippedBtn: (range: string) => `Открыть пропущенные (${range})`,
   /** Command descriptions and the bot description, registered by scripts/set-webhook.ts. */
   cmdLearn: "Повторять слова",
-  cmdDecks: "Колоды",
+  cmdLevels: "Уровни",
   cmdGen: "AI-колода по теме",
   cmdStats: "Прогресс",
   cmdSettings: "Настройки",
