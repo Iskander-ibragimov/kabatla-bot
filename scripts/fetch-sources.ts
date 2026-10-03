@@ -81,12 +81,15 @@ async function buildWordforms(urls: string[]): Promise<number> {
   if (!url) throw new Error("no words_frequency_full.txt.zip link found on " + CORPUS_PAGE);
   const zip = join(WORK, baseName(url));
   await download(url, zip);
+  console.log(execFileSync("unzip", ["-l", zip], { encoding: "utf8" }));
   const unzip = spawn("unzip", ["-p", zip], { stdio: ["ignore", "pipe", "inherit"] });
   const gz = createGzip({ level: 9 });
   const outFile = createWriteStream(join(OUT, "wordforms.txt.gz"));
   gz.pipe(outFile);
   let kept = 0;
+  let seen = 0;
   for await (const line of createInterface({ input: unzip.stdout, crlfDelay: Infinity })) {
+    if (seen++ < 8) console.log(`wordforms raw line ${seen}: ${JSON.stringify(line.slice(0, 120))}`);
     const form = parseWordformLine(line, MIN_WORDFORM_COUNT);
     if (form === null) continue;
     kept++;
