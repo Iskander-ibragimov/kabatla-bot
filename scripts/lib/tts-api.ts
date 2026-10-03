@@ -16,26 +16,35 @@ export function speakable(text: string): boolean {
   return text.length >= 1 && text.length <= MAX_CHARS && /\p{Script=Cyrillic}/u.test(text);
 }
 
+/** Remembers when the speech API was last called; the 1000 ms spacing applies to the endpoint, not to one speaker. */
+export interface RateGate {
+  lastRequestAt?: number;
+}
+
 export interface ApiTtsDeps {
   fetch?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /** Shared limiter. Default: one process-wide gate when no clock is injected, otherwise a private one (test isolation). */
+  gate?: RateGate;
 }
+
+const defaultGate: RateGate = {};
 
 export function apiTts(speaker: "alsu" | "almaz", deps: ApiTtsDeps = {}): Tts {
   const doFetch = deps.fetch ?? fetch;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const now = deps.now ?? Date.now;
-  let lastRequestAt: number | undefined;
+  const gate = deps.gate ?? (deps.now || deps.sleep ? {} : defaultGate);
 
   return {
     async synth(text) {
       if (!speakable(text)) throw new TtsError(`text is not speakable: ${JSON.stringify(text.slice(0, 40))}`);
-      if (lastRequestAt !== undefined) {
-        const wait = MIN_GAP_MS - (now() - lastRequestAt);
+      if (gate.lastRequestAt !== undefined) {
+        const wait = MIN_GAP_MS - (now() - gate.lastRequestAt);
         if (wait > 0) await sleep(wait);
       }
-      lastRequestAt = now();
+      gate.lastRequestAt = now();
       let res: Response;
       try {
         res = await doFetch(`${API}?speaker=${speaker}&text=${encodeURIComponent(text)}`);

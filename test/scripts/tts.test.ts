@@ -63,3 +63,12 @@ describe("tts-api", () => {
     expect(String(err.message)).not.toContain("secret");
   });
 });
+
+describe("tts-api shared rate limit", () => {
+  it("spaces requests of different speakers when they share a gate", async () => {
+    let t = 0; const slept: number[] = [];
+    const deps = { fetch: (async () => Response.json({ wav_base64: "", sample_rate: 22050 })) as never, now: () => t, sleep: async (ms: number) => { slept.push(ms); t += ms; }, gate: {} };
+    await apiTts("alsu", deps).synth("бер"); t += 400; await apiTts("almaz", deps).synth("ике");
+    expect(slept).toEqual([600]);
+  });
+});

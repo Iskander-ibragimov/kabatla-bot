@@ -76,10 +76,11 @@ async function sample(): Promise<void> {
   }
 
   const delivered = tallies.filter((t) => t.sent > 0);
+  const piperSilent = picked.length === 0 || tallies.some((t) => t.label.startsWith("piper:") && t.sent === 0);
   const summary = [
     `Проба голосов: ${delivered.length} из 4 голосов прислали записи (слов: ${words.length}).`,
     ...tallies.map((t) => `${t.label}: ${t.sent}/${t.total}`),
-    ...(picked.length === 0 ? ["Модели Piper не скачались: пришли только два голоса (api:alsu, api:almaz)."] : []),
+    ...(piperSilent ? [`Голоса Piper не дошли: пришли только ${delivered.length === 2 ? "два голоса" : `голосов: ${delivered.length}`} (${delivered.map((t) => t.label).join(", ") || "нет"}).`] : []),
   ].join("\n");
 
   report.push("| voice | sent | total | first error |", "|---|---|---|---|");
