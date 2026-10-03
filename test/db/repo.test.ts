@@ -89,6 +89,32 @@ describe("repo", () => {
     expect(await repo.findNoteForUser(userId, "чия")).toBeNull();
   });
 
+  it("attaches a link only to a note in a deck the user owns, and only when the note has none", async () => {
+    const { ids, userId } = await seed(repo);
+    const other = await repo.insertUser({ tgId: 2, chatId: 2, lang: "ru", now: T });
+    const [mine, linked] = await repo.insertNotes(await repo.customDeck(userId, T), [note("рәхмәт"), { ...note("сәлам"), sourceUrl: "https://old.example" }]);
+    const [theirs] = await repo.insertNotes(await repo.customDeck(other, T), [note("дус")]);
+    const res = await repo.batch([
+      repo.setNoteSourceUrlStmt(userId, ids[0]!, "https://x.example/level"),   // a level word: shared by everyone
+      repo.setNoteSourceUrlStmt(userId, theirs!, "https://x.example/theirs"),  // another user's word
+      repo.setNoteSourceUrlStmt(userId, linked!, "https://x.example/second"),  // has a link already
+      repo.setNoteSourceUrlStmt(userId, mine!, "https://x.example/mine"),
+    ]);
+    expect(res.map((r) => r.meta.changes)).toEqual([0, 0, 0, 1]);
+    const { results } = await env.DB.prepare("SELECT id, source_url FROM notes WHERE id IN (?, ?, ?, ?) ORDER BY id").bind(ids[0], mine, linked, theirs).all();
+    expect(results).toEqual([
+      { id: ids[0], source_url: null }, { id: mine, source_url: "https://x.example/mine" }, { id: linked, source_url: "https://old.example" }, { id: theirs, source_url: null },
+    ]);
+  });
+
+  it("findNotesForUser tells whether the note is in a deck the user owns", async () => {
+    const { userId } = await seed(repo);
+    await repo.insertNotes(await repo.customDeck(userId, T), [note("рәхмәт")]);
+    const found = await repo.findNotesForUser(userId, ["китап", "рәхмәт"]);
+    expect(found.get("китап")).toMatchObject({ word: "китап", owned: false, deckTitleRu: "Уровень 1" });
+    expect(found.get("рәхмәт")).toMatchObject({ word: "рәхмәт", owned: true, deckTitleRu: "Мои слова" });
+  });
+
   it("updateUser patches only given fields", async () => {
     const { userId } = await seed(repo);
     await repo.updateUser(userId, { streak: 3, lastStudyDay: "2026-09-30" });

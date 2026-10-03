@@ -51,6 +51,8 @@ export interface NoteFields {
 export type NoteInput = Pick<NoteFields, "word" | "transcription" | "pos" | "translation" | "exampleTt" | "exampleRu"> &
   Partial<Pick<NoteFields, "exampleSrc" | "audioFileId" | "sourceUrl">>;
 export interface NoteRow extends NoteFields { id: number; deckId: number }
+/** A note of a deck the user is subscribed to, with the titles of that deck; `owned`: the deck is the user's own, not a level. */
+export interface UserNote extends NoteRow { deckTitleRu: string; deckTitleTt: string; owned: boolean }
 export interface CardRow extends NoteFields { id: number; noteId: number; direction: Direction; mem: Mem; buriedDay: string | null }
 export interface NewNote extends NoteFields { noteId: number; direction: Direction }
 export interface QueueCounts { learning: number; review: number; newAvailable: number; newDoneToday: number; easyNewToday: number }
@@ -234,19 +236,22 @@ export class Repo {
   /**
    * Batch version of findNoteForUser: one D1 call for many words, keyed by wordKey.
    * When a word is both in a deck the user owns and in an open level, the own note wins: the queue shows that one and skips the level's.
+   * `owned` is true for a note in a deck of the user's own; a level note is shared by every learner.
    */
-  async findNotesForUser(userId: number, words: string[]): Promise<Map<string, NoteRow & { deckTitleRu: string; deckTitleTt: string }>> {
+  async findNotesForUser(userId: number, words: string[]): Promise<Map<string, UserNote>> {
     const keys = [...new Set(words.map(wordKey))];
-    const out = new Map<string, NoteRow & { deckTitleRu: string; deckTitleTt: string }>();
+    const out = new Map<string, UserNote>();
     if (!keys.length) return out;
     const { results } = await this.db.prepare(
-      `SELECT n.id, n.deck_id, n.word_key, ${NOTE_COLS}, d.title_ru, d.title_tt FROM notes n
-       JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ? JOIN decks d ON d.id = n.deck_id
-       WHERE n.word_key IN (SELECT value FROM json_each(?)) ORDER BY (d.owner_id IS NULL), n.id`,
+      `SELECT n.id, n.deck_id, n.word_key, ${NOTE_COLS}, d.title_ru, d.title_tt, d.owner_id IS ?1 AS owned FROM notes n
+       JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ?1 JOIN decks d ON d.id = n.deck_id
+       WHERE n.word_key IN (SELECT value FROM json_each(?2)) ORDER BY (d.owner_id IS NULL), n.id`,
     ).bind(userId, JSON.stringify(keys)).all<Record<string, unknown>>();
     for (const r of results) {
       const k = r.word_key as string;
-      if (!out.has(k)) out.set(k, { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, deckTitleRu: r.title_ru as string, deckTitleTt: r.title_tt as string });
+      if (!out.has(k)) {
+        out.set(k, { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, deckTitleRu: r.title_ru as string, deckTitleTt: r.title_tt as string, owned: r.owned === 1 });
+      }
     }
     return out;
   }
@@ -291,9 +296,14 @@ export class Repo {
     ).bind(limit).all<{ note_id: number; word: string; translation: string; cnt: number; last_at: number }>();
     return results.map((r) => ({ noteId: r.note_id, word: r.word, translation: r.translation, count: r.cnt, lastAt: r.last_at }));
   }
-  /** Attaches a link to a note that has none yet. */
-  setNoteSourceUrlStmt(noteId: number, url: string): D1PreparedStatement {
-    return this.db.prepare("UPDATE notes SET source_url = ? WHERE id = ? AND source_url IS NULL").bind(url, noteId);
+  /**
+   * Attaches the user's link to a note that has none yet. Only a note in a deck this user owns is touched:
+   * a level note is shown to every learner, so nobody's link may be written on it.
+   */
+  setNoteSourceUrlStmt(userId: number, noteId: number, url: string): D1PreparedStatement {
+    return this.db.prepare(
+      "UPDATE notes SET source_url = ?1 WHERE id = ?2 AND source_url IS NULL AND deck_id IN (SELECT id FROM decks WHERE owner_id = ?3)",
+    ).bind(url, noteId, userId);
   }
   async setNoteAudio(noteId: number, fileId: string): Promise<void> {
     await this.db.prepare("UPDATE notes SET audio_file_id = ? WHERE id = ?").bind(fileId, noteId).run();

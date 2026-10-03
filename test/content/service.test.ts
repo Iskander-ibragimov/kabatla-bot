@@ -1,12 +1,13 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { renderAddPreview } from "../../src/bot/views";
+import { renderAddPreview, renderCard } from "../../src/bot/views";
 import { Repo, type User } from "../../src/db/repo";
 import { LlmClient } from "../../src/content/llm";
 import { ContentService } from "../../src/content/service";
 import { transcribe } from "../../src/content/transcribe";
 import { consume } from "../../src/entitlements/service";
 import { ru } from "../../src/i18n/ru";
+import { ReviewService } from "../../src/review/service";
 import { tt } from "../../src/i18n/tt";
 import { dayWindow } from "../../src/users/service";
 import { countingDb } from "../helpers/countingDb";
@@ -25,6 +26,13 @@ async function ownNotes(userId: number) {
     `SELECT n.word, n.transcription, n.pos, n.translation, n.example_tt, n.example_ru, n.example_src, n.audio_file_id, n.source_url
      FROM notes n JOIN decks d ON d.id = n.deck_id WHERE d.owner_id = ? AND d.kind = 'custom' ORDER BY n.id`,
   ).bind(userId).all<Record<string, string | null>>();
+  return results;
+}
+/** Every note of the catalog with its link: a catalog note is shared by all learners and never carries a user's link. */
+async function catalogLinks() {
+  const { results } = await env.DB.prepare(
+    "SELECT n.word, n.source_url FROM notes n JOIN decks d ON d.id = n.deck_id WHERE d.owner_id IS NULL ORDER BY n.id",
+  ).all<{ word: string; source_url: string | null }>();
   return results;
 }
 const jobsCount = async () => (await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs").first<{ n: number }>())!.n;
@@ -53,18 +61,53 @@ describe("content service: own words", () => {
     expect(await jobsCount()).toBe(0);
   });
 
-  it("duplicate in a subscribed deck is not added again but gets the link", async () => {
+  it("a duplicate in an open level is not added again, and the shared catalog note gets no link", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
     const llm = failingLlm();
     const svc = service(repo, llm);
     const r = await svc.prepareAdd(user, " Китап  https://x.com/v", []);
-    expect(r).toMatchObject({ kind: "duplicates-only", duplicates: [{ word: "Китап", deckTitle: "Уровень 1", linkAdded: true }] });
-    expect((await repo.findNoteForUser(user.id, "китап"))!.sourceUrl).toBe("https://x.com/v");
+    // The reply does not claim a link it has not stored.
+    expect(r).toEqual({ kind: "duplicates-only", duplicates: [{ word: "Китап", deckTitle: "Уровень 1", linkAdded: false }] });
+    expect(await catalogLinks()).toEqual([{ word: "китап", source_url: null }]);
     const notes = await env.DB.prepare("SELECT COUNT(*) AS n FROM notes").first<{ n: number }>();
     expect(notes!.n).toBe(1);
     const inTatar = await svc.prepareAdd({ ...user, lang: "tt" }, "китап", []);
     expect(inTatar).toMatchObject({ kind: "duplicates-only", duplicates: [{ word: "китап", deckTitle: "1 нче дәрәҗә", linkAdded: false }] });
     expect(llm.urls).toEqual([]);
+  });
+
+  it("a link sent by one learner for a level word is not shown on another learner's card", async () => {
+    const a = await seedUser(env.DB, { now: T, words: 1, tgId: 1 }); // l01: китап
+    const b = await seedUser(env.DB, { now: T, words: 1, tgId: 2 });
+    const r = await service(a.repo, failingLlm()).prepareAdd(a.user, "китап https://private.example/a", [{ type: "url", offset: 6, length: 25 }]);
+    expect(r).toEqual({ kind: "duplicates-only", duplicates: [{ word: "китап", deckTitle: "Уровень 1", linkAdded: false }] });
+    for (const { repo, user } of [b, a]) {
+      const screen = await new ReviewService(repo, T).nextScreen(user);
+      if (screen.kind !== "card") throw new Error(screen.kind);
+      expect(screen.view).toMatchObject({ word: "китап", sourceUrl: null });
+      const text = renderCard(screen.view, screen.counts, screen.intervals, false, "ru").text;
+      expect(text).not.toContain("🔗");
+      expect(text).not.toContain("private.example");
+    }
+    expect(await catalogLinks()).toEqual([{ word: "китап", source_url: null }]);
+  });
+
+  it("a duplicate in a deck the learner owns gets the link: My words and an AI deck", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    await repo.insertNotes(await repo.customDeck(user.id, T), [note("рәхмәт"), { ...note("сәлам"), sourceUrl: "https://old.example/s" }]);
+    const ai = await repo.insertDeck({ slug: null, kind: "ai", titleRu: "🤖 юл", titleTt: "🤖 юл", levelNo: null, coveragePct: null, ownerId: user.id });
+    await repo.insertNotes(ai, [note("билет")]);
+    await repo.subscribe(user.id, ai, T);
+    const r = await service(repo, failingLlm()).prepareAdd(user, "рәхмәт\nсәлам\nбилет\nhttps://example.com/new", []);
+    expect(r).toEqual({ kind: "duplicates-only", duplicates: [
+      { word: "рәхмәт", deckTitle: "Мои слова", linkAdded: true },
+      { word: "сәлам", deckTitle: "Мои слова", linkAdded: false }, // it has a link already
+      { word: "билет", deckTitle: "🤖 юл", linkAdded: true },
+    ] });
+    const { results } = await env.DB.prepare("SELECT word, source_url FROM notes WHERE deck_id IN (SELECT id FROM decks WHERE owner_id = ?) ORDER BY id").bind(user.id).all();
+    expect(results).toEqual([
+      { word: "рәхмәт", source_url: "https://example.com/new" }, { word: "сәлам", source_url: "https://old.example/s" }, { word: "билет", source_url: "https://example.com/new" },
+    ]);
   });
 
   it("pending url applies to the next words within 10 minutes only", async () => {
@@ -164,8 +207,9 @@ describe("content service: own words", () => {
     const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 7 }); // l01 has «өй»
     const llm = llmReturning([{ input: "ой", lang: "tt", word: "өй", pos: "n", translation: "дом", exampleTt: "Өй зур.", exampleRu: "Дом большой." }]);
     const r = await service(repo, llm).prepareAdd(user, "ой https://example.com/h", []);
-    expect(r).toEqual({ kind: "duplicates-only", duplicates: [{ word: "өй", deckTitle: "Уровень 1", linkAdded: true }] });
-    expect((await repo.findNoteForUser(user.id, "өй"))!.sourceUrl).toBe("https://example.com/h");
+    // «өй» is a word of the open level: a shared note, so the link is not stored and the reply does not claim it.
+    expect(r).toEqual({ kind: "duplicates-only", duplicates: [{ word: "өй", deckTitle: "Уровень 1", linkAdded: false }] });
+    expect((await catalogLinks()).filter((n) => n.source_url !== null)).toEqual([]);
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM previews").first()).toEqual({ n: 0 });
   });
 
@@ -315,25 +359,28 @@ describe("content service: own words", () => {
   });
 
   it("20 lines cost one LLM request and at most 7 D1 calls", async () => {
-    // The longest path: a remembered link, duplicates that get it, catalog words, restored words found in both lookups, AI cards.
+    // The longest path: a remembered link, duplicates in own decks that get it, catalog words, restored words found in both lookups, AI cards.
     const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 7, patch: { pendingUrl: "https://youtu.be/q", pendingUrlAt: T } });
     await seedLevels(env.DB, { 5: ["бәхет", "шатлык", "әни"] });
-    const own = Array.from({ length: 15 }, (_, i) => `сүз${"абвгдежзиклмноп"[i]}`);
-    const lines = ["китап", "ой", "бәхет", "шатлык", "эни", ...own];
+    await repo.insertNotes(await repo.customDeck(user.id, T), [note("дус"), note("күңел")]);
+    const own = Array.from({ length: 12 }, (_, i) => `сүз${"абвгдежзиклм"[i]}`);
+    const lines = ["китап", "ой", "бәхет", "шатлык", "эни", "дус", "кунел", "күбәләк", ...own];
     expect(lines).toHaveLength(20);
-    const llm = llmReturning([card("эни", "мама", "әни"), card("ой", "дом", "өй"), ...own.map((w) => card(w, "слово"))]);
+    const llm = llmReturning([card("эни", "мама", "әни"), card("ой", "дом", "өй"), card("кунел", "душа", "күңел"), card("күбәләк", "бабочка"), ...own.map((w) => card(w, "слово"))]);
     const db = countingDb(env.DB);
     const r = await preview(new ContentService(new Repo(db), { llm: new LlmClient([provider("https://llm/v1")], llm) }, T), user, lines.join("\n"));
-    expect(r.items).toHaveLength(18);
+    expect(r.items).toHaveLength(16);
     expect(r.items.filter((i) => !i.ai).map((i) => i.word)).toEqual(["бәхет", "шатлык", "әни"]);
     expect(r.items.every((i) => i.sourceUrl === "https://youtu.be/q")).toBe(true);
     expect(r.duplicates).toEqual([
-      { word: "китап", deckTitle: "Уровень 1", linkAdded: true }, { word: "өй", deckTitle: "Уровень 1", linkAdded: true },
+      { word: "китап", deckTitle: "Уровень 1", linkAdded: false }, { word: "өй", deckTitle: "Уровень 1", linkAdded: false },
+      { word: "дус", deckTitle: "Мои слова", linkAdded: true }, { word: "күңел", deckTitle: "Мои слова", linkAdded: true },
     ]);
     expect(llm.urls).toEqual(["https://llm/v1/chat/completions"]);
     // pending link cleared, two lookups by the typed words, two by the restored ones, the links of the duplicates in one batch, the preview.
     expect(db.calls).toBe(7);
-    expect((await repo.findNoteForUser(user.id, "өй"))!.sourceUrl).toBe("https://youtu.be/q");
+    expect((await ownNotes(user.id)).map((n) => [n.word, n.source_url])).toEqual([["дус", "https://youtu.be/q"], ["күңел", "https://youtu.be/q"]]);
+    expect((await catalogLinks()).filter((n) => n.source_url !== null)).toEqual([]);
   });
 
   it("words with Tatar letters that the AI returns as typed need no second lookup", async () => {

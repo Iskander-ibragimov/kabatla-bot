@@ -118,8 +118,9 @@ export class ContentService {
       if (!own && !draft) manual.push({ word: l.word, url: l.url });
       else if (repeated(key)) continue;
       else if (own) {
-        const linkAdded = !!l.url && !own.sourceUrl;
-        if (linkAdded) links.push(this.repo.setNoteSourceUrlStmt(own.id, l.url!));
+        // A link goes only on a note of the user's own deck. A level note is shared: there the link is dropped and not announced.
+        const linkAdded = !!l.url && own.owned && !own.sourceUrl;
+        if (linkAdded) links.push(this.repo.setNoteSourceUrlStmt(user.id, own.id, l.url!));
         duplicates.push({ word, deckTitle: user.lang === "ru" ? own.deckTitleRu : own.deckTitleTt, linkAdded });
       } else if (draft) drafts.push(draft);
     }
