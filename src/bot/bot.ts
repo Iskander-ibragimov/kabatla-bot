@@ -14,7 +14,7 @@ import { cumulative, levelsView } from "../stats/service";
 import type { TgApi } from "../tg/client";
 import { REMIND_TIMES, RETENTIONS, advanceOnboarding, getOrCreate, langFromTelegram, setSetting, startOnboarding } from "../users/service";
 import { learnKeyboard, renderGenPreview, renderLevels, renderOnboarding, renderSettings, renderStats } from "./screens";
-import { type Keyboard, type Rendered, SHOWN, clip, esc, hostOf, renderAddPreview, renderCard, renderDone, renderLevelUp } from "./views";
+import { type Keyboard, type Rendered, addReplyText, esc, hostOf, renderAddPreview, renderCard, renderDone, renderLevelUp } from "./views";
 
 export interface BotDeps {
   config: Config;
@@ -279,19 +279,13 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     deps.waitUntil((async () => {
       try {
         const res = await svc.prepareAdd(user, text, entities);
-        // Up to 20 lines about duplicates and untranslated words stand around the preview: each shows a cut text (SHOWN), so the message always fits.
-        const dups = "duplicates" in res ? res.duplicates.map((d) => t.dupLine(esc(clip(d.word, SHOWN.word)), esc(clip(d.deckTitle, SHOWN.deck)), d.linkAdded)) : [];
-        const prefix = dups.length ? dups.join("\n") + "\n\n" : "";
-        const untranslated = (words: string[]) => (words.length ? "\n\n" + t.notTranslated(words.map((w) => esc(clip(w, SHOWN.word))).join(", ")) : "");
         let r: Rendered;
         if (res.kind === "ask-words") r = { text: t.askWords(esc(hostOf(res.url))), keyboard: [] };
         else if (res.kind === "empty") r = { text: t.helpAdd, keyboard: [] };
         else if (res.kind === "too-long") r = { text: t.tooLong(res.max), keyboard: [] };
-        else if (res.kind === "duplicates-only") r = { text: dups.join("\n"), keyboard: learnKeyboard(user.lang) };
-        else if (res.kind === "manual") r = { text: prefix + t.manualAsk(esc(res.word)) + untranslated(res.others), keyboard: [] };
         else {
-          const p = renderAddPreview(res.items, res.previewId, user.lang);
-          r = { text: prefix + p.text + untranslated(res.manual), keyboard: p.keyboard };
+          const keyboard = res.kind === "preview" ? renderAddPreview(res.items, res.previewId, user.lang).keyboard : res.kind === "duplicates-only" ? learnKeyboard(user.lang) : [];
+          r = { text: addReplyText(res, user.lang), keyboard };
         }
         await editOrSend(ctx, m.message_id, r);
       } catch (e) {

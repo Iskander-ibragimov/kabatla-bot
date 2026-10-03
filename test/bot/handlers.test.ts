@@ -241,7 +241,11 @@ describe("bot handlers", () => {
       const { h } = await ready(lang, maximal);
       await h.text(message(0, 20));
       expect(h.lastText()).toContain((lang === "ru" ? ru : tt).foundN(20));
-      expect(h.lastText().split("\n").filter((l) => l.startsWith("• "))).toHaveLength(20);
+      const lines = h.lastText().split("\n").filter((l) => l.startsWith("• "));
+      expect(lines).toHaveLength(20);
+      expect(new Set(lines).size).toBe(20);
+      // Twenty phrases leave room for every word as typed: only transcriptions and the ends of the translations go.
+      for (let i = 0; i < 20; i++) expect(lines[i]).toContain(`<b>${phrase(i)}</b>`);
       expect(visibleLength(h.lastText())).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
     });
 
@@ -250,9 +254,15 @@ describe("bot handlers", () => {
       await ownDeck(repo, u.id, 19);
       await h.text(message(0, 20));
       const text = h.lastText();
-      expect(text.split("\n").filter((l) => l.startsWith("ℹ️"))).toHaveLength(19);
+      const known = text.split("\n").filter((l) => l.startsWith("ℹ️"));
+      expect(known).toHaveLength(19);
+      // The known phrases differ only in their last word, and each line still shows which one it is about.
+      expect(new Set(known).size).toBe(19);
+      known.forEach((l, i) => expect(l).toContain(`${String(i).padStart(2, "0")}»`));
       expect(text).toContain("🔗,"); // the link was attached and the line says so
-      expect(text).toContain(`<i>${"ә".repeat(300)}</i>\n${"я".repeat(300)}`);
+      // The new card is whole: word, transcription, translation and both examples.
+      expect(text).toContain(`<b>${phrase(19)}</b>\n[`);
+      expect(text).toContain(`<b>${"я".repeat(200)}</b><blockquote><i>${"ә".repeat(300)}</i>\n${"я".repeat(300)}</blockquote>`);
       expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
     });
 
@@ -271,7 +281,9 @@ describe("bot handlers", () => {
       const { h } = await ready("tt");
       await h.text(message(0, 20));
       expect(h.lastText()).toContain(tt.manualAsk(phrase(0)));
-      expect(h.lastText()).toContain(`${"яя ".repeat(9)}яя…, `);
+      // The list fits, so every phrase is named whole.
+      for (let i = 1; i < 20; i++) expect(h.lastText()).toContain(phrase(i));
+      expect(h.lastText()).not.toContain("…");
       expect(visibleLength(h.lastText())).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
     });
 

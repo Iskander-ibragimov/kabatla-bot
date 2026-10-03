@@ -7,7 +7,7 @@ export type Button = InlineKeyboardButton.CallbackButton;
 export type Keyboard = Button[][];
 export interface Rendered { text: string; keyboard: Keyboard }
 
-import type { CardDraft } from "../content/service";
+import type { CardDraft, Duplicate } from "../content/service";
 import type { CardView, Counts, DaySummary, Feedback, LevelUp } from "../review/service";
 export type { CardView, Counts, DaySummary, Feedback, LevelUp };
 /** What a preview shows of a card that is not saved yet. */
@@ -20,19 +20,78 @@ export function hostOf(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
 }
 
+/** Telegram's limit for the text of one message; it counts the text after the HTML is parsed. */
+const TEXT_LIMIT = 4096;
+/** The length Telegram counts: a tag is not text, an entity is the one character it stands for. */
+const visibleLength = (html: string): number => html.replace(/<[^>]+>/g, "").replace(/&(?:lt|gt|amp|quot);/g, "x").length;
+
 /**
- * How many characters of a text a line of a list shows. A Telegram message holds 4 096 characters, and a list has
- * up to 30 lines (an AI deck) or 20 (own words, with the lines about duplicates and untranslated words around it).
- * With these numbers such a message fits even when every field is as long as content/llm.ts (MAX) allows.
- * A single card is shown whole.
+ * How much of its texts a message with a list shows. Whole by default: a list is shortened only when the message
+ * would not fit, see `fitMessage`. The caps are in characters.
  */
-export const SHOWN = { word: 30, transcription: 30, translation: 40, deck: 24, host: 40 } as const;
+export interface Fit { transcriptions: boolean; translation: number; deck: number; host: number; word: number }
+const WHOLE: Fit = { transcriptions: true, translation: Infinity, deck: Infinity, host: Infinity, word: Infinity };
+/**
+ * The shortest the caps get. At these a list of 30 lines (an AI deck), and 19 lines about known words around one
+ * whole card, fit one message even when every field is as long as content/llm.ts (MAX) allows.
+ */
+const LEAST = { translation: 40, deck: 24, host: 40, word: 30 } as const;
+/** No text of a message is longer than this (a link is at most 512 characters): the top of the search for a cap. */
+const LONGEST = 512;
 
 /** The text, or its beginning and «…» when it is longer than `max` characters. Call it before `esc`, never after. */
 export function clip(s: string, max: number): string {
   if (s.length <= max) return s;
   // A cut in the middle of a surrogate pair would leave half a character.
   return `${s.slice(0, max - 1).replace(/[\uD800-\uDBFF]$/, "").trimEnd()}…`;
+}
+/** The text, or its beginning, «…» and its end when it is longer than `max`: phrases that differ in their last word stay different. */
+function clipMiddle(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const head = Math.ceil((max - 1) / 2), tail = max - 1 - head;
+  const end = tail > 0 ? s.slice(-tail).replace(/^[\uDC00-\uDFFF]/, "").trimStart() : "";
+  return `${s.slice(0, head).replace(/[\uD800-\uDBFF]$/, "").trimEnd()}…${end}`;
+}
+/**
+ * The words of one list in at most `max` characters each. A longer word is cut in the middle; if two different words
+ * would then look the same, each of them carries its number in the list, so no two different words are shown alike.
+ */
+export function shownWords(words: string[], max: number): string[] {
+  const cut = words.map((w) => clipMiddle(w, max));
+  return cut.map((c, i) => {
+    if (!words.some((w, j) => w !== words[i] && cut[j] === c)) return c;
+    const tag = ` №${i + 1}`;
+    return clipMiddle(words[i]!, max - tag.length) + tag;
+  });
+}
+
+/**
+ * The text of a message that holds a list, shown whole when it fits one Telegram message. Only when it does not,
+ * `render` is asked for a shorter one, in this order and no further than needed:
+ * the transcriptions of the list lines go; then translations, deck titles and link hosts are cut, the longest first
+ * (one cap for all, lowered until the message fits); only then the words, see `shownWords`.
+ * The fields of a card shown alone are never cut; among other lines only the host of its link may be.
+ */
+export function fitMessage(render: (fit: Fit) => string): string {
+  const fits = (text: string) => visibleLength(text) <= TEXT_LIMIT;
+  /** The message under the largest cap from `least` up that fits, or null when even `least` does not. */
+  const largest = (least: number, fit: (cap: number) => Fit): string | null => {
+    let best: string | null = null;
+    for (let lo = least, hi = LONGEST; lo <= hi;) {
+      const cap = (lo + hi) >> 1;
+      const text = render(fit(cap));
+      if (fits(text)) { best = text; lo = cap + 1; } else hi = cap - 1;
+    }
+    return best;
+  };
+  const whole = render(WHOLE);
+  if (fits(whole)) return whole;
+  const bare: Fit = { ...WHOLE, transcriptions: false };
+  const withoutTranscriptions = render(bare);
+  if (fits(withoutTranscriptions)) return withoutTranscriptions;
+  const texts = (cap: number): Fit => ({ ...bare, translation: Math.max(cap, LEAST.translation), host: Math.max(cap, LEAST.host), deck: cap });
+  const shortest = texts(LEAST.deck);
+  return largest(LEAST.deck, texts) ?? largest(LEAST.word, (cap) => ({ ...shortest, word: cap })) ?? render({ ...shortest, word: LEAST.word });
 }
 
 /** Human interval for the done screen: "10 мин", "11 дн.", "1,2 мес.". */
@@ -108,8 +167,8 @@ export function renderLevelUp(l: LevelUp, lang: Lang): string {
   return l.to == null ? t.levelsDone(l.coveragePct) : t.levelUp(l.from, l.to, l.coveragePct);
 }
 
-/** The preview of own words before they are added. It ends with the AI note when a translation in it is the model's. */
-export function renderAddPreview(items: PreviewItem[], previewId: number, lang: Lang): Rendered {
+/** The text of the preview of own words. One card is shown whole, with everything it has; several are a list. */
+function addPreviewText(items: PreviewItem[], lang: Lang, fit: Fit): string {
   const t = dict(lang);
   const ai = items.some((i) => i.ai);
   if (items.length === 1) {
@@ -119,17 +178,50 @@ export function renderAddPreview(items: PreviewItem[], previewId: number, lang: 
     if (meta) text += `\n${meta}`;
     text += `\n\n<b>${esc(i.translation)}</b>`;
     if (i.exampleTt || i.exampleRu) text += `<blockquote><i>${esc(i.exampleTt)}</i>\n${esc(i.exampleRu)}</blockquote>`;
-    if (i.sourceUrl) text += `\n🔗 ${esc(clip(hostOf(i.sourceUrl), SHOWN.host))}`;
+    if (i.sourceUrl) text += `\n🔗 ${esc(clip(hostOf(i.sourceUrl), fit.host))}`;
     if (ai) text += `\n${t.aiNote}`;
-    return { text, keyboard: [[btn(t.add, `add:ok:${previewId}`, "primary"), btn(t.edit, `add:edit:${previewId}`), btn(t.cancel, `add:no:${previewId}`)]] };
+    return text;
   }
-  const lines = [t.foundN(items.length), ...items.map((i) => `${previewLine(i, lang)}${i.sourceUrl ? " 🔗" : ""}`)];
+  const lines = [t.foundN(items.length), ...previewLines(items, lang, fit).map((line, k) => `${line}${items[k]!.sourceUrl ? " 🔗" : ""}`)];
   if (ai) lines.push("", t.aiNote);
-  return { text: lines.join("\n"), keyboard: [[btn(t.addAll(items.length), `add:ok:${previewId}`, "primary"), btn(t.cancel, `add:no:${previewId}`)]] };
+  return lines.join("\n");
 }
 
-/** One word of a list preview: «• <b>word</b> [transcription] · <i>part of speech</i> — translation», long texts cut to SHOWN. */
-export function previewLine(i: Pick<PreviewItem, "word" | "transcription" | "pos" | "translation">, lang: Lang): string {
-  const meta = wordMeta({ transcription: i.transcription && clip(i.transcription, SHOWN.transcription), pos: i.pos }, lang);
-  return `• <b>${esc(clip(i.word, SHOWN.word))}</b>${meta ? ` ${meta}` : ""} — ${esc(clip(i.translation, SHOWN.translation))}`;
+/** The preview of own words before they are added. It ends with the AI note when a translation in it is the model's. */
+export function renderAddPreview(items: PreviewItem[], previewId: number, lang: Lang): Rendered {
+  const t = dict(lang);
+  const text = fitMessage((fit) => addPreviewText(items, lang, fit));
+  if (items.length === 1) return { text, keyboard: [[btn(t.add, `add:ok:${previewId}`, "primary"), btn(t.edit, `add:edit:${previewId}`), btn(t.cancel, `add:no:${previewId}`)]] };
+  return { text, keyboard: [[btn(t.addAll(items.length), `add:ok:${previewId}`, "primary"), btn(t.cancel, `add:no:${previewId}`)]] };
+}
+
+/** What the answer to a message with words is made of: the results of `prepareAdd` that name words. */
+export type AddReply =
+  | { kind: "duplicates-only"; duplicates: Duplicate[] }
+  | { kind: "preview"; items: PreviewItem[]; duplicates: Duplicate[]; manual: string[] }
+  | { kind: "manual"; word: string; others: string[]; duplicates: Duplicate[] };
+
+/**
+ * The answer to a message with words: the lines about the words already being learned, then the preview or the request
+ * for a translation by hand, then the words left untranslated. It is fitted as one message: everything whole when it fits.
+ */
+export function addReplyText(res: AddReply, lang: Lang): string {
+  const t = dict(lang);
+  return fitMessage((fit) => {
+    const known = shownWords(res.duplicates.map((d) => d.word), fit.word);
+    const dups = res.duplicates.map((d, i) => t.dupLine(esc(known[i]!), esc(clip(d.deckTitle, fit.deck)), d.linkAdded));
+    if (res.kind === "duplicates-only") return dups.join("\n");
+    const left = res.kind === "manual" ? res.others : res.manual;
+    const body = res.kind === "manual" ? t.manualAsk(esc(res.word)) : addPreviewText(res.items, lang, fit);
+    return (dups.length ? dups.join("\n") + "\n\n" : "") + body + (left.length ? "\n\n" + t.notTranslated(shownWords(left, fit.word).map(esc).join(", ")) : "");
+  });
+}
+
+/** The words of a list preview, one line each: «• <b>word</b> [transcription] · <i>part of speech</i> — translation». */
+export function previewLines(items: Pick<PreviewItem, "word" | "transcription" | "pos" | "translation">[], lang: Lang, fit: Fit): string[] {
+  const words = shownWords(items.map((i) => i.word), fit.word);
+  return items.map((i, k) => {
+    const meta = wordMeta({ transcription: fit.transcriptions ? i.transcription : null, pos: i.pos }, lang);
+    return `• <b>${esc(words[k]!)}</b>${meta ? ` ${meta}` : ""} — ${esc(clip(i.translation, fit.translation))}`;
+  });
 }

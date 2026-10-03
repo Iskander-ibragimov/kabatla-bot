@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderGenPreview, renderOnboarding, renderSettings } from "../../src/bot/screens";
-import { SHOWN, clip, formatLong, renderAddPreview, renderCard, renderDone, type CardView, type PreviewItem } from "../../src/bot/views";
+import { addReplyText, clip, formatLong, renderAddPreview, renderCard, renderDone, shownWords, type CardView, type PreviewItem } from "../../src/bot/views";
 import type { User } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
@@ -151,21 +151,106 @@ describe("views", () => {
     for (const s of ["ә".repeat(500), "😀".repeat(50), "a b ".repeat(50)]) for (const max of [2, 7, 30]) expect(clip(s, max).length).toBeLessThanOrEqual(max);
   });
 
-  it("a list preview shows at most the first characters of a long word, transcription and translation", () => {
-    expect(SHOWN).toMatchObject({ word: 30, transcription: 30, translation: 40 });
-    const fits = draft({ word: "ә".repeat(30), transcription: "ө".repeat(30), translation: "я".repeat(40) });
-    const long = draft({ word: "ә".repeat(31), transcription: "ө".repeat(31), translation: "я".repeat(41), ai: true });
-    const lines = renderAddPreview([fits, long], 1, "ru").text.split("\n");
-    expect(lines[1]).toBe(`• <b>${"ә".repeat(30)}</b> [${"ө".repeat(30)}] · <i>прил.</i> — ${"я".repeat(40)}`);
-    expect(lines[2]).toBe(`• <b>${"ә".repeat(29)}…</b> [${"ө".repeat(29)}…] · <i>прил.</i> — ${"я".repeat(39)}…`);
-    expect(renderGenPreview("тема", [long], 1, 1, "ru").text.split("\n")[2]).toBe(lines[2]);
-    // The text is cut before it is escaped, so no entity is broken at the cut.
-    const amp = renderAddPreview([draft({ translation: "я" + "&".repeat(60) }), draft()], 1, "ru").text;
-    expect(amp).toContain(` — я${"&amp;".repeat(38)}…\n`);
-    // A single card is shown whole; only a very long link host is cut.
-    const whole = renderAddPreview([{ ...long, sourceUrl: `https://${"a".repeat(60)}.example/x` }], 1, "ru").text;
-    expect(whole).toContain(`<b>${"ә".repeat(31)}</b>\n[${"ө".repeat(31)}] · <i>прил.</i>\n\n<b>${"я".repeat(41)}</b>`);
-    expect(whole).toContain(`\n🔗 ${"a".repeat(39)}…\n`);
+  it("a list preview is shown whole when the message fits: long phrases, transcriptions and translations are not cut", () => {
+    // Two phrases of 80 characters that begin alike, each with a long transcription and a three-variant translation.
+    const common = "мин бүген иртән бик иртә тордым һәм эшкә киттем, ә аннары "; // 58 characters
+    const a = draft({ word: `${common}өйгә кайттым һәм яттым`, transcription: `${"ә".repeat(90)} а`, translation: "я сегодня встал очень рано, пошёл на работу, потом домой", pos: "phr", ai: true });
+    const b = draft({ word: `${common}паркта бераз йөрдем дә`, transcription: `${"ә".repeat(90)} б`, translation: "я сегодня встал очень рано, пошёл на работу, потом в магазин", pos: "phr", ai: true });
+    expect([a.word.length, b.word.length]).toEqual([80, 80]);
+    const text = renderAddPreview([a, b], 1, "ru").text;
+    expect(text).toBe([
+      ru.foundN(2),
+      `• <b>${a.word}</b> [${a.transcription}] · <i>фраза</i> — ${a.translation}`,
+      `• <b>${b.word}</b> [${b.transcription}] · <i>фраза</i> — ${b.translation}`,
+      "", ru.aiNote,
+    ].join("\n"));
+    expect(text).not.toContain("…");
+    expect(renderGenPreview("тема", [a, b], 1, 1, "ru").text.split("\n").slice(2, 4)).toEqual(text.split("\n").slice(1, 3));
+  });
+
+  it("a list of 20 ordinary phrases is shown whole", () => {
+    const items = Array.from({ length: 20 }, (_, i) => draft({
+      word: `бүген һава бик яхшы булыр кебек ${i}`, transcription: `бүге́н һаwа́ бик йахшы́ булы́р кебе́к ${i}`, translation: `похоже, сегодня будет очень хорошая погода ${i}`, pos: "phr", ai: true,
+      sourceUrl: "https://example.com/a",
+    }));
+    const text = renderAddPreview(items, 1, "ru").text;
+    expect(visibleLength(text)).toBeGreaterThan(2500);
+    expect(text).not.toContain("…");
+    for (const i of items) expect(text).toContain(`• <b>${i.word}</b> [${i.transcription}] · <i>фраза</i> — ${i.translation} 🔗`);
+  });
+
+  describe("a list that does not fit one message is shortened step by step", () => {
+    const words = (text: string) => [...text.matchAll(/• <b>(.*?)<\/b>/g)].map((m) => m[1]!);
+    const translations = (text: string) => text.split("\n").filter((l) => l.startsWith("• ")).map((l) => l.slice(l.lastIndexOf(" — ") + 3));
+    const item = (i: number, wordLength: number, translationLength: number): PreviewItem => {
+      const no = String(i).padStart(2, "0");
+      return draft({ word: `${"ә".repeat(wordLength - 3)} ${no}`, transcription: `${"ө".repeat(47)} ${no}`, translation: `${"я".repeat(translationLength - 3)} ${no}`, pos: "post", ai: true });
+    };
+
+    it("first the transcriptions go; words and translations stay whole", () => {
+      const items = Array.from({ length: 30 }, (_, i) => item(i, 40, 40));
+      const text = renderGenPreview("тема", items, 2, 1, "ru").text;
+      expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+      expect(text).not.toContain("[");
+      expect(text).not.toContain("…");
+      expect(words(text)).toEqual(items.map((i) => i.word));
+      expect(translations(text)).toEqual(items.map((i) => i.translation));
+      // A shorter list of the same items fits as it is, and nothing is taken away.
+      expect(renderGenPreview("тема", items.slice(0, 26), 2, 1, "ru").text.split("\n")[2]).toBe(`• <b>${items[0]!.word}</b> [${items[0]!.transcription}] · <i>послелог</i> — ${items[0]!.translation}`);
+    });
+
+    it("then the translations are cut, the longest first; the words stay whole", () => {
+      const items = Array.from({ length: 30 }, (_, i) => item(i, 40, i < 10 ? 200 : 30));
+      const text = renderGenPreview("тема", items, 2, 1, "ru").text;
+      expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+      expect(text).not.toContain("[");
+      expect(words(text)).toEqual(items.map((i) => i.word));
+      const shown = translations(text);
+      expect(shown.slice(10)).toEqual(items.slice(10).map((i) => i.translation));
+      for (const t of shown.slice(0, 10)) expect(t).toMatch(/^я+…$/);
+      expect(new Set(shown.slice(0, 10).map((t) => t.length)).size).toBe(1);
+      expect(shown[0]!.length).toBeGreaterThan(100);
+      // As little is cut as the limit asks for: one character more for each of the ten would not fit.
+      expect(visibleLength(text)).toBeGreaterThan(TELEGRAM_TEXT_LIMIT - 10);
+    });
+
+    it("the words are cut last, and no two different words look alike", () => {
+      const items = Array.from({ length: 30 }, (_, i) => item(i, 80, 200));
+      const text = renderGenPreview("т".repeat(100), items, 2, 1, "tt").text;
+      expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+      expect(text).not.toContain("[");
+      // The translations are already at their shortest.
+      for (const t of translations(text)) expect(t).toHaveLength(40);
+      const shown = words(text);
+      // The phrases differ only in their last word: the cut is in the middle, so the end that tells them apart stays.
+      expect(new Set(shown).size).toBe(30);
+      shown.forEach((w, i) => { expect(w).toMatch(new RegExp(`^ә+…ә+ ${String(i).padStart(2, "0")}$`)); expect(w.length).toBeGreaterThanOrEqual(30); });
+      expect(visibleLength(text)).toBeGreaterThan(TELEGRAM_TEXT_LIMIT - 30);
+    });
+
+    it("words that differ only in the middle get their number in the list", () => {
+      const twin = (mid: string) => `${"ә".repeat(38)} ${mid} ${"ә".repeat(38)}`;
+      expect(shownWords([twin("ак"), "китап", twin("ал"), twin("ак")], 30)).toEqual([
+        `${"ә".repeat(13)}…${"ә".repeat(13)} №1`, "китап", `${"ә".repeat(13)}…${"ә".repeat(13)} №3`, `${"ә".repeat(13)}…${"ә".repeat(13)} №4`,
+      ]);
+      expect(shownWords([twin("ак"), twin("ал")], 80)).toEqual([twin("ак"), twin("ал")]);
+      for (const max of [30, 31, 45, 79]) for (const w of shownWords([twin("ак"), twin("ал"), "ә".repeat(80)], max)) expect(w.length).toBeLessThanOrEqual(max);
+      const items = Array.from({ length: 30 }, (_, i) => draft({ word: twin(String(i).padStart(2, "0")), translation: "я".repeat(200), pos: "post", ai: true }));
+      const shown = words(renderGenPreview("т".repeat(100), items, 2, 1, "tt").text);
+      expect(new Set(shown).size).toBe(30);
+    });
+
+    it("the lines about duplicates and untranslated words are whole when the message fits", () => {
+      const long = "мин бүген иртән бик иртә тордым һәм эшкә киттем, ә аннары өйгә кайттым һәм яттым";
+      const deck = `🤖 ${"т".repeat(100)}`;
+      const text = addReplyText({
+        kind: "preview", items: [draft({ ai: true }), draft({ word: "юл", ai: true })],
+        duplicates: [{ word: long, deckTitle: deck, linkAdded: true }], manual: [`${long} тагын`],
+      }, "ru");
+      expect(text).toBe(`${ru.dupLine(long, deck, true)}\n\n${renderAddPreview([draft({ ai: true }), draft({ word: "юл", ai: true })], 1, "ru").text}\n\n${ru.notTranslated(`${long} тагын`)}`);
+      expect(addReplyText({ kind: "duplicates-only", duplicates: [{ word: long, deckTitle: deck, linkAdded: false }] }, "tt")).toBe(tt.dupLine(long, deck, false));
+      expect(addReplyText({ kind: "manual", word: long, others: [long + " ике"], duplicates: [] }, "ru")).toBe(`${ru.manualAsk(long)}\n\n${ru.notTranslated(long + " ике")}`);
+    });
   });
 
   describe("previews at the field maxima fit one Telegram message", () => {
@@ -190,16 +275,28 @@ describe("views", () => {
       const text = renderAddPreview(items(20, lang), 1, lang).text;
       expect(text.split("\n")).toHaveLength(23);
       expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+      // The 80-character phrases differ only in their last word and are still told apart; here the words fit whole.
+      expect(new Set(text.split("\n").slice(1, 21)).size).toBe(20);
+      for (const i of items(20, lang)) expect(text).toContain(`<b>${i.word}</b>`);
     });
     it.each(["ru", "tt"] as const)("deck preview of 30 words under a topic of 100 characters, %s", (lang) => {
       const text = renderGenPreview("т".repeat(100), items(30, lang), 3, 1, lang).text;
       expect(text.split("\n")).toHaveLength(35);
       expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+      // The 80-character phrases differ only in their last word: every line still shows which one it is.
+      const shown = [...text.matchAll(/• <b>(.*?)<\/b>/g)].map((m) => m[1]!);
+      expect(new Set(shown).size).toBe(30);
+      shown.forEach((w, i) => expect(w.endsWith(String(i).padStart(2, "0"))).toBe(true));
     });
-    it.each(["ru", "tt"] as const)("a single card shown whole, %s", (lang) => {
-      const text = renderAddPreview(items(1, lang), 1, lang).text;
-      expect(text).toContain(`<i>${"ә".repeat(300)}</i>\n${"я".repeat(300)}`);
-      expect(visibleLength(text)).toBeLessThanOrEqual(1200);
+    it.each(["ru", "tt"] as const)("a single card is never cut: at the field maxima it fits whole, %s", (lang) => {
+      const [i] = items(1, lang) as [PreviewItem];
+      const text = renderAddPreview([i], 1, lang).text;
+      const t = lang === "ru" ? ru : tt;
+      expect(text).toBe(
+        `<b>${i.word}</b>\n[${i.transcription}] · <i>${t.posName(i.pos)}</i>\n\n<b>${i.translation}</b>` +
+        `<blockquote><i>${i.exampleTt}</i>\n${i.exampleRu}</blockquote>\n🔗 ${"a".repeat(480)}.example\n${t.aiNote}`);
+      expect(text).not.toContain("…");
+      expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
     });
     it.each(["ru", "tt"] as const)("the card itself, %s", (lang) => {
       const w = worst(0);
