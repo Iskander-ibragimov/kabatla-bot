@@ -8,7 +8,7 @@ export interface Rendered { text: string; keyboard: Keyboard }
 
 import type { CardView, Counts, DaySummary, Feedback } from "../review/service";
 export type { CardView, Counts, DaySummary, Feedback };
-export interface PreviewItem { word: string; ipa: string | null; pos: string; translation: string; exampleEn: string; exampleRu: string; sourceUrl: string | null }
+export interface PreviewItem { word: string; transcription: string | null; pos: string; translation: string; exampleTt: string; exampleRu: string; sourceUrl: string | null }
 
 export const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const btn = (text: string, data: string, style?: Button["style"]): Button => (style ? { text, callback_data: data, style } : { text, callback_data: data });
@@ -42,18 +42,18 @@ export function progressLine(m: Mem, lang: Lang): string {
 export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, string>, canUndo: boolean, lang: Lang): Rendered {
   const t = dict(lang);
   const lines: string[] = [`🔵 ${c.n} · 🔴 ${c.l} · 🟢 ${c.r}`];
-  const ipa = v.ipa ? esc(v.ipa) : "";
+  const transcription = v.transcription ? esc(v.transcription) : "";
   const pos = v.pos ? `<i>${esc(v.pos)}</i>` : "";
-  if (v.direction === "en_ru") {
+  if (v.direction === "tt_ru") {
     lines.push(`<b>${esc(v.word)}</b>`);
-    if (ipa || pos) lines.push([ipa, pos].filter(Boolean).join(" · "));
+    if (transcription || pos) lines.push([transcription, pos].filter(Boolean).join(" · "));
     lines.push(`<tg-spoiler><b>${esc(v.translation)}</b></tg-spoiler>`);
   } else {
     lines.push(`<b>${esc(v.translation)}</b>`);
-    lines.push(`<tg-spoiler><b>${esc(v.word)}</b>${ipa ? " " + ipa : ""}</tg-spoiler>`);
+    lines.push(`<tg-spoiler><b>${esc(v.word)}</b>${transcription ? " " + transcription : ""}</tg-spoiler>`);
   }
   let text = lines.join("\n");
-  if (v.exampleEn || v.exampleRu) text += `<blockquote><tg-spoiler><i>${esc(v.exampleEn)}</i>\n${esc(v.exampleRu)}</tg-spoiler></blockquote>`;
+  if (v.exampleTt || v.exampleRu) text += `<blockquote><tg-spoiler><i>${esc(v.exampleTt)}</i>\n${esc(v.exampleRu)}</tg-spoiler></blockquote>`;
   else text += "\n";
   text += progressLine(v.mem, lang);
   if (v.sourceUrl) text += `\n🔗 <a href="${esc(v.sourceUrl)}">${esc(hostOf(v.sourceUrl))}</a>`;
@@ -84,10 +84,10 @@ export function renderAddPreview(items: PreviewItem[], previewId: number, lang: 
   if (items.length === 1) {
     const i = items[0]!;
     let text = `<b>${esc(i.word)}</b>`;
-    const meta = [i.ipa ? esc(i.ipa) : "", i.pos ? `<i>${esc(i.pos)}</i>` : ""].filter(Boolean).join(" · ");
+    const meta = [i.transcription ? esc(i.transcription) : "", i.pos ? `<i>${esc(i.pos)}</i>` : ""].filter(Boolean).join(" · ");
     if (meta) text += `\n${meta}`;
     text += `\n\n<b>${esc(i.translation)}</b>`;
-    if (i.exampleEn || i.exampleRu) text += `<blockquote><i>${esc(i.exampleEn)}</i>\n${esc(i.exampleRu)}</blockquote>`;
+    if (i.exampleTt || i.exampleRu) text += `<blockquote><i>${esc(i.exampleTt)}</i>\n${esc(i.exampleRu)}</blockquote>`;
     if (i.sourceUrl) text += `\n🔗 ${esc(hostOf(i.sourceUrl))}`;
     return { text, keyboard: [[btn(t.add, `add:ok:${previewId}`, "primary"), btn(t.edit, `add:edit:${previewId}`), btn(t.cancel, `add:no:${previewId}`)]] };
   }

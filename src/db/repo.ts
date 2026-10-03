@@ -1,7 +1,7 @@
 import type { CardState, Mem } from "../srs/fsrs";
 
-export type Lang = "ru" | "en";
-export type Direction = "en_ru" | "ru_en";
+export type Lang = "ru" | "tt";
+export type Direction = "tt_ru" | "ru_tt";
 export type DirectionSetting = Direction | "both";
 
 export interface User {
@@ -15,7 +15,8 @@ export interface User {
   retention: number;
   direction: DirectionSetting;
   autoplay: boolean;
-  level: string | null;
+  /** Current level, 1…20; 21 means every level is done. */
+  level: number;
   streak: number;
   lastStudyDay: string | null;
   active: boolean;
@@ -38,17 +39,17 @@ export interface User {
 
 export interface NoteFields {
   word: string;
-  ipa: string | null;
+  transcription: string | null;
   pos: string;
   translation: string;
-  exampleEn: string;
+  exampleTt: string;
   exampleRu: string;
+  exampleSrc: string;
   audioFileId: string | null;
-  audioUrl: string | null;
   sourceUrl: string | null;
 }
-export type NoteInput = Pick<NoteFields, "word" | "ipa" | "pos" | "translation" | "exampleEn" | "exampleRu"> &
-  Partial<Pick<NoteFields, "audioFileId" | "audioUrl" | "sourceUrl">>;
+export type NoteInput = Pick<NoteFields, "word" | "transcription" | "pos" | "translation" | "exampleTt" | "exampleRu"> &
+  Partial<Pick<NoteFields, "exampleSrc" | "audioFileId" | "sourceUrl">>;
 export interface NoteRow extends NoteFields { id: number; deckId: number }
 export interface CardRow extends NoteFields { id: number; noteId: number; direction: Direction; mem: Mem; buriedDay: string | null }
 export interface NewNote extends NoteFields { noteId: number; direction: Direction }
@@ -56,7 +57,10 @@ export interface QueueCounts { learning: number; review: number; newAvailable: n
 export interface Candidates { learning: CardRow[]; review: CardRow[]; newNotes: NewNote[]; counts: QueueCounts }
 export interface DayWindow { dayStartMs: number; dayEndMs: number; today: string; directions: Direction[]; limitEach?: number }
 export interface Session { userId: number; chatId: number; messageId: number | null; cardId: number | null; stale: boolean; lastVoiceMessageId: number | null }
-export interface DeckRow { id: number; slug: string | null; ownerId: number | null; kind: "catalog" | "ai" | "custom"; titleRu: string; titleEn: string; level: string | null; total: number }
+export interface DeckRow {
+  id: number; slug: string | null; ownerId: number | null; kind: "catalog" | "ai" | "custom";
+  titleRu: string; titleTt: string; levelNo: number | null; coveragePct: number | null; total: number;
+}
 export interface ReviewLogRow {
   id: number; cardId: number; userId: number; rating: number; stateBefore: Mem; intervalBeforeDays: number; intervalAfterMs: number;
   reviewedAt: number; wasNew: boolean; learnedNow: boolean; streakBefore: number; lastStudyDayBefore: string | null; undone: boolean;
@@ -72,16 +76,16 @@ function rowToUser(r: Record<string, unknown>): User {
   return u as unknown as User;
 }
 
-const NOTE_COLS = "n.word, n.ipa, n.pos, n.translation, n.example_en, n.example_ru, n.audio_file_id, n.audio_url, n.source_url";
+const NOTE_COLS = "n.word, n.transcription, n.pos, n.translation, n.example_tt, n.example_ru, n.example_src, n.audio_file_id, n.source_url";
 /** A note/direction is "new" unless its card was started, or any card of the note is buried today. Binds: userId, today. */
 const NEW_FILTER = `NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ? AND c.note_id = n.id AND ((c.direction = d.value AND c.state != 'new') OR c.buried_day = ?))`;
 const CARD_COLS = `c.id, c.note_id, c.direction, c.state, c.step, c.stability, c.difficulty, c.due, c.last_review, c.scheduled_days, c.reps, c.lapses, c.buried_day, ${NOTE_COLS}`;
 
 function noteFields(r: Record<string, unknown>): NoteFields {
   return {
-    word: r.word as string, ipa: (r.ipa as string) ?? null, pos: (r.pos as string) ?? "", translation: r.translation as string,
-    exampleEn: (r.example_en as string) ?? "", exampleRu: (r.example_ru as string) ?? "",
-    audioFileId: (r.audio_file_id as string) ?? null, audioUrl: (r.audio_url as string) ?? null, sourceUrl: (r.source_url as string) ?? null,
+    word: r.word as string, transcription: (r.transcription as string) ?? null, pos: (r.pos as string) ?? "", translation: r.translation as string,
+    exampleTt: (r.example_tt as string) ?? "", exampleRu: (r.example_ru as string) ?? "", exampleSrc: (r.example_src as string) ?? "",
+    audioFileId: (r.audio_file_id as string) ?? null, sourceUrl: (r.source_url as string) ?? null,
   };
 }
 function rowToCard(r: Record<string, unknown>): CardRow {
@@ -128,9 +132,9 @@ export class Repo {
   async updateUser(id: number, patch: Partial<Omit<User, "id">>): Promise<void> { await this.updateUserStmt(id, patch).run(); }
 
   /* decks and notes */
-  async insertDeck(d: { slug: string | null; kind: DeckRow["kind"]; titleRu: string; titleEn: string; level: string | null; ownerId: number | null }): Promise<number> {
-    const r = await this.db.prepare("INSERT INTO decks (slug, kind, title_ru, title_en, level, owner_id) VALUES (?, ?, ?, ?, ?, ?) RETURNING id")
-      .bind(d.slug, d.kind, d.titleRu, d.titleEn, d.level, d.ownerId).first<{ id: number }>();
+  async insertDeck(d: { slug: string | null; kind: DeckRow["kind"]; titleRu: string; titleTt: string; levelNo: number | null; coveragePct: number | null; ownerId: number | null }): Promise<number> {
+    const r = await this.db.prepare("INSERT INTO decks (slug, kind, title_ru, title_tt, level_no, coverage_pct, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id")
+      .bind(d.slug, d.kind, d.titleRu, d.titleTt, d.levelNo, d.coveragePct, d.ownerId).first<{ id: number }>();
     return r!.id;
   }
   async getDeckBySlug(slug: string): Promise<DeckRow | null> {
@@ -154,16 +158,17 @@ export class Repo {
   }
   private rowToDeck(r: Record<string, unknown>): DeckRow {
     return { id: r.id as number, slug: (r.slug as string) ?? null, ownerId: (r.owner_id as number) ?? null, kind: r.kind as DeckRow["kind"],
-      titleRu: r.title_ru as string, titleEn: r.title_en as string, level: (r.level as string) ?? null, total: r.total as number };
+      titleRu: r.title_ru as string, titleTt: r.title_tt as string, levelNo: (r.level_no as number) ?? null,
+      coveragePct: (r.coverage_pct as number) ?? null, total: r.total as number };
   }
   async insertNotes(deckId: number, rows: NoteInput[]): Promise<number[]> {
     if (!rows.length) return [];
     const stmts = rows.map((n) =>
       this.db.prepare(
-        `INSERT INTO notes (deck_id, word, word_key, ipa, pos, translation, example_en, example_ru, audio_file_id, audio_url, source_url)
+        `INSERT INTO notes (deck_id, word, word_key, transcription, pos, translation, example_tt, example_ru, example_src, audio_file_id, source_url)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (deck_id, word_key) DO UPDATE SET word = excluded.word RETURNING id`,
-      ).bind(deckId, n.word.trim(), wordKey(n.word), n.ipa ?? null, n.pos, n.translation, n.exampleEn, n.exampleRu,
-        n.audioFileId ?? null, n.audioUrl ?? null, n.sourceUrl ?? null),
+      ).bind(deckId, n.word.trim(), wordKey(n.word), n.transcription ?? null, n.pos, n.translation, n.exampleTt, n.exampleRu,
+        n.exampleSrc ?? "", n.audioFileId ?? null, n.sourceUrl ?? null),
     );
     stmts.push(this.db.prepare("UPDATE decks SET total = (SELECT COUNT(*) FROM notes WHERE deck_id = ?1) WHERE id = ?1").bind(deckId));
     const res = await this.db.batch<{ id: number }>(stmts);
@@ -177,27 +182,27 @@ export class Repo {
     return results.map((r) => r.deck_id);
   }
   /** A note with this word in any deck the user is subscribed to. */
-  async findNoteForUser(userId: number, word: string): Promise<(NoteRow & { deckTitleRu: string; deckTitleEn: string }) | null> {
+  async findNoteForUser(userId: number, word: string): Promise<(NoteRow & { deckTitleRu: string; deckTitleTt: string }) | null> {
     const r = await this.db.prepare(
-      `SELECT n.id, n.deck_id, ${NOTE_COLS}, d.title_ru, d.title_en FROM notes n
+      `SELECT n.id, n.deck_id, ${NOTE_COLS}, d.title_ru, d.title_tt FROM notes n
        JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ? JOIN decks d ON d.id = n.deck_id
        WHERE n.word_key = ? LIMIT 1`,
     ).bind(userId, wordKey(word)).first<Record<string, unknown>>();
-    return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, deckTitleRu: r.title_ru as string, deckTitleEn: r.title_en as string } : null;
+    return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, deckTitleRu: r.title_ru as string, deckTitleTt: r.title_tt as string } : null;
   }
   /** Batch version of findNoteForUser: one D1 call for many words, keyed by wordKey. */
-  async findNotesForUser(userId: number, words: string[]): Promise<Map<string, NoteRow & { deckTitleRu: string; deckTitleEn: string }>> {
+  async findNotesForUser(userId: number, words: string[]): Promise<Map<string, NoteRow & { deckTitleRu: string; deckTitleTt: string }>> {
     const keys = [...new Set(words.map(wordKey))];
-    const out = new Map<string, NoteRow & { deckTitleRu: string; deckTitleEn: string }>();
+    const out = new Map<string, NoteRow & { deckTitleRu: string; deckTitleTt: string }>();
     if (!keys.length) return out;
     const { results } = await this.db.prepare(
-      `SELECT n.id, n.deck_id, n.word_key, ${NOTE_COLS}, d.title_ru, d.title_en FROM notes n
+      `SELECT n.id, n.deck_id, n.word_key, ${NOTE_COLS}, d.title_ru, d.title_tt FROM notes n
        JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ? JOIN decks d ON d.id = n.deck_id
        WHERE n.word_key IN (SELECT value FROM json_each(?)) ORDER BY n.id`,
     ).bind(userId, JSON.stringify(keys)).all<Record<string, unknown>>();
     for (const r of results) {
       const k = r.word_key as string;
-      if (!out.has(k)) out.set(k, { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, deckTitleRu: r.title_ru as string, deckTitleEn: r.title_en as string });
+      if (!out.has(k)) out.set(k, { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, deckTitleRu: r.title_ru as string, deckTitleTt: r.title_tt as string });
     }
     return out;
   }
@@ -314,8 +319,9 @@ export class Repo {
       this.db.prepare(`SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
         WHERE c.user_id = ? AND c.state = 'review' AND c.due < ? AND ${inDirs} AND ${notBuried} AND ${inDecks} ORDER BY c.due LIMIT ?`)
         .bind(userId, w.dayEndMs, dirs, w.today, userId, lim),
+      // d.key is the position in w.directions, so a note's directions come in the order the caller asked for
       this.db.prepare(`SELECT n.id AS note_id, d.value AS direction, ${NOTE_COLS} FROM notes n JOIN json_each(?) d
-        WHERE ${inDecks} AND ${NEW_FILTER} ORDER BY n.deck_id, n.id, d.value LIMIT ?`).bind(dirs, userId, userId, w.today, lim),
+        WHERE ${inDecks} AND ${NEW_FILTER} ORDER BY n.deck_id, n.id, d.key LIMIT ?`).bind(dirs, userId, userId, w.today, lim),
       this.db.prepare(`SELECT
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state IN ('learning','relearning') AND c.direction IN (SELECT value FROM json_each(?2)) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS learning,
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state = 'review' AND c.due < ?3 AND c.direction IN (SELECT value FROM json_each(?2)) AND (c.buried_day IS NULL OR c.buried_day != ?4) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS review,
@@ -430,7 +436,7 @@ export class Repo {
   async customDeck(userId: number, now: number): Promise<number> {
     const r = await this.db.prepare("SELECT id FROM decks WHERE owner_id = ? AND kind = 'custom' LIMIT 1").bind(userId).first<{ id: number }>();
     if (r) return r.id;
-    const id = await this.insertDeck({ slug: null, kind: "custom", titleRu: "Мои слова", titleEn: "My words", level: null, ownerId: userId });
+    const id = await this.insertDeck({ slug: null, kind: "custom", titleRu: "Мои слова", titleTt: "Минем сүзләр", levelNo: null, coveragePct: null, ownerId: userId });
     await this.subscribe(userId, id, now);
     return id;
   }

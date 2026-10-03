@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { renderAddPreview, renderCard, renderDone, type CardView } from "../../src/bot/views";
-import { en } from "../../src/i18n/en";
 import { ru } from "../../src/i18n/ru";
+import { tt } from "../../src/i18n/tt";
 import { newMem } from "../../src/srs/fsrs";
 
 const T = Date.UTC(2026, 8, 30, 6);
 const view = (over: Partial<CardView> = {}): CardView => ({
-  cardId: 7, noteId: 3, reps: 3, direction: "en_ru", word: "reliable", ipa: "/rɪˈlaɪəbl/", pos: "adj",
-  translation: "надёжный", exampleEn: "He is reliable.", exampleRu: "Он надёжный.", hasAudio: true, sourceUrl: null,
+  cardId: 7, noteId: 3, reps: 3, direction: "tt_ru", word: "ышанычлы", transcription: "ышанычлы́", pos: "adj",
+  translation: "надёжный", exampleTt: "Ул ышанычлы кеше.", exampleRu: "Он надёжный человек.", hasAudio: true, sourceUrl: null,
   mem: { ...newMem(T), state: "review", scheduledDays: 2, reps: 3, stability: 2, difficulty: 5, lastReview: T }, ...over,
 });
 const iv = { 1: "<10м", 2: "1д", 3: "2д", 4: "4д" } as const;
@@ -17,9 +17,8 @@ describe("views", () => {
   it("translation and example are inside tg-spoiler", () => {
     const { text } = renderCard(view(), counts, iv, false, "ru");
     expect(text).toContain("🔵 4 · 🔴 1 · 🟢 12");
-    expect(text).toContain("<b>reliable</b>");
-    expect(text).toMatch(/<tg-spoiler>[^]*надёжный[^]*<\/tg-spoiler>/);
-    expect(text).toMatch(/<blockquote><tg-spoiler>[^]*He is reliable\.[^]*<\/tg-spoiler><\/blockquote>/);
+    expect(text).toContain("<b>ышанычлы</b>\nышанычлы́ · <i>adj</i>\n<tg-spoiler><b>надёжный</b></tg-spoiler>");
+    expect(text).toContain("<blockquote><tg-spoiler><i>Ул ышанычлы кеше.</i>\nОн надёжный человек.</tg-spoiler></blockquote>");
   });
 
   it("keyboard is 2x2 with styles and short callbacks", () => {
@@ -40,7 +39,7 @@ describe("views", () => {
   });
 
   it("html in word is escaped", () => {
-    const { text } = renderCard(view({ word: "<b>x&y" }), counts, iv, false, "en");
+    const { text } = renderCard(view({ word: "<b>x&y" }), counts, iv, false, "tt");
     expect(text).toContain("&lt;b&gt;x&amp;y");
   });
 
@@ -56,13 +55,13 @@ describe("views", () => {
 
   it("card shows only the current word, nothing about the previous one", () => {
     const { text } = renderCard(view(), counts, iv, true, "ru");
-    expect(text.split("\n")[1]).toBe("<b>reliable</b>");
+    expect(text.split("\n")[1]).toBe("<b>ышанычлы</b>");
     expect(text).not.toContain("→");
   });
 
-  it("ru to en direction hides the English word", () => {
-    const { text } = renderCard(view({ direction: "ru_en" }), counts, iv, false, "ru");
-    expect(text).toMatch(/^[^]*<b>надёжный<\/b>\n<tg-spoiler><b>reliable<\/b>/);
+  it("ru to tt direction hides the Tatar word and its transcription", () => {
+    const { text } = renderCard(view({ direction: "ru_tt" }), counts, iv, false, "ru");
+    expect(text).toContain("<b>надёжный</b>\n<tg-spoiler><b>ышанычлы</b> ышанычлы́</tg-spoiler>");
   });
 
   it("done screen shows day and cumulative totals", () => {
@@ -76,18 +75,19 @@ describe("views", () => {
   });
 
   it("add preview shows link host and actions", () => {
-    const one = renderAddPreview([{ word: "resilient", ipa: "/rɪˈzɪliənt/", pos: "adj", translation: "стойкий", exampleEn: "Kids are resilient.", exampleRu: "Дети стойкие.", sourceUrl: "https://example.com/a" }], 5, "ru");
+    const one = renderAddPreview([{ word: "чыдам", transcription: "чыда́м", pos: "adj", translation: "стойкий", exampleTt: "Балалар чыдам.", exampleRu: "Дети стойкие.", sourceUrl: "https://example.com/a" }], 5, "ru");
+    expect(one.text).toContain("<b>чыдам</b>\nчыда́м · <i>adj</i>\n\n<b>стойкий</b><blockquote><i>Балалар чыдам.</i>\nДети стойкие.</blockquote>");
     expect(one.text).toContain("🔗 example.com");
     expect(one.keyboard.flat().map((b) => b.callback_data)).toEqual(["add:ok:5", "add:edit:5", "add:no:5"]);
     const many = renderAddPreview([
-      { word: "a", ipa: null, pos: "", translation: "а", exampleEn: "", exampleRu: "", sourceUrl: null },
-      { word: "b", ipa: null, pos: "", translation: "б", exampleEn: "", exampleRu: "", sourceUrl: "https://x.org" },
-    ], 6, "en");
-    expect(many.text).toContain("• <b>b</b> — б 🔗");
+      { word: "су", transcription: null, pos: "", translation: "вода", exampleTt: "", exampleRu: "", sourceUrl: null },
+      { word: "юл", transcription: null, pos: "", translation: "дорога", exampleTt: "", exampleRu: "", sourceUrl: "https://x.org" },
+    ], 6, "tt");
+    expect(many.text).toContain("• <b>юл</b> — дорога 🔗");
     expect(many.keyboard.flat().map((b) => b.callback_data)).toEqual(["add:ok:6", "add:no:6"]);
   });
 
-  it("ru and en have the same keys", () => {
-    expect(Object.keys(en).sort()).toEqual(Object.keys(ru).sort());
+  it("ru and tt have the same keys", () => {
+    expect(Object.keys(tt).sort()).toEqual(Object.keys(ru).sort());
   });
 });

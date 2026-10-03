@@ -1,13 +1,11 @@
 import { type NoteInput, type Repo, type User, wordKey } from "../db/repo";
 import { consume, refund } from "../entitlements/service";
-import { enqueue } from "../jobs/queue";
-import type { DictionaryClient } from "./dictionary";
 import { type Entity, parseWordsAndLinks } from "./links";
 import { DECK_SYSTEM, type LlmClient, LlmUnavailable, WORDS_SYSTEM, type WordCard, completeCards } from "./llm";
 
 export interface CardDraft {
-  word: string; ipa: string | null; pos: string; translation: string; exampleEn: string; exampleRu: string;
-  sourceUrl: string | null; audioUrl: string | null;
+  word: string; transcription: string | null; pos: string; translation: string; exampleTt: string; exampleRu: string;
+  sourceUrl: string | null;
 }
 export interface Duplicate { word: string; deckTitle: string; linkAdded: boolean }
 export type AddResult =
@@ -18,16 +16,16 @@ export type AddResult =
   | { kind: "manual"; word: string; others: string[]; duplicates: Duplicate[] };
 export type GenResult = { kind: "limit" } | { kind: "failed" } | { kind: "preview"; previewId: number; topic: string; items: CardDraft[] };
 
-interface Deps { dict: DictionaryClient; llm: LlmClient }
-interface PendingManual { word: string; url: string | null; ipa: string | null; pos: string; audioUrl: string | null }
+interface Deps { llm: LlmClient }
+interface PendingManual { word: string; url: string | null }
 interface PendingPreviewEdit { previewId: number }
 
 const PENDING_URL_MS = 10 * 60_000;
 const PREVIEW_TTL_MS = 24 * 3_600_000;
 
 const toNote = (d: CardDraft): NoteInput => ({
-  word: d.word, ipa: d.ipa, pos: d.pos, translation: d.translation, exampleEn: d.exampleEn, exampleRu: d.exampleRu,
-  sourceUrl: d.sourceUrl, audioUrl: d.audioUrl,
+  word: d.word, transcription: d.transcription, pos: d.pos, translation: d.translation, exampleTt: d.exampleTt, exampleRu: d.exampleRu,
+  sourceUrl: d.sourceUrl,
 });
 
 export class ContentService {
@@ -36,7 +34,7 @@ export class ContentService {
     this.deadlineMs = opts.deadlineMs ?? 25_000;
   }
 
-  /** Parses a message with words and links, skips duplicates, and builds a preview via dictionary + LLM. */
+  /** Parses a message with words and links, skips duplicates, and builds a preview via the LLM. */
   async prepareAdd(user: User, text: string, entities: Entity[]): Promise<AddResult> {
     const parsed = parseWordsAndLinks(text, entities);
     if (!parsed.items.length) {
@@ -58,29 +56,26 @@ export class ContentService {
       if (!hit) { fresh.push(it); continue; }
       const linkAdded = !!it.url && !hit.sourceUrl;
       if (linkAdded) await this.repo.setNoteSourceUrl(hit.id, it.url!);
-      duplicates.push({ word: it.word, deckTitle: user.lang === "ru" ? hit.deckTitleRu : hit.deckTitleEn, linkAdded });
+      duplicates.push({ word: it.word, deckTitle: user.lang === "ru" ? hit.deckTitleRu : hit.deckTitleTt, linkAdded });
     }
     if (!fresh.length) return { kind: "duplicates-only", duplicates };
 
-    const deadline = Date.now() + this.deadlineMs;
-    const dict = await Promise.all(fresh.map((i) => this.deps.dict.lookup(i.word, Math.min(5000, (deadline - Date.now()) / 3))));
     let ai: WordCard[] = [];
     try {
-      ai = await completeCards(this.deps.llm, WORDS_SYSTEM, `Words:\n${fresh.map((i) => i.word).join("\n")}`, deadline);
+      ai = await completeCards(this.deps.llm, WORDS_SYSTEM, `Words:\n${fresh.map((i) => i.word).join("\n")}`, Date.now() + this.deadlineMs);
     } catch (e) {
       if (!(e instanceof LlmUnavailable)) throw e;
     }
     const drafts: CardDraft[] = [];
     const manual: PendingManual[] = [];
-    fresh.forEach((it, idx) => {
-      const d = dict[idx];
+    for (const it of fresh) {
       const a = ai.find((c) => c.word.toLowerCase() === it.word.toLowerCase());
-      if (!a) { manual.push({ word: it.word, url: it.url, ipa: d?.ipa ?? null, pos: d?.pos ?? "", audioUrl: d?.audioUrl ?? null }); return; }
+      if (!a) { manual.push({ word: it.word, url: it.url }); continue; }
       drafts.push({
-        word: it.word, ipa: d?.ipa ?? a.ipa ?? null, pos: d?.pos || a.pos, translation: a.translation,
-        exampleEn: a.exampleEn, exampleRu: a.exampleRu, sourceUrl: it.url, audioUrl: d?.audioUrl ?? null,
+        word: it.word, transcription: a.transcription ?? null, pos: a.pos, translation: a.translation,
+        exampleTt: a.exampleTt, exampleRu: a.exampleRu, sourceUrl: it.url,
       });
-    });
+    }
     if (!drafts.length) {
       const first = manual[0]!;
       await this.repo.updateUser(user.id, { pendingEdit: JSON.stringify({ manual: first }) });
@@ -96,7 +91,7 @@ export class ContentService {
     if (!pending?.manual) return null;
     const m = pending.manual;
     const deckId = await this.repo.customDeck(user.id, this.now);
-    await this.repo.insertNotes(deckId, [{ word: m.word, ipa: m.ipa, pos: m.pos, translation: translation.trim(), exampleEn: "", exampleRu: "", sourceUrl: m.url, audioUrl: m.audioUrl }]);
+    await this.repo.insertNotes(deckId, [{ word: m.word, transcription: null, pos: "", translation: translation.trim(), exampleTt: "", exampleRu: "", sourceUrl: m.url }]);
     await this.repo.updateUser(user.id, { pendingEdit: null });
     return m.word;
   }
@@ -128,15 +123,13 @@ export class ContentService {
     return p.manual ? "manual" : p.preview ? "preview" : null;
   }
 
-  async confirmAdd(user: User, previewId: number): Promise<{ words: string[]; audio: { noteId: number; audioUrl: string }[] }> {
+  async confirmAdd(user: User, previewId: number): Promise<{ words: string[] }> {
     const items = await this.repo.getPreview<CardDraft[]>(user.id, previewId, "add", this.now - PREVIEW_TTL_MS);
     if (!items) throw new Error("preview not found");
     const deckId = await this.repo.customDeck(user.id, this.now);
-    const ids = await this.repo.insertNotes(deckId, items.map(toNote));
+    await this.repo.insertNotes(deckId, items.map(toNote));
     await this.repo.deletePreview(user.id, previewId);
-    const audio = items.flatMap((d, i) => (d.audioUrl ? [{ noteId: ids[i]!, audioUrl: d.audioUrl }] : []));
-    for (const a of audio) await enqueue(this.repo.db, "voice", a, this.now, `voice:${a.noteId}`);
-    return { words: items.map((i) => i.word), audio };
+    return { words: items.map((i) => i.word) };
   }
 
   async cancel(user: User, previewId: number): Promise<void> { await this.repo.deletePreview(user.id, previewId); }
@@ -150,7 +143,7 @@ export class ContentService {
       const items: CardDraft[] = cards
         .filter((c) => { const k = c.word.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; })
         .slice(0, count)
-        .map((c) => ({ word: c.word, ipa: c.ipa ?? null, pos: c.pos, translation: c.translation, exampleEn: c.exampleEn, exampleRu: c.exampleRu, sourceUrl: null, audioUrl: null }));
+        .map((c) => ({ word: c.word, transcription: c.transcription ?? null, pos: c.pos, translation: c.translation, exampleTt: c.exampleTt, exampleRu: c.exampleRu, sourceUrl: null }));
       if (!items.length) { await refund(this.repo, user, "gen", this.now); return { kind: "failed" }; }
       const previewId = await this.repo.insertPreview(user.id, "gen", { topic, items }, this.now);
       return { kind: "preview", previewId, topic, items };
@@ -165,7 +158,7 @@ export class ContentService {
     const p = await this.repo.getPreview<{ topic: string; items: CardDraft[] }>(user.id, previewId, "gen", this.now - PREVIEW_TTL_MS);
     if (!p) throw new Error("preview not found");
     const title = `🤖 ${p.topic}`;
-    const deckId = await this.repo.insertDeck({ slug: null, kind: "ai", titleRu: title, titleEn: title, level: null, ownerId: user.id });
+    const deckId = await this.repo.insertDeck({ slug: null, kind: "ai", titleRu: title, titleTt: title, levelNo: null, coveragePct: null, ownerId: user.id });
     await this.repo.insertNotes(deckId, p.items.map(toNote));
     await this.repo.subscribe(user.id, deckId, this.now);
     await this.repo.deletePreview(user.id, previewId);

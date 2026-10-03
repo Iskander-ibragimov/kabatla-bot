@@ -6,7 +6,7 @@ import { pick } from "./pick";
 /** View-model types shared with the bot layer (kept here so services never import the bot). */
 export interface CardView {
   cardId: number; noteId: number; reps: number; direction: Direction;
-  word: string; ipa: string | null; pos: string; translation: string; exampleEn: string; exampleRu: string;
+  word: string; transcription: string | null; pos: string; translation: string; exampleTt: string; exampleRu: string;
   hasAudio: boolean; sourceUrl: string | null; mem: Mem;
 }
 export interface Feedback { word: string; kind: "grow" | "step" | "lapse" | "first"; beforeDays: number; afterMs: number; keptDays?: number }
@@ -27,14 +27,14 @@ export type Screen =
 const ROWS_PER_REVIEW = 8;
 
 export const directionsOf = (u: Pick<User, "direction">): Direction[] =>
-  u.direction === "both" ? ["en_ru", "ru_en"] : [u.direction];
-export const displayDirection = (u: Pick<User, "direction">): Direction => (u.direction === "ru_en" ? "ru_en" : "en_ru");
+  u.direction === "both" ? ["tt_ru", "ru_tt"] : [u.direction];
+export const displayDirection = (u: Pick<User, "direction">): Direction => (u.direction === "ru_tt" ? "ru_tt" : "tt_ru");
 
 function toView(row: CardRow | (NewNote & { id: number; mem: Mem })): CardView {
   return {
-    cardId: row.id, noteId: row.noteId, reps: row.mem.reps, direction: row.direction, word: row.word, ipa: row.ipa, pos: row.pos,
-    translation: row.translation, exampleEn: row.exampleEn, exampleRu: row.exampleRu,
-    hasAudio: !!(row.audioFileId || row.audioUrl), sourceUrl: row.sourceUrl, mem: row.mem,
+    cardId: row.id, noteId: row.noteId, reps: row.mem.reps, direction: row.direction, word: row.word, transcription: row.transcription, pos: row.pos,
+    translation: row.translation, exampleTt: row.exampleTt, exampleRu: row.exampleRu,
+    hasAudio: !!row.audioFileId, sourceUrl: row.sourceUrl, mem: row.mem,
   };
 }
 
@@ -99,7 +99,7 @@ export class ReviewService {
       this.repo.guardedUsageStmt(new Date(this.now).toISOString().slice(0, 10), 1, ROWS_PER_REVIEW),
     ];
     if (user.direction === "both") {
-      const sibling: Direction = card.direction === "en_ru" ? "ru_en" : "en_ru";
+      const sibling: Direction = card.direction === "tt_ru" ? "ru_tt" : "tt_ru";
       stmts.push(this.repo.guardedSiblingStmt(user.id, card.noteId, sibling, today, this.now));
     }
     const res = await this.repo.batch(stmts);

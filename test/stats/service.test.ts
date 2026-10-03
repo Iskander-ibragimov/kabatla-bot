@@ -11,8 +11,8 @@ const DAY = 86_400_000;
 describe("stats", () => {
   it("cumulative totals by stage, memory, retention and forecast", async () => {
     const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 4, patch: { newPerDay: 0 } });
-    const a = await repo.insertCard(user.id, noteIds[0]!, "en_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 25 * DAY, scheduledDays: 25, stability: 25, difficulty: 5, reps: 5 });
-    const b = await repo.insertCard(user.id, noteIds[1]!, "en_ru", { ...newMem(T), state: "review", due: T + 2 * DAY, lastReview: T - 8 * DAY, scheduledDays: 10, stability: 10, difficulty: 5, reps: 3 });
+    const a = await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 25 * DAY, scheduledDays: 25, stability: 25, difficulty: 5, reps: 5 });
+    const b = await repo.insertCard(user.id, noteIds[1]!, "tt_ru", { ...newMem(T), state: "review", due: T + 2 * DAY, lastReview: T - 8 * DAY, scheduledDays: 10, stability: 10, difficulty: 5, reps: 3 });
     await new ReviewService(repo, T).grade(user, a, 5, 3);
     await new ReviewService(repo, T + 1000).grade((await repo.getUser(user.id))!, b, 3, 1);
     const s = await cumulative(repo, (await repo.getUser(user.id))!, T + 2000);

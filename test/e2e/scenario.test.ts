@@ -1,19 +1,23 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import seed from "../../seed/catalog.sql?raw";
 import { Repo } from "../../src/db/repo";
 import { tick } from "../../src/reminders/service";
 import { harness } from "../helpers/botHarness";
 import { fakeTelegram } from "../helpers/fakeTelegram";
-import { applySeed } from "../helpers/seedSql";
+import { WORDS, seedLevels } from "../helpers/seed";
 
 const MIN = 60_000, DAY = 86_400_000;
 const T = Date.UTC(2026, 8, 30, 6, 0); // 09:00 Moscow
+/** Level 2 is the deck this scenario studies: enough words for two days of ten new cards. */
+const LEVEL_2 = [
+  "бала", "ана", "ата", "кул", "күз", "баш", "ел", "ай", "кич", "төн", "иртә", "шәһәр", "урам", "мәктәп", "дус",
+  "тел", "акча", "ипи", "сөт", "ит", "алма", "чәй", "агач", "елга", "тау", "кояш", "яңгыр", "кар", "җил", "күл",
+];
 const gradeButtons = (m: { inline_keyboard?: { callback_data: string }[][] }) => (m.inline_keyboard ?? []).flat().map((b) => b.callback_data).filter((c) => c.startsWith("g:"));
 
 describe("first day and next day", () => {
   it("onboarding, a session, a reminder next morning and grown memory", async () => {
-    await applySeed(env.DB, seed);
+    await seedLevels(env.DB, { 1: WORDS.map(([word]) => word), 2: LEVEL_2 });
     const h = harness(env.DB, { now: T });
     await h.text("/start");
     await h.press("ob:ru");
@@ -21,8 +25,9 @@ describe("first day and next day", () => {
     await h.press("ob:10");
     await h.press("ob:09:00");
     await h.press("ob:180");
-    await h.press("ob:a2");
+    await h.press("ob:l02");
     await h.press("learn");
+    expect(h.lastText()).toContain("<b>бала</b>");
     let t = T;
     let sessionMsg = 100;
     for (let i = 0; i < 10; i++) {
@@ -47,10 +52,12 @@ describe("first day and next day", () => {
     const repo = new Repo(env.DB);
     const u = (await repo.getUserByTg(42))!;
     expect(u.streak).toBe(1);
+    expect(u).toMatchObject({ level: 2, direction: "tt_ru" });
+    expect(await repo.userDeckIds(u.id)).toEqual([(await repo.getDeckBySlug("l02"))!.id]);
     const tg = fakeTelegram();
     const nextMorning = T + DAY + MIN;
-    await tick({ repo, tg, adminChatId: 999, now: nextMorning });
-    await tick({ repo, tg, adminChatId: 999, now: nextMorning + MIN });
+    await tick({ repo, tg, now: nextMorning });
+    await tick({ repo, tg, now: nextMorning + MIN });
     const pushes = tg.of("sendMessage").filter((c) => String(c.payload.text).includes("Пора повторить"));
     expect(pushes).toHaveLength(1);
 

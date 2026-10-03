@@ -10,7 +10,7 @@ import { seedUser } from "../helpers/seed";
 
 const MIN = 60_000;
 const local = (d: number, h: number, m: number) => Date.UTC(2026, 8, d, h, m) - 180 * MIN; // +03:00
-const run = (db: D1Database, tg: ReturnType<typeof fakeTelegram>, now: number) => tick({ repo: new Repo(db), tg, adminChatId: 999, now });
+const run = (db: D1Database, tg: ReturnType<typeof fakeTelegram>, now: number) => tick({ repo: new Repo(db), tg, now });
 
 describe("reminders tick", () => {
   it("missed tick still sends exactly one daily push", async () => {
@@ -60,7 +60,7 @@ describe("reminders tick", () => {
   it("step ping once and never in quiet hours", async () => {
     const { repo, user, noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 1, patch: { nextDailyAt: local(30, 9, 0) + 10 * 86_400_000 } });
     const t0 = local(30, 12, 0);
-    await repo.insertCard(user.id, noteIds[0]!, "en_ru", { ...newMem(t0), state: "learning", step: 1, due: t0 + 10 * MIN, reps: 1, lastReview: t0, stability: 2, difficulty: 5 });
+    await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(t0), state: "learning", step: 1, due: t0 + 10 * MIN, reps: 1, lastReview: t0, stability: 2, difficulty: 5 });
     await repo.updateUser(user.id, { lastReviewAt: t0 });
     const tg = fakeTelegram();
     await run(env.DB, tg, t0 + 5 * MIN);
@@ -105,14 +105,6 @@ describe("reminders tick", () => {
     expect((await env.DB.prepare("SELECT done_at FROM jobs").first<{ done_at: number | null }>())!.done_at).not.toBeNull();
   });
 
-  it("voice jobs run in the tick", async () => {
-    const { noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 1, patch: { nextDailyAt: local(30, 9, 0) + 10 * 86_400_000 } });
-    await enqueue(env.DB, "voice", { noteId: noteIds[0], audioUrl: "https://d.dev/a.mp3" }, local(30, 9, 0));
-    const tg = fakeTelegram();
-    await run(env.DB, tg, local(30, 9, 1));
-    expect(tg.of("sendVoice")).toHaveLength(1);
-  });
-
   it("tick uses at most 10 D1 calls", async () => {
     for (let i = 0; i < 5; i++) await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 2000 + i });
     await enqueue(env.DB, "push", { chat_id: 1, text: "x" }, local(30, 9, 0));
@@ -133,7 +125,7 @@ describe("reminders tick", () => {
   it("users are marked before sending, so a crashed send never repeats", async () => {
     await seedUser(env.DB, { now: local(30, 8, 0), words: 1 });
     const crashing = { call: async () => { throw new Error("network reset"); } };
-    await tick({ repo: new Repo(env.DB), tg: crashing, adminChatId: 999, now: local(30, 9, 1) }).catch(() => undefined);
+    await tick({ repo: new Repo(env.DB), tg: crashing, now: local(30, 9, 1) }).catch(() => undefined);
     const tg = fakeTelegram();
     await run(env.DB, tg, local(30, 9, 2));
     expect(tg.of("sendMessage")).toHaveLength(0);

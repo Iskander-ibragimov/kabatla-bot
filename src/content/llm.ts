@@ -6,10 +6,10 @@ export type LlmProvider = z.infer<typeof ProviderSchema>;
 const CYR = /[А-Яа-яЁё]/;
 export const WordCardSchema = z.object({
   word: z.string().trim().min(1),
-  ipa: z.string().nullish(),
+  transcription: z.string().nullish(),
   pos: z.string().default(""),
   translation: z.string().trim().min(1).refine((s) => CYR.test(s), "translation must be Russian"),
-  exampleEn: z.string().trim().min(1).refine((s) => !CYR.test(s), "exampleEn must be English"),
+  exampleTt: z.string().trim().min(1),
   exampleRu: z.string().trim().min(1).refine((s) => CYR.test(s), "exampleRu must be Russian"),
 });
 export type WordCard = z.infer<typeof WordCardSchema>;
@@ -58,12 +58,12 @@ export async function completeCards(llm: LlmClient, system: string, user: string
 }
 
 export const WORDS_SYSTEM =
-  "You build flashcards for Russian speakers learning English. Reply with JSON only: " +
-  '{"cards":[{"word","ipa","pos","translation","exampleEn","exampleRu"}]}. ' +
-  "translation: short Russian translation (1–3 variants). exampleEn: one natural everyday English sentence with the word. " +
-  "exampleRu: its Russian translation. ipa: British IPA in slashes or null. pos: noun/verb/adj/adv/phrase. Keep the words exactly as given.";
+  "You build flashcards for Russian speakers learning Tatar. Reply with JSON only: " +
+  '{"cards":[{"word","transcription","pos","translation","exampleTt","exampleRu"}]}. ' +
+  "translation: short Russian translation (1–3 variants). exampleTt: one natural everyday Tatar sentence with the word. " +
+  "exampleRu: its Russian translation. transcription: null. pos: one of n, v, adj, adv, pron, num, post, conj, part, intj, phr. Keep the words exactly as given.";
 
 export const DECK_SYSTEM =
-  "You create themed English vocabulary decks for Russian speakers. Reply with JSON only: " +
-  '{"cards":[{"word","ipa","pos","translation","exampleEn","exampleRu"}]}. ' +
+  "You create themed Tatar vocabulary decks for Russian speakers. Reply with JSON only: " +
+  '{"cards":[{"word","transcription","pos","translation","exampleTt","exampleRu"}]}. ' +
   "Pick the most useful words and short phrases for the topic, no duplicates, from common to advanced.";

@@ -36,9 +36,9 @@ export function dayWindow(offsetMin: number, now: number): Window {
 }
 
 
-const RU_LANGS = new Set(["ru", "uk", "be", "kk"]);
+/** Interface language from Telegram's language code: Tatar for `tt`, Russian for everything else. */
 export function langFromTelegram(code?: string): Lang {
-  return code && RU_LANGS.has(code.slice(0, 2).toLowerCase()) ? "ru" : "en";
+  return code?.split(/[-_]/)[0]!.toLowerCase() === "tt" ? "tt" : "ru";
 }
 
 /** UTC offset in minutes from the local time the user reports; handles the midnight wrap. */
@@ -66,11 +66,11 @@ export const REMIND_TIMES = ["08:00", "09:00", "12:00", "19:00", "21:00"] as con
 export async function setSetting(repo: Repo, userId: number, key: SettingKey, value: unknown, now = Date.now()): Promise<void> {
   const bad = () => { throw new Error(`invalid ${key}: ${String(value)}`); };
   switch (key) {
-    case "lang": if (value !== "ru" && value !== "en") bad(); break;
+    case "lang": if (value !== "ru" && value !== "tt") bad(); break;
     case "retention": if (!RETENTIONS.includes(value as never)) bad(); break;
     case "newPerDay": if (!NEW_PER_DAY.includes(value as never)) bad(); break;
     case "remindAt": if (typeof value !== "string" || !HHMM.test(value)) bad(); break;
-    case "direction": if (!["en_ru", "ru_en", "both"].includes(value as string)) bad(); break;
+    case "direction": if (!["tt_ru", "ru_tt", "both"].includes(value as string)) bad(); break;
     case "autoplay": if (typeof value !== "boolean") bad(); break;
   }
   const patch = { [key]: value } as Partial<User>;
@@ -84,7 +84,7 @@ export async function setSetting(repo: Repo, userId: number, key: SettingKey, va
 export type OnboardingScreen =
   | { kind: "lang" }
   | { kind: "placement"; index: number; word: string }
-  | { kind: "goal"; level: string; known: number }
+  | { kind: "goal"; level: number; known: number }
   | { kind: "remind" }
   | { kind: "tz"; options: { label: string; offset: number }[] }
   | { kind: "deck"; slug: string }
@@ -100,15 +100,18 @@ function tzOptions(now: number) {
   });
 }
 
+/** Slug of the catalog deck that holds a level: l01 … l20. */
+const levelSlug = (level: number) => `l${String(level).padStart(2, "0")}`;
+
 /** Re-renders the current onboarding step (used on /start while onboarding). */
 export function startOnboarding(user: User, now = Date.now()): OnboardingScreen {
   const data = user.onboardingData ? (JSON.parse(user.onboardingData) as { i: number; known: number }) : { i: 0, known: 0 };
   switch (user.onboardingStep) {
     case "placement": return { kind: "placement", index: data.i, word: PLACEMENT_WORDS[data.i] ?? PLACEMENT_WORDS[0] };
-    case "goal": return { kind: "goal", level: user.level ?? "A1", known: data.known };
+    case "goal": return { kind: "goal", level: user.level, known: data.known };
     case "remind": return { kind: "remind" };
     case "tz": return { kind: "tz", options: tzOptions(now) };
-    case "deck": return { kind: "deck", slug: (user.level ?? "A1").toLowerCase() };
+    case "deck": return { kind: "deck", slug: levelSlug(user.level) };
     default: return { kind: "lang" };
   }
 }
@@ -118,7 +121,7 @@ export async function advanceOnboarding(repo: Repo, user: User, answer: string, 
   const step = user.onboardingStep;
   const invalid = { kind: "invalid", step: step ?? "" } as const;
   if (step === "lang") {
-    if (answer !== "ru" && answer !== "en") return invalid;
+    if (answer !== "ru" && answer !== "tt") return invalid;
     await repo.updateUser(user.id, { lang: answer, onboardingStep: "placement", onboardingData: JSON.stringify({ i: 0, known: 0 }) });
     return { kind: "placement", index: 0, word: PLACEMENT_WORDS[0] };
   }
@@ -154,7 +157,7 @@ export async function advanceOnboarding(repo: Repo, user: User, answer: string, 
     } else if (/^-?\d+$/.test(answer) && TZ_CHOICES.includes(Number(answer))) offset = Number(answer);
     if (offset == null) return invalid;
     await repo.updateUser(user.id, { tzOffsetMin: offset, onboardingStep: "deck" });
-    return { kind: "deck", slug: (user.level ?? "A1").toLowerCase() };
+    return { kind: "deck", slug: levelSlug(user.level) };
   }
   if (step === "deck") {
     if (answer === "other") return { kind: "deckList" };

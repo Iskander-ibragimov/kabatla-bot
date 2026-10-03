@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Repo } from "../../src/db/repo";
-import { checkUsage, importDeckCsv } from "../../src/admin/service";
+import { checkUsage } from "../../src/admin/service";
 import { fakeTelegram } from "../helpers/fakeTelegram";
 import { harness } from "../helpers/botHarness";
 
@@ -14,22 +14,6 @@ describe("admin", () => {
     const before = h.tg.calls.length;
     await h.text("/admin");
     expect(h.tg.calls.length).toBe(before);
-  });
-
-  it("csv upload creates a catalog deck", async () => {
-    const repo = new Repo(env.DB);
-    const msg = await importDeckCsv(repo, 'word,translation,example_en,example_ru\ncozy,уютный,"A cozy, warm room.","Уютная, тёплая комната."\n', "deck: Уют | Cozy home | A2", T);
-    expect(msg).toContain("1");
-    const deck = await repo.getDeckBySlug("cozy_home");
-    expect(deck).toMatchObject({ titleRu: "Уют", kind: "catalog", total: 1 });
-    expect(await importDeckCsv(repo, "x", "no caption", T)).toContain("deck:");
-  });
-
-  it("slug stays short enough for 64-byte callback data", async () => {
-    const repo = new Repo(env.DB);
-    await importDeckCsv(repo, "word,translation\ncozy,уютный\n", "deck: Длинная | A very long English deck title about business negotiations and meetings | B2", T);
-    const d = (await env.DB.prepare("SELECT slug FROM decks").first<{ slug: string }>())!;
-    expect(new TextEncoder().encode(`ob:${d.slug}`).length).toBeLessThanOrEqual(64);
   });
 
   it("warns the admin once when D1 writes pass 80%", async () => {

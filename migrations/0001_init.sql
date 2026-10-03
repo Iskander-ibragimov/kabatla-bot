@@ -2,14 +2,14 @@ CREATE TABLE users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   tg_id INTEGER NOT NULL UNIQUE,
   chat_id INTEGER NOT NULL,
-  lang TEXT NOT NULL DEFAULT 'ru' CHECK (lang IN ('ru','en')),
+  lang TEXT NOT NULL DEFAULT 'ru' CHECK (lang IN ('ru','tt')),
   tz_offset_min INTEGER NOT NULL DEFAULT 180,
   remind_at TEXT NOT NULL DEFAULT '09:00',
   new_per_day INTEGER NOT NULL DEFAULT 10,
   retention REAL NOT NULL DEFAULT 0.9,
-  direction TEXT NOT NULL DEFAULT 'en_ru' CHECK (direction IN ('en_ru','ru_en','both')),
+  direction TEXT NOT NULL DEFAULT 'tt_ru' CHECK (direction IN ('tt_ru','ru_tt','both')),
   autoplay INTEGER NOT NULL DEFAULT 0,
-  level TEXT,
+  level INTEGER NOT NULL DEFAULT 1,
   streak INTEGER NOT NULL DEFAULT 0,
   last_study_day TEXT,
   active INTEGER NOT NULL DEFAULT 1,
@@ -25,9 +25,13 @@ CREATE TABLE users (
   last_step_ping_at INTEGER,
   last_review_at INTEGER,
   mix_counter INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  next_daily_at INTEGER,
+  next_evening_at INTEGER
 );
-CREATE INDEX idx_users_active_remind ON users(active, remind_at);
+CREATE INDEX idx_users_next_daily ON users(next_daily_at);
+CREATE INDEX idx_users_next_evening ON users(next_evening_at);
+CREATE INDEX idx_users_last_review ON users(last_review_at);
 
 CREATE TABLE decks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,23 +39,26 @@ CREATE TABLE decks (
   owner_id INTEGER REFERENCES users(id),
   kind TEXT NOT NULL CHECK (kind IN ('catalog','ai','custom')),
   title_ru TEXT NOT NULL,
-  title_en TEXT NOT NULL,
-  level TEXT,
+  title_tt TEXT NOT NULL,
+  level_no INTEGER,
+  coverage_pct INTEGER,
   total INTEGER NOT NULL DEFAULT 0
 );
+CREATE UNIQUE INDEX idx_decks_level ON decks(level_no) WHERE level_no IS NOT NULL;
 
 CREATE TABLE notes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   deck_id INTEGER NOT NULL REFERENCES decks(id),
   word TEXT NOT NULL,
   word_key TEXT NOT NULL,
-  ipa TEXT,
+  transcription TEXT,
   pos TEXT NOT NULL DEFAULT '',
   translation TEXT NOT NULL,
-  example_en TEXT NOT NULL DEFAULT '',
+  example_tt TEXT NOT NULL DEFAULT '',
   example_ru TEXT NOT NULL DEFAULT '',
+  example_src TEXT NOT NULL DEFAULT '',
   audio_file_id TEXT,
-  audio_url TEXT,
+  audio_tries INTEGER NOT NULL DEFAULT 0,
   source_url TEXT,
   UNIQUE (deck_id, word_key)
 );
@@ -68,7 +75,7 @@ CREATE TABLE cards (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id),
   note_id INTEGER NOT NULL REFERENCES notes(id),
-  direction TEXT NOT NULL CHECK (direction IN ('en_ru','ru_en')),
+  direction TEXT NOT NULL CHECK (direction IN ('tt_ru','ru_tt')),
   state TEXT NOT NULL CHECK (state IN ('new','learning','review','relearning')),
   step INTEGER,
   stability REAL,
@@ -137,4 +144,12 @@ CREATE TABLE usage_daily (
   rows_written_est INTEGER NOT NULL DEFAULT 0,
   requests INTEGER NOT NULL DEFAULT 0,
   warned INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  note_id INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE (user_id, note_id)
 );

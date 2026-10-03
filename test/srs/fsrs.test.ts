@@ -73,14 +73,14 @@ describe("srs", () => {
     expect(memoryDays(newMem(T))).toBe(0);
   });
 
-  it("formatInterval ru and en", () => {
+  it("formatInterval ru and tt", () => {
     const cases: [number, string, string][] = [
       [45_000, "<1м", "<1m"], [6 * MIN, "<6м", "<6m"], [3 * H, "3ч", "3h"],
       [D, "1д", "1d"], [70 * D, "2,3мес", "2.3mo"], [400 * D, "1,1г", "1.1y"],
     ];
-    for (const [ms, ru, en] of cases) {
+    for (const [ms, ru, tt] of cases) {
       expect(formatInterval(ms, "ru")).toBe(ru);
-      expect(formatInterval(ms, "en")).toBe(en);
+      expect(formatInterval(ms, "tt")).toBe(tt);
     }
   });
 });

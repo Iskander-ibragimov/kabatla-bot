@@ -1,14 +1,12 @@
-import { runVoiceJob } from "../content/audio";
 import type { Lang, Repo } from "../db/repo";
 import { dict } from "../i18n";
 import { claim, completeMany, fail } from "../jobs/queue";
 import { type TgApi, tgErrorInfo } from "../tg/client";
 import { EVENING_AT, localDay, nextOccurrence } from "../users/service";
 
-export interface TickDeps { repo: Repo; tg: TgApi; adminChatId: number; now: number }
+export interface TickDeps { repo: Repo; tg: TgApi; now: number }
 
 const MAX_SENDS = 35;
-const MAX_VOICE_JOBS = 3;
 const EVENING_SCAN = 100;
 
 /* SQL fragments; ?1 = now (ms). Local day uses the 04:00 boundary. */
@@ -103,17 +101,12 @@ export async function tick(d: TickDeps): Promise<{ sent: number }> {
   if (limitedUntil == null && sent < MAX_SENDS) {
     const jobs = await claim(db, now, Math.min(10, MAX_SENDS - sent));
     const done: number[] = [];
-    let voice = 0;
     for (const j of jobs) {
       try {
         if (j.kind === "push") {
           const res = await send(null, j.payload as unknown as Push);
           done.push(j.id);
           if (res === "limited") break;
-        } else if (j.kind === "voice") {
-          if (voice++ >= MAX_VOICE_JOBS) break;
-          await runVoiceJob(repo, tg, d.adminChatId, j.payload as { noteId: number; audioUrl: string });
-          done.push(j.id);
         } else done.push(j.id);
       } catch (e) {
         await fail(db, j.id, String((e as Error).message ?? e), now);

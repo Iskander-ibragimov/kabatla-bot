@@ -34,7 +34,7 @@ export default {
     const tg = new TgClient(config.botToken);
     const now = Date.now();
     try {
-      await tick({ repo, tg, adminChatId: config.adminTgId, now });
+      await tick({ repo, tg, now });
       await checkUsage(repo, tg, config.adminTgId, now);
     } catch (e) {
       console.error("tick failed", e);

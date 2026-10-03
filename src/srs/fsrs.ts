@@ -2,7 +2,7 @@ import { type Card, type FSRS, type Grade, State, createEmptyCard, fsrs, generat
 
 export type CardState = "new" | "learning" | "review" | "relearning";
 export type Rating = 1 | 2 | 3 | 4;
-export type Lang = "ru" | "en";
+export type Lang = "ru" | "tt";
 export type Stage = "new" | "learning" | "known" | "learned";
 
 /** Memory state of one card, stored in D1 as plain numbers (ms epoch). */

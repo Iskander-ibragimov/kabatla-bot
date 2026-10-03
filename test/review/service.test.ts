@@ -15,7 +15,8 @@ describe("review service", () => {
     const { repo, user } = await seedUser(env.DB, { now: T });
     const s = asCard(await new ReviewService(repo, T).nextScreen(user));
     expect(s.intervals).toEqual({ 1: "<1м", 2: "<6м", 3: "<10м", 4: "8д" });
-    expect(s.view.word).toBe("borrow");
+    expect(s.view.word).toBe("китап");
+    expect(s.view).toMatchObject({ direction: "tt_ru", translation: "книга", exampleTt: "китап.", transcription: null, hasAudio: false });
     expect(s.counts).toEqual({ n: 5, l: 0, r: 0 });
     expect(s.feedback).toBeNull();
   });
@@ -26,7 +27,7 @@ describe("review service", () => {
     const u = (await repo.getUser(user.id))!;
     const next = asCard(await new ReviewService(repo, T + 1000).grade(u, first.view.cardId, 0, 1));
     expect(next.view.cardId).toBe(first.view.cardId);
-    expect(next.feedback).toMatchObject({ kind: "step", word: "borrow" });
+    expect(next.feedback).toMatchObject({ kind: "step", word: "китап" });
     expect(next.canUndo).toBe(true);
   });
 
@@ -46,7 +47,7 @@ describe("review service", () => {
 
   it("grow feedback shows before and after days", async () => {
     const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
-    const id = await repo.insertCard(user.id, noteIds[0]!, "en_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 2 * DAY, scheduledDays: 2, stability: 2.3, difficulty: 5, reps: 2 });
+    const id = await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 2 * DAY, scheduledDays: 2, stability: 2.3, difficulty: 5, reps: 2 });
     const s = await new ReviewService(repo, T).grade(user, id, 2, 3);
     expect(s.kind === "done" || s.kind === "card").toBe(true);
     const fb = s.kind === "done" || s.kind === "card" ? s.feedback : null;
@@ -56,7 +57,7 @@ describe("review service", () => {
 
   it("lapse keeps memory", async () => {
     const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
-    const id = await repo.insertCard(user.id, noteIds[0]!, "en_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 30 * DAY, scheduledDays: 30, stability: 30, difficulty: 5, reps: 5 });
+    const id = await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 30 * DAY, scheduledDays: 30, stability: 30, difficulty: 5, reps: 5 });
     const s = await new ReviewService(repo, T).grade(user, id, 5, 1);
     const fb = s.kind === "done" || s.kind === "card" ? s.feedback : null;
     expect(fb).toMatchObject({ kind: "lapse", beforeDays: 30 });
@@ -81,7 +82,7 @@ describe("review service", () => {
 
   it("day summary counts learned today and totals by stage", async () => {
     const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 3 });
-    const id = await repo.insertCard(user.id, noteIds[0]!, "en_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 15 * DAY, scheduledDays: 15, stability: 15, difficulty: 4, reps: 4 });
+    const id = await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 15 * DAY, scheduledDays: 15, stability: 15, difficulty: 4, reps: 4 });
     await repo.updateUser(user.id, { newPerDay: 0 });
     const s = await new ReviewService(repo, T).grade((await repo.getUser(user.id))!, id, 4, 3);
     if (s.kind !== "done") throw new Error(s.kind);
@@ -106,11 +107,11 @@ describe("review service", () => {
   it("sibling in the other direction is hidden until tomorrow", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1, patch: { direction: "both" } });
     const s = asCard(await new ReviewService(repo, T).nextScreen(user));
-    expect(s.view.direction).toBe("en_ru");
+    expect(s.view.direction).toBe("tt_ru");
     const after = await new ReviewService(repo, T).grade(user, s.view.cardId, 0, 4);
     expect(after.kind).toBe("done");
     const tomorrow = asCard(await new ReviewService(repo, T + DAY).nextScreen((await repo.getUser(user.id))!));
-    expect(tomorrow.view.direction).toBe("ru_en");
+    expect(tomorrow.view.direction).toBe("ru_tt");
   });
 
   it("grade uses at most 4 D1 calls", async () => {

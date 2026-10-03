@@ -1,8 +1,7 @@
 import { Bot, type Context, GrammyError } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
-import { isAdmin, adminStatsText, importDeckCsv } from "../admin/service";
+import { isAdmin, adminStatsText } from "../admin/service";
 import { playVoice } from "../content/audio";
-import { DictionaryClient } from "../content/dictionary";
 import { LlmClient } from "../content/llm";
 import { ContentService } from "../content/service";
 import type { Repo, User } from "../db/repo";
@@ -33,7 +32,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   const { repo, config } = deps;
   const bot = new Bot<Ctx>(config.botToken, botInfo ? { botInfo } : {});
   const tg: TgApi = { call: <T>(m: string, p: Record<string, unknown>) => (bot.api.raw as unknown as Record<string, (x: unknown) => Promise<T>>)[m]!(p) };
-  const content = () => new ContentService(repo, { dict: new DictionaryClient(deps.fetch), llm: new LlmClient(config.llmProviders, deps.fetch) }, deps.now());
+  const content = () => new ContentService(repo, { llm: new LlmClient(config.llmProviders, deps.fetch) }, deps.now());
   const reviews = () => new ReviewService(repo, deps.now());
 
   const markup = (keyboard: Keyboard) => (keyboard.length ? { inline_keyboard: keyboard } : undefined);
@@ -115,7 +114,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   const answerOb = async (ctx: Ctx, answer: string, messageId?: number) => {
     const screen = await advanceOnboarding(repo, ctx.user, answer, deps.now());
     if (screen.kind === "invalid") { if (ctx.callbackQuery) return toast(ctx, dict(ctx.user.lang).chooseAbove); await ctx.reply(dict(ctx.user.lang).chooseAbove); return; }
-    const lang = screen.kind === "placement" && screen.index === 0 && (answer === "ru" || answer === "en") ? answer : ctx.user.lang;
+    const lang = screen.kind === "placement" && screen.index === 0 && (answer === "ru" || answer === "tt") ? answer : ctx.user.lang;
     await editOrSend(ctx, messageId, await renderOb(ctx, screen, lang));
     await toast(ctx);
   };
@@ -217,11 +216,11 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     const u = ctx.user;
     const cycle = <T>(list: readonly T[], v: T) => list[(list.indexOf(v) + 1) % list.length]!;
     switch (ctx.match[1]) {
-      case "lang": await setSetting(repo, u.id, "lang", u.lang === "ru" ? "en" : "ru", deps.now()); break;
+      case "lang": await setSetting(repo, u.id, "lang", u.lang === "ru" ? "tt" : "ru", deps.now()); break;
       case "ret": await setSetting(repo, u.id, "retention", cycle(RETENTIONS, u.retention as (typeof RETENTIONS)[number]), deps.now()); break;
       case "new": await setSetting(repo, u.id, "newPerDay", cycle([5, 10, 20] as const, u.newPerDay as 5), deps.now()); break;
       case "rem": await setSetting(repo, u.id, "remindAt", cycle(REMIND_TIMES, u.remindAt as (typeof REMIND_TIMES)[number]), deps.now()); break;
-      case "dir": await setSetting(repo, u.id, "direction", cycle(["en_ru", "ru_en", "both"] as const, u.direction), deps.now()); break;
+      case "dir": await setSetting(repo, u.id, "direction", cycle(["tt_ru", "ru_tt", "both"] as const, u.direction), deps.now()); break;
       case "auto": await setSetting(repo, u.id, "autoplay", !u.autoplay, deps.now()); break;
     }
     const updated = (await repo.getUser(u.id))!;
@@ -237,14 +236,6 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   c.command("admin", async (ctx) => {
     if (!isAdmin(ctx.user, config)) return;
     await ctx.reply(await adminStatsText(repo, deps.now()), HTML);
-  });
-  c.on("message:document", async (ctx) => {
-    if (!isAdmin(ctx.user, config)) return;
-    const doc = ctx.message.document;
-    const caption = ctx.message.caption ?? "";
-    const file = await ctx.api.getFile(doc.file_id);
-    const res = await deps.fetch(`https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`);
-    await ctx.reply(await importDeckCsv(repo, await res.text(), caption, deps.now()), HTML);
   });
 
   /* free text: onboarding answers, manual translations, custom words */

@@ -3,11 +3,10 @@ export const PLACEMENT_WORDS = [
   "house", "answer", "borrow", "journey", "improve", "reliable", "approach", "thorough", "reluctant", "ubiquitous",
 ] as const;
 
-export type Level = "A1" | "A2" | "B1" | "B2";
-
-export function placementLevel(known: number): Level {
-  if (known <= 2) return "A1";
-  if (known <= 5) return "A2";
-  if (known <= 8) return "B1";
-  return "B2";
+/** Start level (1…4) from the number of known placement words. */
+export function placementLevel(known: number): number {
+  if (known <= 2) return 1;
+  if (known <= 5) return 2;
+  if (known <= 8) return 3;
+  return 4;
 }

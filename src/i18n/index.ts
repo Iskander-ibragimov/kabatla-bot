@@ -1,6 +1,6 @@
 import type { Lang } from "../srs/fsrs";
-import { en } from "./en";
 import { ru, type Dict } from "./ru";
+import { tt } from "./tt";
 
-export const dict = (lang: Lang): Dict => (lang === "ru" ? ru : en);
+export const dict = (lang: Lang): Dict => (lang === "ru" ? ru : tt);
 export type { Dict };

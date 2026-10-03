@@ -9,17 +9,17 @@ import { esc } from "./views";
 
 const btn = (text: string, data: string, style?: Button["style"]): Button => (style ? { text, callback_data: data, style } : { text, callback_data: data });
 const tzLabel = (min: number) => `UTC${min >= 0 ? "+" : "−"}${Math.floor(Math.abs(min) / 60)}${Math.abs(min) % 60 ? ":" + String(Math.abs(min) % 60).padStart(2, "0") : ""}`;
-export const deckTitle = (d: Pick<DeckRow, "titleRu" | "titleEn">, lang: Lang) => (lang === "ru" ? d.titleRu : d.titleEn);
+export const deckTitle = (d: Pick<DeckRow, "titleRu" | "titleTt">, lang: Lang) => (lang === "ru" ? d.titleRu : d.titleTt);
 
 export function renderOnboarding(s: OnboardingScreen, lang: Lang, deck?: DeckRow | null, decks?: DeckRow[]): Rendered {
   const t = dict(lang);
   switch (s.kind) {
     case "lang":
-      return { text: t.welcome, keyboard: [[btn("🇷🇺 Русский", "ob:ru"), btn("🇬🇧 English", "ob:en")]] };
+      return { text: t.welcome, keyboard: [[btn("🇷🇺 Русский", "ob:ru"), btn("Татарча", "ob:tt")]] };
     case "placement":
       return { text: t.placementQ(s.index + 1, esc(s.word)), keyboard: [[btn(t.knowBtn, "ob:1", "success"), btn(t.dontKnowBtn, "ob:0")]] };
     case "goal":
-      return { text: t.goalQ(s.level), keyboard: [[btn(t.goalBtn(5), "ob:5"), btn(t.goalBtn(10), "ob:10", "primary"), btn(t.goalBtn(20), "ob:20")]] };
+      return { text: t.goalQ(String(s.level)), keyboard: [[btn(t.goalBtn(5), "ob:5"), btn(t.goalBtn(10), "ob:10", "primary"), btn(t.goalBtn(20), "ob:20")]] };
     case "remind":
       return { text: t.remindQ, keyboard: [REMIND_TIMES.slice(0, 3).map((x) => btn(x, `ob:${x}`)), REMIND_TIMES.slice(3).map((x) => btn(x, `ob:${x}`))] };
     case "tz":
