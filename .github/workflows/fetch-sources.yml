@@ -1,0 +1,34 @@
+name: fetch-sources
+# Downloads corpus.tatar frequency lists and Tatoeba tat-rus pairs and publishes them to the orphan branch `sources`.
+# Internal use only: the corpus licence is unspecified; never copy this data into master.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - scripts/fetch-sources.ts
+      - scripts/lib/sources.ts
+      - .github/trigger/fetch-sources
+      - .github/workflows/fetch-sources.yml
+permissions:
+  contents: write
+concurrency: fetch-sources
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: corepack enable pnpm && pnpm install --frozen-lockfile
+      - name: Download sources
+        run: pnpm exec tsx scripts/fetch-sources.ts
+      - name: Publish out/ to the sources branch
+        run: |
+          cd out
+          git init -q -b sources
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "sources: $(date -u +%Y-%m-%d)"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" sources
