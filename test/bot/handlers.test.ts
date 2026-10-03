@@ -116,7 +116,7 @@ describe("bot handlers", () => {
   });
 
   it("two concurrent taps on a time-zone button finish onboarding once; the second is answered as a stale button", async () => {
-    const { h, update } = await finishWith((h) => Promise.all([h.press("ob:180", 100), h.press("ob:180", 100)]));
+    const { update } = await finishWith((h) => Promise.all([h.press("ob:180", 100), h.press("ob:180", 100)]));
     expect(update.filter((c) => c.method === "editMessageText")).toHaveLength(1);
     const cards = update.filter((c) => c.method === "sendMessage");
     expect(cards).toHaveLength(1);
@@ -126,7 +126,6 @@ describe("bot handlers", () => {
     const u = (await repo.getUserByTg(42))!;
     expect(await repo.userDeckIds(u.id)).toEqual([(await repo.getDeckBySlug("l04"))!.id]);
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM cards WHERE user_id = ?").bind(u.id).first<{ n: number }>())!.n).toBe(1);
-    void h;
   });
 
   it("two concurrent typed times finish onboarding once and the second gets no answer", async () => {
@@ -311,14 +310,13 @@ describe("bot handlers", () => {
     });
 
     it("a card without a voice gets none, and the update is back within the ordinary budget", async () => {
-      const { h, update, easy } = await autoplaySession();
+      const { h, easy } = await autoplaySession();
       await env.DB.prepare("UPDATE notes SET audio_file_id = NULL WHERE word = 'вакыт'").run();
       await h.text("/learn");
       const second = await easy();
       // The voice of the first card is removed with it; the second card has no voice to send.
       expect(second.methods).toEqual(["sendMessage", "deleteMessage", "deleteMessage", "answerCallbackQuery"]);
       expect(second.d1).toBeLessThanOrEqual(8);
-      void update;
     });
   });
 

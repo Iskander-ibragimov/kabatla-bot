@@ -162,7 +162,7 @@ describe("users", () => {
 
     it("an answer that arrives with the user row read before the finish changes nothing", async () => {
       const repo = new Repo(env.DB);
-      const deckIds = await seedLevels(env.DB, { 1: ["бер"], 2: ["ике"] });
+      await seedLevels(env.DB, { 1: ["бер"], 2: ["ике"] });
       const before = await placedAt(repo, 32, 1);
       expect((await advanceOnboarding(repo, before, "180", T)).kind).toBe("finished");
       // The learner moved on and left level 1; the late answer must neither move them back nor open anything.
@@ -171,7 +171,6 @@ describe("users", () => {
       expect(await advanceOnboarding(repo, before, "240", T + 60_000)).toEqual({ kind: "stale" });
       expect(await repo.getUser(before.id)).toMatchObject({ onboardingStep: null, tzOffsetMin: 180, level: 2, nextDailyAt: nextOccurrence(180, "09:00", T) });
       expect(await repo.userDeckIds(before.id)).toEqual([]);
-      void deckIds;
     });
   });
 
