@@ -7,8 +7,9 @@
  *       words stays as it is. A word listed in EXCEPTIONS is answered from there.
  *  3. к, г → къ, гъ when the vowel of their syllable is back: before а о у ы, or, with no
  *     vowel right after, when the nearest vowel to the left is back. Written къ, гъ are kept.
- *  4. к/г + а or ы + consonant + ь: the ь marks a front syllable after a hard consonant, so
- *     the result is къ/гъ + ә or е, and the ь itself is silent (сәгать → сәгъәт).
+ *  4. к/г + а, ы or у + consonant + ь: the ь marks a front syllable after a hard consonant, so
+ *     the result is къ/гъ + ә, е or ү, and the ь itself is silent (сәгать → сәгъәт,
+ *     шигырь → шигъер, мәшгуль → мәшгъүл).
  *  5. в → w; у, ү right after a vowel → w.
  *  6. я, ю, е at the word start and after a vowel, ъ or ь → й + vowel: of the word's row at
  *     the start and after a vowel (я → а/ә, ю → у/ү, е → ы/е), back after ъ, ь (дөнья → дөнйа).
@@ -32,7 +33,7 @@ const IOTATION: Readonly<Record<string, readonly [back: string, front: string]>>
   "е": ["ы", "е"],
 };
 /** Rule 4: the back letter written after къ, гъ → the front vowel it stands for. */
-const FRONT_AFTER_HARD: Readonly<Record<string, string>> = { "а": "ә", "ы": "е" };
+const FRONT_AFTER_HARD: Readonly<Record<string, string>> = { "а": "ә", "ы": "е", "у": "ү" };
 
 /** Transcribes every Cyrillic word of the text. Never throws; text that is not Cyrillic comes back unchanged. */
 export function transcribe(text: string): string {

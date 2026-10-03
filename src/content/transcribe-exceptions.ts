@@ -32,6 +32,9 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "чөнки": "чө́нки",
   "хәзер": "хә́зер",
 
+  // Front words spelled with я, ю, е alone and no ь at the end: the row rule reads them back.
+  "юеш": "йүйе́ш",
+
   // Arabic loans where а after [къ], [гъ] or in a front word is read [ә] and the spelling does not show it.
   "сәлам": "сәлә́м",
   "кадәр": "къәдә́р",

@@ -34,7 +34,7 @@ const RULE_3: Row[] = [
   ["тәкъдим", "тәкъди́м"],
 ];
 
-/** Rule 4: after [къ], [гъ] a back letter is read front when ь closes the syllable. */
+/** Rule 4: after [къ], [гъ] a back letter (а, ы, у) is read front (ә, е, ү) when ь closes the syllable. */
 const RULE_4: Row[] = [
   ["табигать", "табигъә́т"],
   ["шәфкать", "шәфкъә́т"],
@@ -44,6 +44,7 @@ const RULE_4: Row[] = [
   ["вәгазь", "wәгъә́з"],
   ["шигырь", "шигъе́р"], // verify
   ["фигыль", "фигъе́л"], // verify
+  ["мәшгуль", "мәшгъү́л"], // verify
 ];
 
 /** Rule 5: в is [w]; у, ү after a vowel are [w]. */
@@ -141,6 +142,8 @@ const EXCEPTION_ROWS: Row[] = [
   ["әмма", "ә́мма"], // verify
   ["чөнки", "чө́нки"], // verify
   ["хәзер", "хә́зер"], // verify
+  // a front word spelled with ю, е alone: the rule for such words reads it back
+  ["юеш", "йүйе́ш"], // verify
   // Arabic loans: а after [къ], [гъ] read as [ә] with nothing in the spelling to show it
   ["кадәр", "къәдә́р"], // verify
   ["гаилә", "гъәилә́"], // verify
