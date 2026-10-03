@@ -177,9 +177,10 @@ export class Repo {
     const res = await this.db.batch<{ id: number }>(stmts);
     return res.slice(0, rows.length).map((r) => r.results[0]!.id);
   }
-  async subscribe(userId: number, deckId: number, now: number): Promise<void> {
-    await this.db.prepare("INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) VALUES (?, ?, ?)").bind(userId, deckId, now).run();
+  subscribeStmt(userId: number, deckId: number, now: number): D1PreparedStatement {
+    return this.db.prepare("INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) VALUES (?, ?, ?)").bind(userId, deckId, now);
   }
+  async subscribe(userId: number, deckId: number, now: number): Promise<void> { await this.subscribeStmt(userId, deckId, now).run(); }
   async userDeckIds(userId: number): Promise<number[]> {
     const { results } = await this.db.prepare("SELECT deck_id FROM user_decks WHERE user_id = ? ORDER BY added_at, deck_id").bind(userId).all<{ deck_id: number }>();
     return results.map((r) => r.deck_id);

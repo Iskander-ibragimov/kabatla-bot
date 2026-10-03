@@ -103,26 +103,22 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   });
 
   /* onboarding */
-  const renderOb = async (ctx: Ctx, screen: ReturnType<typeof startOnboarding>, lang = ctx.user.lang): Promise<Rendered> => {
-    if (screen.kind === "deck") return renderOnboarding(screen, lang, await repo.getDeckBySlug(screen.slug));
-    if (screen.kind === "deckList") {
-      const all = await repo.listDecksForUser(ctx.user.id, deps.now());
-      return renderOnboarding(screen, lang, null, all.filter((d) => d.kind === "catalog"));
-    }
-    return renderOnboarding(screen, lang);
-  };
   const answerOb = async (ctx: Ctx, answer: string, messageId?: number) => {
     const screen = await advanceOnboarding(repo, ctx.user, answer, deps.now());
     if (screen.kind === "invalid") { if (ctx.callbackQuery) return toast(ctx, dict(ctx.user.lang).chooseAbove); await ctx.reply(dict(ctx.user.lang).chooseAbove); return; }
     const lang = screen.kind === "placement" && screen.index === 0 && (answer === "ru" || answer === "tt") ? answer : ctx.user.lang;
-    await editOrSend(ctx, messageId, await renderOb(ctx, screen, lang));
-    await toast(ctx);
+    await editOrSend(ctx, messageId, renderOnboarding(screen, lang));
+    if (screen.kind !== "finished") return toast(ctx);
+    // The first card is a new message through the same path as /learn (it also answers the callback);
+    // the user row is re-read for the new time zone and level.
+    ctx.user = (await repo.getUser(ctx.user.id))!;
+    await show(ctx, await reviews().nextScreen(ctx.user), "send");
   };
 
   c.command("start", async (ctx) => {
     const t = dict(ctx.user.lang);
     if (!ctx.user.onboardingStep) { await send(ctx, { text: t.alreadySetUp, keyboard: learnKeyboard(ctx.user.lang) }); return; }
-    await send(ctx, await renderOb(ctx, startOnboarding(ctx.user, deps.now())));
+    await send(ctx, renderOnboarding(startOnboarding(ctx.user, deps.now()), ctx.user.lang));
   });
   c.callbackQuery(/^ob:(.+)$/, async (ctx) => {
     if (!ctx.user.onboardingStep) return toast(ctx);

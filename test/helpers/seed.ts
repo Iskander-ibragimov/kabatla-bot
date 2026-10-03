@@ -1,12 +1,11 @@
 import { type NoteInput, Repo, type User } from "../../src/db/repo";
-import { nextOccurrence } from "../../src/users/service";
+import { levelSlug, nextOccurrence } from "../../src/users/service";
 
 export const WORDS: [string, string][] = [
   ["китап", "книга"], ["вакыт", "время"], ["авыл", "деревня"], ["су", "вода"], ["юл", "дорога"], ["көн", "день"],
   ["өй", "дом"], ["эш", "работа"], ["кеше", "человек"], ["сүз", "слово"], ["яңа", "новый"], ["зур", "большой"],
 ];
 
-const levelSlug = (n: number) => `l${String(n).padStart(2, "0")}`;
 const NCHY = new Set([6, 9, 10, 16, 19]);
 const note = (word: string, translation: string): NoteInput => ({
   word, transcription: null, pos: "n", translation, exampleTt: `${word}.`, exampleRu: `${translation}.`, exampleSrc: "own",

@@ -1,6 +1,10 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Repo } from "../../src/db/repo";
+import { ru } from "../../src/i18n/ru";
+import { tt } from "../../src/i18n/tt";
+import { PLACEMENT } from "../../src/users/placement";
+import { countingDb } from "../helpers/countingDb";
 import { harness } from "../helpers/botHarness";
 import { seedLevels } from "../helpers/seed";
 
@@ -20,24 +24,86 @@ describe("bot handlers", () => {
     expect((await new Repo(env.DB).getUserByTg(42))!.onboardingStep).toBe("lang");
     await h.press("ob:ru");
     expect(h.lastText()).toContain("1/10");
+    expect(h.lastText()).toContain(PLACEMENT[0]!.word);
     for (let i = 0; i < 10; i++) await h.press("ob:1");
-    expect(h.lastText()).toContain("<b>4</b>");
-    expect((await new Repo(env.DB).getUserByTg(42))!.level).toBe(4);
+    expect(h.lastText()).toContain("уровня <b>10</b>");
+    expect((await new Repo(env.DB).getUserByTg(42))!.level).toBe(10);
     await h.press("ob:10");
     expect(callbacks(h.lastMarkup())).toContain("ob:09:00");
     await h.press("ob:09:00");
     expect(callbacks(h.lastMarkup())).toContain("ob:180");
     await h.press("ob:180");
-    expect(h.lastText()).toContain("<b>Уровень 4</b> · 2 слов");
-    expect(callbacks(h.lastMarkup())).toEqual(["ob:l04", "ob:other"]);
-    await h.press("ob:l04");
-    expect(h.lastText()).toContain("09:00");
-    expect(callbacks(h.lastMarkup())).toEqual(["learn"]);
-    await h.press("learn");
+    expect(h.tg.of("editMessageText").at(-1)!.payload.text).toContain("09:00");
+    expect(h.tg.of("editMessageText").at(-1)!.payload.text).toContain(ru.easyHint);
+    expect(h.tg.of("deleteMessage")).toHaveLength(0);
+  });
+
+  it("opens the start level and shows its first card right after the last answer", async () => {
+    await seedCatalog(env.DB);
+    const h = harness(env.DB, { now: T });
+    await h.text("/start");
+    await h.press("ob:ru");
+    for (let i = 0; i < 10; i++) await h.press(i < 5 ? "ob:1" : "ob:0");
+    await h.press("ob:10");
+    await h.press("ob:09:00");
+    await h.press("ob:180");
     const card = h.tg.of("sendMessage").at(-1)!;
     expect(String(card.payload.text)).toContain("<b>өй</b>");
     expect(callbacks(card.payload.reply_markup as never).slice(0, 4)).toEqual([expect.stringMatching(/^g:\d+:0:1$/), expect.stringMatching(/:2$/), expect.stringMatching(/:3$/), expect.stringMatching(/:4$/)]);
     expect(card.payload.link_preview_options).toEqual({ is_disabled: true });
+    const repo = new Repo(env.DB);
+    const u = (await repo.getUserByTg(42))!;
+    expect(await repo.userDeckIds(u.id)).toEqual([(await repo.getDeckBySlug("l04"))!.id]);
+  });
+
+  /** Runs onboarding up to the time-zone question, then counts the calls of the one update that answers it. */
+  async function finishWith(answer: (h: ReturnType<typeof harness>) => Promise<unknown>) {
+    await seedLevels(env.DB, { 1: ["бер"], 4: ["дүрт"] });
+    const db = countingDb(env.DB);
+    const h = harness(db, { now: T });
+    await h.text("/start");
+    await h.press("ob:tt");
+    for (let i = 0; i < 10; i++) await h.press(i < 5 ? "ob:1" : "ob:0");
+    await h.press("ob:10");
+    await h.press("ob:09:00");
+    const tgBefore = h.tg.calls.length;
+    db.calls = 0;
+    await answer(h);
+    return { h, telegramCalls: h.tg.calls.length - tgBefore, d1Calls: db.calls, update: h.tg.calls.slice(tgBefore) };
+  }
+  const textsOf = (calls: { payload: Record<string, unknown> }[]) => calls.map((c) => String(c.payload.text ?? ""));
+
+  it("sends the hint and the first card right after the last answer, within budget", async () => {
+    const { telegramCalls, d1Calls, update } = await finishWith((h) => h.press("ob:180"));
+    const texts = textsOf(update.filter((c) => c.method !== "answerCallbackQuery"));
+    expect(texts.join("\n")).toContain(tt.easyHint);
+    expect(texts.at(-1)).toContain("дүрт");
+    expect(update.map((c) => c.method)).toEqual(["editMessageText", "sendMessage", "answerCallbackQuery"]);
+    expect(telegramCalls).toBeLessThanOrEqual(3);
+    expect(d1Calls).toBeLessThanOrEqual(8);
+  });
+
+  it("typed local time finishes onboarding with a new message and stays within budget", async () => {
+    const { telegramCalls, d1Calls, update } = await finishWith((h) => h.text("14:35"));
+    expect(update.map((c) => c.method)).toEqual(["sendMessage", "sendMessage"]);
+    expect(textsOf(update)[0]).toContain(tt.easyHint);
+    expect(telegramCalls).toBeLessThanOrEqual(3);
+    expect(d1Calls).toBeLessThanOrEqual(8);
+  });
+
+  it("without a seeded start level onboarding still finishes and shows the empty screen", async () => {
+    const h = harness(env.DB, { now: T });
+    await h.text("/start");
+    await h.press("ob:ru");
+    for (let i = 0; i < 10; i++) await h.press("ob:1");
+    await h.press("ob:10");
+    await h.press("ob:09:00");
+    await h.press("ob:180");
+    const repo = new Repo(env.DB);
+    const u = (await repo.getUserByTg(42))!;
+    expect(u).toMatchObject({ onboardingStep: null, level: 10 });
+    expect(await repo.userDeckIds(u.id)).toEqual([]);
+    expect(h.lastText()).toContain(ru.noDecks);
   });
 
   async function startSession() {

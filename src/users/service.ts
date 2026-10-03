@@ -1,5 +1,5 @@
 import type { DirectionSetting, Lang, Repo, User } from "../db/repo";
-import { PLACEMENT_WORDS, placementLevel } from "./placement";
+import { PLACEMENT, placementLevel } from "./placement";
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -87,9 +87,7 @@ export type OnboardingScreen =
   | { kind: "goal"; level: number; known: number }
   | { kind: "remind" }
   | { kind: "tz"; options: { label: string; offset: number }[] }
-  | { kind: "deck"; slug: string }
-  | { kind: "deckList" }
-  | { kind: "finished"; remindAt: string; tzOffsetMin: number; deckSlug: string }
+  | { kind: "finished"; remindAt: string; tzOffsetMin: number; level: number }
   | { kind: "invalid"; step: string };
 
 const TZ_CHOICES = [120, 180, 240, 300, 420, 600];
@@ -101,17 +99,16 @@ function tzOptions(now: number) {
 }
 
 /** Slug of the catalog deck that holds a level: l01 … l20. */
-const levelSlug = (level: number) => `l${String(level).padStart(2, "0")}`;
+export const levelSlug = (level: number) => `l${String(level).padStart(2, "0")}`;
 
 /** Re-renders the current onboarding step (used on /start while onboarding). */
 export function startOnboarding(user: User, now = Date.now()): OnboardingScreen {
   const data = user.onboardingData ? (JSON.parse(user.onboardingData) as { i: number; known: number }) : { i: 0, known: 0 };
   switch (user.onboardingStep) {
-    case "placement": return { kind: "placement", index: data.i, word: PLACEMENT_WORDS[data.i] ?? PLACEMENT_WORDS[0] };
+    case "placement": return { kind: "placement", index: data.i, word: PLACEMENT[data.i]?.word ?? PLACEMENT[0]!.word };
     case "goal": return { kind: "goal", level: user.level, known: data.known };
     case "remind": return { kind: "remind" };
     case "tz": return { kind: "tz", options: tzOptions(now) };
-    case "deck": return { kind: "deck", slug: levelSlug(user.level) };
     default: return { kind: "lang" };
   }
 }
@@ -123,15 +120,15 @@ export async function advanceOnboarding(repo: Repo, user: User, answer: string, 
   if (step === "lang") {
     if (answer !== "ru" && answer !== "tt") return invalid;
     await repo.updateUser(user.id, { lang: answer, onboardingStep: "placement", onboardingData: JSON.stringify({ i: 0, known: 0 }) });
-    return { kind: "placement", index: 0, word: PLACEMENT_WORDS[0] };
+    return { kind: "placement", index: 0, word: PLACEMENT[0]!.word };
   }
   if (step === "placement") {
     if (answer !== "0" && answer !== "1") return invalid;
     const d = user.onboardingData ? (JSON.parse(user.onboardingData) as { i: number; known: number }) : { i: 0, known: 0 };
     const next = { i: d.i + 1, known: d.known + Number(answer) };
-    if (next.i < PLACEMENT_WORDS.length) {
+    if (next.i < PLACEMENT.length) {
       await repo.updateUser(user.id, { onboardingData: JSON.stringify(next) });
-      return { kind: "placement", index: next.i, word: PLACEMENT_WORDS[next.i]! };
+      return { kind: "placement", index: next.i, word: PLACEMENT[next.i]!.word };
     }
     const level = placementLevel(next.known);
     await repo.updateUser(user.id, { level, onboardingStep: "goal", onboardingData: JSON.stringify(next) });
@@ -156,19 +153,14 @@ export async function advanceOnboarding(repo: Repo, user: User, answer: string, 
       if (h < 24 && m < 60) offset = offsetFromReported(h, m, now);
     } else if (/^-?\d+$/.test(answer) && TZ_CHOICES.includes(Number(answer))) offset = Number(answer);
     if (offset == null) return invalid;
-    await repo.updateUser(user.id, { tzOffsetMin: offset, onboardingStep: "deck" });
-    return { kind: "deck", slug: levelSlug(user.level) };
-  }
-  if (step === "deck") {
-    if (answer === "other") return { kind: "deckList" };
-    const deck = await repo.getDeckBySlug(answer);
-    if (!deck) return invalid;
-    await repo.subscribe(user.id, deck.id, now);
-    await repo.updateUser(user.id, {
-      onboardingStep: null, onboardingData: null,
-      nextDailyAt: nextOccurrence(user.tzOffsetMin, user.remindAt, now), nextEveningAt: nextOccurrence(user.tzOffsetMin, EVENING_AT, now),
-    });
-    return { kind: "finished", remindAt: user.remindAt, tzOffsetMin: user.tzOffsetMin, deckSlug: answer };
+    const deck = await repo.getDeckBySlug(levelSlug(user.level));
+    const stmts = [repo.updateUserStmt(user.id, {
+      tzOffsetMin: offset, onboardingStep: null, onboardingData: null,
+      nextDailyAt: nextOccurrence(offset, user.remindAt, now), nextEveningAt: nextOccurrence(offset, EVENING_AT, now),
+    })];
+    if (deck) stmts.unshift(repo.subscribeStmt(user.id, deck.id, now));
+    await repo.batch(stmts);
+    return { kind: "finished", remindAt: user.remindAt, tzOffsetMin: offset, level: user.level };
   }
   return invalid;
 }

@@ -23,10 +23,8 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   addAll: [[3]],
   foundN: [[3]],
   placementQ: [[1, "китап"]],
-  goalQ: [["2"]],
+  goalQ: [[2], [6]],
   goalBtn: [[5], [10], [20]],
-  deckQ: [["1 нче дәрәҗә", 100]],
-  addDeckBtn: [["1 нче дәрәҗә"]],
   finished: [["09:00", "UTC+3"]],
   askWords: [["мисал.рф"]],
   dupLine: [["китап", "Минем сүзләр", false], ["китап", "Минем сүзләр", true]],
@@ -84,7 +82,7 @@ describe("i18n dictionaries", () => {
     // Names that stay in Latin script. Everything else Latin is a look-alike or a leftover.
     const LATIN_OK = /AI|Anki|Tatoeba|CC BY 2\.0 FR|corpus\.tatar|UTC/g;
     // Tags, commands, emoji (with the variation selector) and symbols that isTatarText does not know.
-    const NOT_TEXT = /<[^>]+>|\/\w+|\p{Extended_Pictographic}|[️\n·≈%№~+→↑<]/gu;
+    const NOT_TEXT = /<[^>]+>|\/\w+|\p{Extended_Pictographic}|[️\n·≈%№~+→↑<„“]/gu;
     for (const k of KEYS) {
       for (const text of texts(tt, k)) {
         const letters = text.replace(NOT_TEXT, "").replace(LATIN_OK, "");

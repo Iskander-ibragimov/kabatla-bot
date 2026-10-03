@@ -11,7 +11,7 @@ const btn = (text: string, data: string, style?: Button["style"]): Button => (st
 const tzLabel = (min: number) => `UTC${min >= 0 ? "+" : "−"}${Math.floor(Math.abs(min) / 60)}${Math.abs(min) % 60 ? ":" + String(Math.abs(min) % 60).padStart(2, "0") : ""}`;
 export const deckTitle = (d: Pick<DeckRow, "titleRu" | "titleTt">, lang: Lang) => (lang === "ru" ? d.titleRu : d.titleTt);
 
-export function renderOnboarding(s: OnboardingScreen, lang: Lang, deck?: DeckRow | null, decks?: DeckRow[]): Rendered {
+export function renderOnboarding(s: OnboardingScreen, lang: Lang): Rendered {
   const t = dict(lang);
   switch (s.kind) {
     case "lang":
@@ -19,23 +19,13 @@ export function renderOnboarding(s: OnboardingScreen, lang: Lang, deck?: DeckRow
     case "placement":
       return { text: t.placementQ(s.index + 1, esc(s.word)), keyboard: [[btn(t.knowBtn, "ob:1", "success"), btn(t.dontKnowBtn, "ob:0")]] };
     case "goal":
-      return { text: t.goalQ(String(s.level)), keyboard: [[btn(t.goalBtn(5), "ob:5"), btn(t.goalBtn(10), "ob:10", "primary"), btn(t.goalBtn(20), "ob:20")]] };
+      return { text: t.goalQ(s.level), keyboard: [[btn(t.goalBtn(5), "ob:5"), btn(t.goalBtn(10), "ob:10", "primary"), btn(t.goalBtn(20), "ob:20")]] };
     case "remind":
       return { text: t.remindQ, keyboard: [REMIND_TIMES.slice(0, 3).map((x) => btn(x, `ob:${x}`)), REMIND_TIMES.slice(3).map((x) => btn(x, `ob:${x}`))] };
     case "tz":
       return { text: t.tzQ, keyboard: [s.options.slice(0, 3).map((o) => btn(o.label, `ob:${o.offset}`)), s.options.slice(3).map((o) => btn(o.label, `ob:${o.offset}`))] };
-    case "deck": {
-      const title = deck ? deckTitle(deck, lang) : s.slug.toUpperCase();
-      return { text: t.deckQ(esc(title), deck?.total ?? 0), keyboard: [[btn(t.addDeckBtn(title), `ob:${s.slug}`, "primary"), btn(t.otherDeckBtn, "ob:other")]] };
-    }
-    case "deckList": {
-      const list = (decks ?? []).filter((d) => d.slug);
-      const kb: Keyboard = [];
-      for (let i = 0; i < list.length; i += 2) kb.push(list.slice(i, i + 2).map((d) => btn(deckTitle(d, lang), `ob:${d.slug}`)));
-      return { text: t.pickDeck, keyboard: kb };
-    }
     case "finished":
-      return { text: t.finished(s.remindAt, tzLabel(s.tzOffsetMin)), keyboard: [[btn(t.startBtn, "learn", "primary")]] };
+      return { text: `${t.finished(s.remindAt, tzLabel(s.tzOffsetMin))}\n\n${t.easyHint}`, keyboard: [] };
     default:
       return { text: t.chooseAbove, keyboard: [] };
   }

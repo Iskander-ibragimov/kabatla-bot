@@ -13,6 +13,7 @@ const POS: Record<string, string> = {
 
 /** Numbers 1…20 whose name ends in a back-vowel syllable (алты, тугыз, ун, уналты, унтугыз) take «нчы». */
 const BACK_ORDINALS = [6, 9, 10, 16, 19];
+const levelName = (n: number) => `${n} ${BACK_ORDINALS.includes(n) ? "нчы" : "нче"} дәрәҗә`;
 
 export const tt: Dict = {
   again: "Яңадан",
@@ -48,15 +49,12 @@ export const tt: Dict = {
   placementQ: (i, word) => `Дәрәҗәгезне тикшерик · ${i}/10\n\nБу сүзне беләсезме?\n\n<b>${word}</b>`,
   knowBtn: "Беләм",
   dontKnowBtn: "Белмим",
-  goalQ: (level) => `Сезнең дәрәҗә — якынча <b>${level}</b>.\n\nКөненә ничә яңа сүз өйрәнәсез?`,
+  goalQ: (level) => `Башлыйбыз: <b>${levelName(level)}</b>.\n\nКөненә ничә яңа сүз өйрәнәсез?`,
   goalBtn: (n) => (n === 5 ? "5 · җиңел" : n === 10 ? "10 · уртача" : "20 · күп"),
   remindQ: "Сәгать ничәдә искә төшерим?",
   tzQ: "Сездә хәзер сәгать ничә? Шулай сәгать поясыгызны белермен.\n<i>Үз вариантыгыз булмаса, вакытны языгыз, мәсәлән 14:35.</i>",
-  deckQ: (title, total) => `Сезнең дәрәҗәгә <b>${title}</b> тупланмасы туры килә · ${total} сүз.`,
-  addDeckBtn: (title) => `✅ Өстәү: «${title}»`,
-  otherDeckBtn: "Башкасын сайлау",
-  pickDeck: "Тупланма сайлагыз:",
-  finished: (time, tz) => `Әзер! Кабатлыйсы сүзләр булса, көн саен искә төшерермен. Вакыты: <b>${time}</b> (${tz}).\n\nБеренче сүзләрне башлыйбызмы?`,
+  finished: (time, tz) => `Әзер! Кабатлыйсы сүзләр булса, көн саен искә төшерермен. Вакыты: <b>${time}</b> (${tz}).`,
+  easyHint: "Сүзне белсәгез, „Җиңел“ төймәсенә басыгыз",
   chooseAbove: "Югарыдагы төймәләрнең берсенә басыгыз ↑",
   alreadySetUp: "Барысы да көйләнгән инде 🙂 /learn — кабатлау, /help — барлык командалар.",
   staleButton: "Бу төймә искергән инде",
@@ -106,7 +104,7 @@ export const tt: Dict = {
   saveStreakBtn: "▶ Саклап калу",
   continueBtn: "▶ Дәвам итү",
   posName: (code) => POS[code] ?? code,
-  levelTitle: (n) => `${n} ${BACK_ORDINALS.includes(n) ? "нчы" : "нче"} дәрәҗә`,
+  levelTitle: levelName,
   cmdLearn: "Сүзләрне кабатлау",
   cmdDecks: "Тупланмалар",
   cmdGen: "Тема буенча AI-тупланма",
