@@ -61,7 +61,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     const t = dict(ctx.user.lang);
     if (s.kind === "stale") return toast(ctx, t.staleButton);
     if (s.kind === "noundo") { if (ctx.callbackQuery) return toast(ctx, t.nothingToUndo); await ctx.reply(t.nothingToUndo); return; }
-    if (s.kind === "nothing") { await toast(ctx); await send(ctx, { text: t.noDecks, keyboard: [[{ text: t.decksBtn, callback_data: "levels" }]] }); return; }
+    if (s.kind === "nothing") { await toast(ctx); await send(ctx, { text: t.nothingToLearn, keyboard: [[{ text: t.decksBtn, callback_data: "levels" }]] }); return; }
     const r = s.kind === "card"
       ? renderCard(s.view, s.counts, s.intervals, s.canUndo, ctx.user.lang)
       : renderDone(s.summary, ctx.user.lang);

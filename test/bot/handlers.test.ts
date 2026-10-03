@@ -148,7 +148,7 @@ describe("bot handlers", () => {
     const u = (await repo.getUserByTg(42))!;
     expect(u).toMatchObject({ onboardingStep: null, level: 10 });
     expect(await repo.userDeckIds(u.id)).toEqual([]);
-    expect(h.lastText()).toContain(ru.noDecks);
+    expect(h.lastText()).toBe(ru.nothingToLearn);
   });
 
   async function startSession() {

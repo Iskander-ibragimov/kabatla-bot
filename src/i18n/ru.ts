@@ -54,7 +54,8 @@ export const ru = {
   staleButton: "Эта кнопка уже неактуальна",
   nothingToUndo: "Нечего отменять",
   undone: "Оценка отменена",
-  noDecks: "Сначала добавьте колоду 📚",
+  /** Shown above the «Уровни» button when the learner has no cards and no open level with words. */
+  nothingToLearn: "Пока учить нечего. Откройте уровень в /levels или напишите боту своё слово.",
   learnBtn: "▶ Учить",
   searching: "🔎 Ищу слова…",
   askWords: (host: string) => `🔗 Ссылку ${host} запомнил. Пришлите слова из неё — прикреплю ссылку к каждому.\n<i>Жду 10 минут.</i>`,

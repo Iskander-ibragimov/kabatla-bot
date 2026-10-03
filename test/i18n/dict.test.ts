@@ -169,7 +169,16 @@ describe("i18n dictionaries", () => {
     expect(ru.levelProgress(4, 37, 100)).toBe("▶️ Уровень 4 · 37 из 100");
     expect(tt.levelProgress(6, 37, 100)).toBe("▶️ 6 нчы дәрәҗә · 37/100");
     expect(ru.openSkippedBtn("1–6")).toBe("Открыть пропущенные (1–6)");
-    for (const d of [ru, tt]) expect(Object.keys(d).filter((k) => /^deck|Decks$/.test(k) && k !== "decksBtn" && k !== "noDecks")).toEqual([]);
+    for (const d of [ru, tt]) expect(Object.keys(d).filter((k) => /^deck|Decks$/.test(k) && k !== "decksBtn")).toEqual([]);
+  });
+
+  it("the empty state points to /levels and to own words, not to adding a deck", () => {
+    expect(ru.nothingToLearn).toBe("Пока учить нечего. Откройте уровень в /levels или напишите боту своё слово.");
+    expect(tt.nothingToLearn).toBe("Әлегә өйрәнерлек сүзләр юк. /levels командасы белән дәрәҗә ачыгыз яки ботка үз сүзегезне языгыз.");
+    for (const d of [ru, tt]) {
+      expect(d.nothingToLearn).toContain("/levels");
+      expect(d.nothingToLearn).not.toMatch(/колод|тупланма/i);
+    }
   });
 
   it("names parts of speech in the interface language", () => {

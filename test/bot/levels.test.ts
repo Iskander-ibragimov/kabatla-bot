@@ -134,8 +134,12 @@ describe("/levels", () => {
     const repo = new Repo(env.DB);
     await repo.updateUser((await repo.getUserByTg(42))!.id, { onboardingStep: null });
     await h.text("/learn");
-    expect(h.lastText()).toBe(ru.noDecks);
+    expect(h.lastText()).toBe("Пока учить нечего. Откройте уровень в /levels или напишите боту своё слово.");
     expect(buttons(h.lastMarkup())).toEqual([["📚 Уровни", "levels"]]);
+    await repo.updateUser((await repo.getUserByTg(42))!.id, { lang: "tt" });
+    await h.text("/learn");
+    expect(h.lastText()).toBe(tt.nothingToLearn);
+    expect(buttons(h.lastMarkup())).toEqual([["📚 Дәрәҗәләр", "levels"]]);
   });
 
   it("/decks answers as an unknown command and the old deck buttons do nothing", async () => {
