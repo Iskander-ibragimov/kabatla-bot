@@ -10,12 +10,14 @@ on:
       - "data/work/**"
       - ".github/trigger/voice-sample"
       - ".github/trigger/fetch-sources"
+      - ".github/trigger/voice-*"
   workflow_dispatch:
 concurrency:
   group: deploy
   cancel-in-progress: false
 permissions:
   contents: write
+  actions: write
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -169,6 +171,24 @@ jobs:
           case "$NO" in 2*) echo "Endpoint accepted a request without the secret"; exit 1;; esac
           test "$YES" = "200"
 
+      - name: Start voicing of notes without audio
+        id: voicing
+        # The bot is already live here: this step must never fail the deploy.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          OUT=$(npx wrangler d1 execute kabatla --remote --json --command "SELECT COUNT(*) AS n FROM notes WHERE audio_file_id IS NULL AND audio_tries < 3")
+          N=$(printf '%s' "$OUT" | jq -r '.[0].results[0].n')
+          case "$N" in ''|*[!0-9]*) echo "unexpected count: $N"; exit 1;; esac
+          echo "pending=$N" >> "$GITHUB_OUTPUT"
+          if [ "$N" -gt 0 ]; then
+            gh workflow run voice-db.yml --ref master
+            echo "started=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "started=no" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish diagnostics to the deploy-report branch
         if: always()
         env:
@@ -187,6 +207,9 @@ jobs:
           S_WSECRETS: ${{ steps.wsecrets.outcome }}
           S_WEBHOOK: ${{ steps.webhook.outcome }}
           S_SELFCHECK: ${{ steps.selfcheck.outcome }}
+          S_VOICING: ${{ steps.voicing.outcome }}
+          VOICE_PENDING: ${{ steps.voicing.outputs.pending }}
+          VOICE_STARTED: ${{ steps.voicing.outputs.started }}
           MISSING: ${{ steps.secrets.outputs.missing }}
           PROVIDERS: ${{ steps.wsecrets.outputs.providers }}
           LEVELS: ${{ steps.catalog.outputs.levels }}
@@ -250,6 +273,7 @@ jobs:
             echo "- worker secrets: ${S_WSECRETS}"
             echo "- webhook and commands: ${S_WEBHOOK}"
             echo "- self-check: ${S_SELFCHECK}"
+            echo "- start voicing: ${S_VOICING}"
             echo
             echo "## Missing secrets"
             echo "${MISSING:-none}"
@@ -275,6 +299,9 @@ jobs:
             echo '```'
             echo "${WH_OUT:-(none)}"
             echo '```'
+            echo
+            echo "## Voicing"
+            echo "- notes without audio: ${VOICE_PENDING:-n/a} (voice-db started: ${VOICE_STARTED:-n/a})"
             echo
             echo "## Self-check"
             echo "- POST /tg without secret header: HTTP ${SC_NO:-n/a} (expected: not 2xx)"
