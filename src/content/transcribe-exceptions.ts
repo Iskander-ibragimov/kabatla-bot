@@ -1,0 +1,53 @@
+/**
+ * Words the transcription rules cannot derive: lower-case word → finished transcription.
+ * Plain data, no brackets; the stress is U+0301 after the stressed vowel. Only the exact
+ * form is matched, so an inflected form needs its own line. Grows during proofreading.
+ */
+export const EXCEPTIONS: Readonly<Record<string, string>> = {
+  // Question words: stress on the first syllable.
+  "кайда": "къа́йда",
+  "кайчан": "къа́йчан",
+  "кайдан": "къа́йдан",
+  "кая": "къа́йа",
+  "кайсы": "къа́йсы",
+  "ничек": "ни́чек",
+  "нинди": "ни́нди",
+  "ничә": "ни́чә",
+  "нигә": "ни́гә",
+  "нәрсә": "нә́рсә",
+
+  // Negation: stress on the syllable before -ма/-мә; negative pronouns stress the first syllable.
+  "барма": "ба́рма",
+  "килмә": "ки́лмә",
+  "бармый": "ба́рмый",
+  "белмим": "бе́лмим",
+  "беркем": "бе́ркем",
+  "һичкем": "һи́чкем",
+
+  // Other words with the stress off the last syllable.
+  "бүген": "бү́ген",
+  "әлбәттә": "әлбә́ттә",
+  "ләкин": "лә́кин",
+  "әмма": "ә́мма",
+  "чөнки": "чө́нки",
+  "хәзер": "хә́зер",
+
+  // Arabic loans where а after [къ], [гъ] or in a front word is read [ә] and the spelling does not show it.
+  "сәлам": "сәлә́м",
+  "кадәр": "къәдә́р",
+  "гаилә": "гъәилә́",
+  "гадәт": "гъәдә́т",
+
+  // Russian loans: в is [в], к and г stay plain before back vowels, stress as in Russian.
+  "вагон": "ваго́н",
+  "диван": "дива́н",
+  "витамин": "витами́н",
+  "трамвай": "трамва́й",
+  "вилка": "ви́лка",
+  "ванна": "ва́нна",
+  "совет": "сове́т",
+  "телевизор": "телеви́зор",
+  "врач": "врач",
+  "магазин": "магази́н",
+  "машина": "маши́на",
+};
