@@ -5,8 +5,8 @@ import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
 import { PLACEMENT } from "../../src/users/placement";
 import { countingDb } from "../helpers/countingDb";
-import { harness } from "../helpers/botHarness";
-import { note, seedLevels } from "../helpers/seed";
+import { easyButton, harness } from "../helpers/botHarness";
+import { note, seedLevels, seedUser } from "../helpers/seed";
 import { TELEGRAM_TEXT_LIMIT, visibleLength } from "../helpers/visible";
 
 const T = Date.UTC(2026, 8, 30, 6);
@@ -207,6 +207,103 @@ describe("bot handlers", () => {
     await h.press(grade, cardMsg);
     expect(h.tg.of("deleteMessage").map((c) => c.payload.message_id).sort()).toEqual([77, cardMsg].sort());
     expect((await repo.getSession(u.id))!.lastVoiceMessageId).toBeNull();
+  });
+
+  it("undo answers the tap once, with the note that the grade was undone, within the Telegram budget", async () => {
+    const { h, cardMsg, grade } = await startSession();
+    await h.press(grade, cardMsg);
+    const before = h.tg.calls.length;
+    await h.press("u", h.tg.lastMessageId());
+    const update = h.tg.calls.slice(before);
+    expect(update.map((c) => c.method)).toEqual(["sendMessage", "deleteMessage", "answerCallbackQuery"]);
+    expect(update.at(-1)!.payload.text).toBe(ru.undone);
+  });
+
+  /**
+   * Autoplay is opt-in and exempt from the 3 / 8 budget of an update, but capped (ruling T16a):
+   * at most 5 Telegram calls and 10 D1 calls per update, and the voice goes out after the card.
+   */
+  describe("autoplay budget", () => {
+    const TG_CAP = 5, D1_CAP = 10;
+
+    /** A learner with autoplay on, two words left in level 1 and level 2 behind it; every word has a voice. */
+    async function autoplaySession(direction: "tt_ru" | "both" = "tt_ru") {
+      await seedUser(env.DB, { now: T, level: 1, words: 2, tgId: 42, patch: { autoplay: true, direction } });
+      await seedLevels(env.DB, { 2: ["авыл", "су"] }, { 1: 31 });
+      await env.DB.prepare("UPDATE notes SET audio_file_id = 'voice-of-' || word").run();
+      const db = countingDb(env.DB);
+      const h = harness(db, { now: T });
+      /** Runs one update and returns its Telegram calls and the number of its D1 calls. */
+      const update = async (run: () => Promise<unknown>) => {
+        const before = h.tg.calls.length;
+        db.calls = 0;
+        await run();
+        return { calls: h.tg.calls.slice(before), methods: h.tg.calls.slice(before).map((c) => c.method), d1: db.calls };
+      };
+      /** The message id of the card on screen: the fake Telegram numbers what it sends from 100, voices included. */
+      const cardMessage = () => 100 + h.tg.calls.filter((c) => c.method.startsWith("send")).map((c) => c.method).lastIndexOf("sendMessage");
+      const easy = () => update(() => h.press(easyButton(h), cardMessage()));
+      return { h, update, easy, cardMessage };
+    }
+    const within = (u: { methods: string[]; d1: number }) => {
+      expect(u.methods.length, u.methods.join(",")).toBeLessThanOrEqual(TG_CAP);
+      expect(u.d1).toBeLessThanOrEqual(D1_CAP);
+    };
+    /** The voice is the last call of the update and comes after the card it belongs to. */
+    const voiceAfterCard = (u: { calls: { method: string; payload: Record<string, unknown> }[]; methods: string[] }, word: string) => {
+      expect(u.methods.filter((m) => m === "sendVoice")).toHaveLength(1);
+      expect(u.methods.at(-1)).toBe("sendVoice");
+      expect(u.calls.at(-1)!.payload.voice).toBe(`voice-of-${word}`);
+      expect(u.methods.indexOf("sendMessage")).toBeGreaterThanOrEqual(0);
+      expect(u.methods.indexOf("sendMessage")).toBeLessThan(u.methods.indexOf("sendVoice"));
+      expect(String(u.calls[u.methods.indexOf("sendMessage")]!.payload.text)).toContain(`<b>${word}</b>`);
+    };
+
+    it("a grade sends the next card first and its voice last, within 5 Telegram and 10 D1 calls", async () => {
+      const { h, update, easy } = await autoplaySession();
+      const first = await update(() => h.text("/learn"));
+      expect(first.methods).toEqual(["sendMessage", "sendVoice"]);
+      voiceAfterCard(first, "китап");
+      within(first);
+      const second = await easy();
+      // The old card and its voice are removed; the new voice is the last call.
+      expect(second.methods).toEqual(["sendMessage", "deleteMessage", "deleteMessage", "answerCallbackQuery", "sendVoice"]);
+      voiceAfterCard(second, "вакыт");
+      within(second);
+    });
+
+    it.each(["tt_ru", "both"] as const)("the grade that opens a level stays within the caps, direction %s", async (direction) => {
+      const { h, update, easy } = await autoplaySession(direction);
+      within(await update(() => h.text("/learn")));
+      within(await easy());
+      const opening = await easy();
+      expect(h.lastText().startsWith(ru.levelUp(1, 2, 31))).toBe(true);
+      expect(opening.methods).toEqual(["sendMessage", "deleteMessage", "deleteMessage", "answerCallbackQuery", "sendVoice"]);
+      voiceAfterCard(opening, "авыл");
+      within(opening);
+    });
+
+    it("undo with autoplay stays within the caps and sends the voice after the restored card", async () => {
+      const { h, update, easy, cardMessage } = await autoplaySession();
+      await h.text("/learn");
+      await easy();
+      const undo = await update(() => h.press("u", cardMessage()));
+      expect(undo.methods).toEqual(["sendMessage", "deleteMessage", "deleteMessage", "answerCallbackQuery", "sendVoice"]);
+      expect(undo.calls[3]!.payload.text).toBe(ru.undone);
+      voiceAfterCard(undo, "китап");
+      within(undo);
+    });
+
+    it("a card without a voice gets none, and the update is back within the ordinary budget", async () => {
+      const { h, update, easy } = await autoplaySession();
+      await env.DB.prepare("UPDATE notes SET audio_file_id = NULL WHERE word = 'вакыт'").run();
+      await h.text("/learn");
+      const second = await easy();
+      // The voice of the first card is removed with it; the second card has no voice to send.
+      expect(second.methods).toEqual(["sendMessage", "deleteMessage", "deleteMessage", "answerCallbackQuery"]);
+      expect(second.d1).toBeLessThanOrEqual(8);
+      void update;
+    });
   });
 
   it("text with a link shows a preview with the link host; url-only asks for words", async () => {

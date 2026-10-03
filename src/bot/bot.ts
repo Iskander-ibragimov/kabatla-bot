@@ -56,8 +56,10 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   /**
    * Shows a review screen. "replace" (after a grade or undo) sends a NEW message and deletes the one that was clicked:
    * Telegram clients keep a spoiler revealed when a message is edited, so every card needs its own message.
+   * The tap is answered once, after the card is out, with `note` when there is something to say.
+   * With autoplay on, the voice of the card is the last call: it never delays the card (ruling T16a).
    */
-  const show = async (ctx: Ctx, s: Screen, mode: "replace" | "send") => {
+  const show = async (ctx: Ctx, s: Screen, mode: "replace" | "send", note?: string) => {
     const t = dict(ctx.user.lang);
     if (s.kind === "stale") return toast(ctx, t.staleButton);
     if (s.kind === "noundo") { if (ctx.callbackQuery) return toast(ctx, t.nothingToUndo); await ctx.reply(t.nothingToUndo); return; }
@@ -82,7 +84,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
         oldVoice ? ctx.api.deleteMessage(chatId, oldVoice).catch(() => undefined) : undefined,
       ]);
     }
-    await toast(ctx);
+    await toast(ctx, note);
     if (s.kind === "card" && ctx.user.autoplay && s.view.hasAudio) await playVoice(repo, tg, ctx.user, s.view.noteId);
   };
 
@@ -145,8 +147,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   });
   c.callbackQuery("u", async (ctx) => {
     const s = await reviews().undo(ctx.user);
-    if (s.kind === "card") await ctx.answerCallbackQuery({ text: dict(ctx.user.lang).undone }).catch(() => undefined);
-    await show(ctx, s, "replace");
+    await show(ctx, s, "replace", s.kind === "card" ? dict(ctx.user.lang).undone : undefined);
   });
   c.command("undo", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().undo(ctx.user), "send"); });
   c.callbackQuery(/^r:(\d+)$/, async (ctx) => {
