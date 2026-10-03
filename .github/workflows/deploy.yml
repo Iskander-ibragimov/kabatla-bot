@@ -37,7 +37,7 @@ jobs:
         run: pnpm typecheck
       - name: Test
         id: test
-        run: pnpm test
+        run: pnpm test:ci
 
       - name: Check secrets
         id: secrets

@@ -5,6 +5,9 @@ import { tt } from "../src/i18n/tt";
 const { BOT_TOKEN, WEBHOOK_SECRET, WORKER_URL } = process.env;
 if (!BOT_TOKEN || !WEBHOOK_SECRET || !WORKER_URL) throw new Error("BOT_TOKEN, WEBHOOK_SECRET and WORKER_URL are required");
 
+/** A hanging connection must not hold the deploy until its own 15-minute limit. */
+const REQUEST_TIMEOUT_MS = 15_000;
+
 type TgResult = { ok: boolean; description?: string; result?: unknown; parameters?: { retry_after?: number } };
 
 /** One Telegram call; a 429 is retried once after the advised pause (at most 30 s). Errors carry Telegram's own text. */
@@ -12,6 +15,7 @@ async function call(method: string, body: unknown): Promise<unknown> {
   for (let attempt = 1; ; attempt++) {
     const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     const json = (await res.json()) as TgResult;
     if (json.ok) return json.result;
