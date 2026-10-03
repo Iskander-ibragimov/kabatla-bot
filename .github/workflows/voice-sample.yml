@@ -32,7 +32,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p out models
-          gdown --folder "https://drive.google.com/drive/folders/1YmtDVYLVogEfw3SE7GUl0LHZaIojAeap" -O models 2>&1 | tee out/gdown.log | tail -n 20
+          timeout 600 python3 scripts/fetch-piper-models.py 2>&1 | tee out/gdown.log | tail -n 30
           test "${PIPESTATUS[0]}" -eq 0
       - name: Send the sample
         id: sample
@@ -69,9 +69,9 @@ jobs:
             (cd models 2>/dev/null && find . -type f -printf '%P  %s bytes\n' | sort) || echo "(no models directory)"
             echo '```'
             echo
-            echo "## gdown log (tail)"
+            echo "## model download log (tail)"
             echo '```'
-            tail -n 15 out/gdown.log 2>/dev/null || echo "(none)"
+            tail -n 40 out/gdown.log 2>/dev/null || echo "(none)"
             echo '```'
             echo
             cat out/voice-run.md 2>/dev/null || printf "## Sample run\n\n(voice.ts wrote no report)\n"
