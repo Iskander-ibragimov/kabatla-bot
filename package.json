@@ -8,7 +8,8 @@
     "depcruise": "depcruise src --config .dependency-cruiser.cjs",
     "deploy": "wrangler deploy",
     "test:ci": "vitest run --coverage",
-    "set-webhook": "tsx scripts/set-webhook.ts"
+    "set-webhook": "tsx scripts/set-webhook.ts",
+    "validate": "tsx scripts/validate-levels.ts"
   },
   "dependencies": {
     "grammy": "^1.46.0",
