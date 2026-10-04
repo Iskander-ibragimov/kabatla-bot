@@ -41,7 +41,7 @@ describe("/levels", () => {
     await h.text("/levels");
     expect(h.lastText()).toBe([
       "📚 <b>Уровни</b>",
-      "✅ Пройдено: 1–3",
+      "⏭ Пропущено: 1–3",
       "▶️ Уровень 4 · 37 из 100",
       "🔒 Впереди: 2",
       "📝 Мои слова · 12",
@@ -93,7 +93,7 @@ describe("/levels", () => {
     await h.text("/levels");
     expect(h.lastText()).toBe([
       "📚 <b>Дәрәҗәләр</b>",
-      tt.levelsPassed("1–3"),
+      tt.levelsSkipped("1–3"),
       "▶️ 4 нче дәрәҗә · 37/100",
       tt.levelsAhead(2),
       "📝 Минем сүзләр · 12",
@@ -122,7 +122,7 @@ describe("/levels", () => {
     await repo.updateUser(user.id, { level: 7 });
     const h = harness(env.DB, { now: T });
     await h.text("/levels");
-    expect(h.lastText()).toBe(["📚 <b>Уровни</b>", "✅ Пройдено: 1"].join("\n"));
+    expect(h.lastText()).toBe(["📚 <b>Уровни</b>", "⏭ Пропущено: 1"].join("\n"));
     expect(buttons(h.lastMarkup())).toEqual([["Открыть пропущенные (1)", "lv:skip"]]);
     await h.press("lv:skip", h.tg.lastMessageId());
     expect(h.tg.of("editMessageText").at(-1)!.payload.text).toBe(["📚 <b>Уровни</b>", "▶️ Уровень 1 · 0 из 2"].join("\n"));
@@ -221,9 +221,13 @@ describe("renderLevels", () => {
   const view = (over: Partial<LevelsView>): LevelsView => ({ passed: [], inProgress: [], ahead: 0, own: [], coveragePct: null, skipped: [], ...over });
 
   it("writes level numbers as ranges", () => {
-    const r = renderLevels(view({ passed: [1, 2, 3, 5, 7, 8], skipped: [2], inProgress: [{ levelNo: 9, seen: 0, total: 100 }], ahead: 11 }), "ru");
-    expect(r.text).toBe(["📚 <b>Уровни</b>", "✅ Пройдено: 1–3, 5, 7–8", "▶️ Уровень 9 · 0 из 100", "🔒 Впереди: 11"].join("\n"));
-    expect(r.keyboard.flat().map((b) => [b.text, b.callback_data])).toEqual([["Открыть пропущенные (2)", "lv:skip"]]);
+    const r = renderLevels(view({ passed: [1, 3, 5, 7, 8], skipped: [2, 4, 6], inProgress: [{ levelNo: 9, seen: 0, total: 100 }], ahead: 11 }), "ru");
+    expect(r.text).toBe(["📚 <b>Уровни</b>", "✅ Пройдено: 1, 3, 5, 7–8", "⏭ Пропущено: 2, 4, 6", "▶️ Уровень 9 · 0 из 100", "🔒 Впереди: 11"].join("\n"));
+    expect(r.keyboard.flat().map((b) => [b.text, b.callback_data])).toEqual([["Открыть пропущенные (2, 4, 6)", "lv:skip"]]);
+    // In Tatar, with the word the button uses.
+    expect(renderLevels(view({ passed: [3], skipped: [1, 2] }), "tt").text).toBe(["📚 <b>Дәрәҗәләр</b>", "✅ Үтелгән: 3", "⏭ Калдырылган: 1–2"].join("\n"));
+    // A learner who skipped nothing has no such line.
+    expect(renderLevels(view({ passed: [1, 2] }), "ru").text).toBe(["📚 <b>Уровни</b>", "✅ Пройдено: 1–2"].join("\n"));
   });
 
   it("when every level is done shows neither a current level nor what is ahead", () => {

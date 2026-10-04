@@ -27,7 +27,7 @@ export async function cumulative(repo: Repo, user: User, now: number): Promise<C
 
 /** What /levels shows. */
 export interface LevelsView {
-  /** Levels below the current one that are finished, or were skipped at the placement test and never opened. */
+  /** Open levels below the current one whose every word is seen. A level that was skipped at the placement test and never opened is not passed: see `skipped`. */
   passed: number[];
   /** The current level (when the catalog has it and it is open) and the opened levels below it that still have unseen words, by level number. */
   inProgress: { levelNo: number; seen: number; total: number }[];
@@ -49,7 +49,7 @@ export async function levelsView(repo: Repo, user: Pick<User, "id" | "level">): 
   const [levels, own] = await Promise.all([repo.levelsOverview(user.id), repo.ownDecks(user.id)]);
   const below = levels.filter((l) => l.levelNo < user.level);
   return {
-    passed: below.filter((l) => !l.open || l.seen >= l.total).map((l) => l.levelNo),
+    passed: below.filter((l) => l.open && l.seen >= l.total).map((l) => l.levelNo),
     inProgress: levels.filter((l) => l.open && (l.levelNo === user.level || (l.levelNo < user.level && l.seen < l.total)))
       .map((l) => ({ levelNo: l.levelNo, seen: l.seen, total: l.total })),
     ahead: levels.filter((l) => l.levelNo > user.level || (l.levelNo === user.level && !l.open)).length,

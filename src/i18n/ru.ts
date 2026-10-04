@@ -114,6 +114,8 @@ export const ru = {
   /** Lines and the button of /levels; `list` and `range` are level numbers like "1–3, 5". */
   levelsTitle: "📚 <b>Уровни</b>",
   levelsPassed: (list: string) => `✅ Пройдено: ${list}`,
+  /** Levels below the current one that were never opened. */
+  levelsSkipped: (list: string) => `⏭ Пропущено: ${list}`,
   levelProgress: (n: number, seen: number, total: number) => `▶️ Уровень ${n} · ${seen} из ${total}`,
   levelsAhead: (n: number) => `🔒 Впереди: ${n}`,
   levelsCoverage: (pct: number) => `📖 Покрытие текста ≈${pct}%`,

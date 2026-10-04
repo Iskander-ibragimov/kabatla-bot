@@ -113,6 +113,7 @@ export const tt: Dict = {
   levelsDone: (pct) => `Барлык 2 000 сүз дә өйрәнелә! 🎉 Алга таба — график буенча кабатлаулар. Үз сүзләрегезне теләсә кайчан өстәп була.${covered(pct)}`,
   levelsTitle: "📚 <b>Дәрәҗәләр</b>",
   levelsPassed: (list) => `✅ Үтелгән: ${list}`,
+  levelsSkipped: (list) => `⏭ Калдырылган: ${list}`,
   levelProgress: (n, seen, total) => `▶️ ${levelName(n)} · ${seen}/${total}`,
   levelsAhead: (n) => `🔒 Алда: ${n}`,
   levelsCoverage: (pct) => `📖 Текстта таныш сүзләр: ≈${pct}%`,

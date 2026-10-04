@@ -44,6 +44,8 @@ export function renderLevels(v: LevelsView, lang: Lang): Rendered {
   const t = dict(lang);
   const lines = [t.levelsTitle];
   if (v.passed.length) lines.push(t.levelsPassed(ranges(v.passed)));
+  // A level the learner never opened is not shown as passed; the button below opens such levels.
+  if (v.skipped.length) lines.push(t.levelsSkipped(ranges(v.skipped)));
   for (const l of v.inProgress) lines.push(t.levelProgress(l.levelNo, l.seen, l.total));
   if (v.ahead > 0) lines.push(t.levelsAhead(v.ahead));
   // The title of an AI deck already starts with 🤖.

@@ -54,6 +54,7 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   levelUp: [[3, 4, 54, 100], [5, 6, null, 101], [19, 20, 79, 100], [3, 5, 54, null]],
   levelsDone: [[80], [null]],
   levelsPassed: [["1–3, 5"]],
+  levelsSkipped: [["1–3, 5"]],
   levelProgress: [[4, 37, 100], [6, 0, 100]],
   levelsAhead: [[16]],
   levelsCoverage: [[54]],
