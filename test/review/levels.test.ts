@@ -6,7 +6,7 @@ import { LAST_LEVEL, ReviewService, type Screen } from "../../src/review/service
 import { easyButton, harness } from "../helpers/botHarness";
 import { countingDb } from "../helpers/countingDb";
 import { asCard, gradeShown, gradedMem } from "../helpers/review";
-import { seedLevels, seedUser } from "../helpers/seed";
+import { note, seedLevels, seedUser } from "../helpers/seed";
 
 const DAY = 86_400_000;
 const now = Date.UTC(2026, 8, 30, 6, 0); // 09:00 local (+03:00)
@@ -394,6 +394,132 @@ describe("levels", () => {
     expect(asCard(s).levelUp).toEqual({ from: 7, to: 8, coveragePct: 66 });
     expect((await repo.getUser(user.id))!.level).toBe(8);
     expect(await subscriptions(user.id)).toBe(4);
+  });
+
+  describe("a learner who has nothing to open", () => {
+    it("the screens of a learner who waits for the next level cost no level-opening call", async () => {
+      // Level 1 is finished and the catalog has nothing above it: the state of every learner until the next level is published.
+      const { user, noteIds } = await seedUser(env.DB, { now, level: 1, words: 2 });
+      const raw = new Repo(env.DB);
+      for (const id of noteIds) await raw.insertCard(user.id, id, "tt_ru", gradedMem(now));
+      const db = countingDb(env.DB);
+      const done = await new ReviewService(new Repo(db), now).nextScreen(user);
+      expect(done.kind).toBe("done");
+      expect(levelUpOf(done)).toBeNull();
+      expect(db.calls).toBe(2); // the queue and the summary of the day; no second read of the queue
+      // The same with a card to show: a review that is due.
+      await raw.updateCardStmt((await raw.getCardByNote(user.id, noteIds[0]!, "tt_ru"))!.id, { ...gradedMem(now - 3 * DAY), due: now - 1000 }).run();
+      db.calls = 0;
+      expect(asCard(await new ReviewService(new Repo(db), now).nextScreen(user)).view.word).toBe("китап");
+      expect(db.calls).toBe(1);
+      expect((await raw.getUser(user.id))!.level).toBe(1);
+    });
+
+    it("a learner past the last level spends no level-opening call either", async () => {
+      const { user, noteIds } = await seedUser(env.DB, { now, level: 20, words: 1 });
+      const raw = new Repo(env.DB);
+      await raw.insertCard(user.id, noteIds[0]!, "tt_ru", gradedMem(now));
+      await raw.updateUser(user.id, { level: 21 });
+      const db = countingDb(env.DB);
+      // A stale copy of the user, still on level 20: the queue reads the level from the database.
+      const s = await new ReviewService(new Repo(db), now).nextScreen(user);
+      expect(s.kind).toBe("done");
+      expect(levelUpOf(s)).toBeNull();
+      expect(db.calls).toBe(2);
+    });
+  });
+
+  describe("which decks the queue reads: the own decks and the lowest open level that has new words", () => {
+    const window = (t = now) => ({ dayStartMs: t - 5 * 3_600_000, dayEndMs: t + 19 * 3_600_000, today: new Date(t).toISOString().slice(0, 10) });
+    const queue = async (repo: Repo, userId: number, directions: ("tt_ru" | "ru_tt")[] = ["tt_ru"], t = now) =>
+      (await repo.candidateCards(userId, t, { ...window(t), directions })).newNotes.map((n) => [n.word, n.direction]);
+
+    it("a level whose last word the learner owns a copy of is finished once its other words are started", async () => {
+      const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 2 }); // китап, вакыт
+      await seedLevels(env.DB, { 2: ["авыл"] }, { 1: 31 });
+      const [own] = await repo.insertNotes(await repo.customDeck(user.id, now), [note("Вакыт")]);
+      await repo.insertCard(user.id, own!, "tt_ru", gradedMem(now));
+      let s = await new ReviewService(repo, now).nextScreen(user);
+      expect(asCard(s).view.word).toBe("китап");
+      expect(asCard(s).counts.n).toBe(1);
+      s = await gradeShown(repo, user, s, 4, now);
+      // «вакыт» of level 1 is never shown: the copy in «Мои слова» is the card of that word.
+      expect(levelUpOf(s)).toEqual({ from: 1, to: 2, coveragePct: 31 });
+      expect(asCard(s).view.word).toBe("авыл");
+    });
+
+    it("a level made of nothing but words the learner owns is finished from the start", async () => {
+      const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 1 }); // китап
+      await seedLevels(env.DB, { 2: ["авыл"] });
+      const [own] = await repo.insertNotes(await repo.customDeck(user.id, now), [note("китап")]);
+      await repo.insertCard(user.id, own!, "tt_ru", gradedMem(now));
+      const s = await new ReviewService(repo, now).nextScreen(user);
+      expect(levelUpOf(s)).toEqual({ from: 1, to: 2, coveragePct: null });
+      expect(asCard(s).view.word).toBe("авыл");
+    });
+
+    it("after a switch to both directions a finished level comes back for its other direction, before the level above", async () => {
+      const { repo, user, noteIds } = await seedUser(env.DB, { now, level: 2, words: 1 }); // l02: китап
+      const l1 = (await seedLevels(env.DB, { 1: ["авыл", "су"] }))[1]!;
+      await repo.subscribe(user.id, l1, now);
+      const lower = (await env.DB.prepare("SELECT id FROM notes WHERE deck_id = ? ORDER BY id").bind(l1).all<{ id: number }>()).results.map((r) => r.id);
+      for (const id of lower) await repo.insertCard(user.id, id, "tt_ru", gradedMem(now - DAY));
+      expect(await queue(repo, user.id)).toEqual([["китап", "tt_ru"]]);
+      expect(await queue(repo, user.id, ["tt_ru", "ru_tt"])).toEqual([["авыл", "ru_tt"], ["су", "ru_tt"]]);
+      expect(await queue(repo, user.id, ["ru_tt"])).toEqual([["авыл", "ru_tt"], ["су", "ru_tt"]]);
+      for (const id of lower) await repo.insertCard(user.id, id, "ru_tt", gradedMem(now - DAY));
+      expect(await queue(repo, user.id, ["tt_ru", "ru_tt"])).toEqual([["китап", "tt_ru"], ["китап", "ru_tt"]]);
+      void noteIds;
+    });
+
+    it("with both directions the level above opens the day the last word is first graded, and the reverse cards come first the next day (ruling T8a)", async () => {
+      const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 1, patch: { direction: "both" } }); // китап
+      await seedLevels(env.DB, { 2: ["авыл"] }, { 1: 31 });
+      let s = await new ReviewService(repo, now).nextScreen(user);
+      expect([asCard(s).view.word, asCard(s).view.direction]).toEqual(["китап", "tt_ru"]);
+      s = await gradeShown(repo, user, s, 4, now);
+      // «китап» in the other direction is hidden until tomorrow, so level 1 has nothing new today.
+      expect(levelUpOf(s)).toEqual({ from: 1, to: 2, coveragePct: 31 });
+      expect([asCard(s).view.word, asCard(s).view.direction]).toEqual(["авыл", "tt_ru"]);
+      const tomorrow = asCard(await new ReviewService(repo, now + DAY).nextScreen((await repo.getUser(user.id))!));
+      expect([tomorrow.view.word, tomorrow.view.direction]).toEqual(["китап", "ru_tt"]);
+      expect(tomorrow.levelUp).toBeNull();
+    });
+
+    it("a word added to a finished level later is given before the words of the level above", async () => {
+      const { repo, user, deckId, noteIds } = await seedUser(env.DB, { now, level: 1, words: 2 });
+      const l2 = (await seedLevels(env.DB, { 2: ["авыл"] }))[2]!;
+      await repo.subscribe(user.id, l2, now);
+      await repo.updateUser(user.id, { level: 2 });
+      for (const id of noteIds) await repo.insertCard(user.id, id, "tt_ru", gradedMem(now));
+      expect(await queue(repo, user.id)).toEqual([["авыл", "tt_ru"]]);
+      await repo.insertNotes(deckId, [note("су")]);
+      expect(await queue(repo, user.id)).toEqual([["су", "tt_ru"]]);
+    });
+
+    it("own words that are all started cost the queue nothing, and a new one is given first", async () => {
+      const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 2 });
+      const own = await repo.customDeck(user.id, now);
+      const ids = await repo.insertNotes(own, [note("рәхмәт"), note("зинһар")]);
+      for (const id of ids) await repo.insertCard(user.id, id, "tt_ru", gradedMem(now));
+      expect(await queue(repo, user.id)).toEqual([["китап", "tt_ru"], ["вакыт", "tt_ru"]]);
+      await repo.insertNotes(own, [note("гафу")]);
+      expect(await queue(repo, user.id)).toEqual([["гафу", "tt_ru"], ["китап", "tt_ru"], ["вакыт", "tt_ru"]]);
+    });
+
+    it("counts as new what the list holds: zero only when no open deck has a new card today", async () => {
+      const { repo, user, noteIds } = await seedUser(env.DB, { now, level: 1, words: 3 });
+      const c = await repo.candidateCards(user.id, now, { ...window(), directions: ["tt_ru", "ru_tt"] });
+      expect(c.newNotes).toHaveLength(6);
+      expect(c.counts.newAvailable).toBe(6);
+      for (const id of noteIds) await repo.insertCard(user.id, id, "tt_ru", gradedMem(now));
+      const none = await repo.candidateCards(user.id, now, { ...window(), directions: ["tt_ru"] });
+      expect(none.newNotes).toEqual([]);
+      expect(none.counts.newAvailable).toBe(0);
+      expect(none.nextLevelExists).toBe(false);
+      await seedLevels(env.DB, { 2: ["авыл"] });
+      expect((await repo.candidateCards(user.id, now, { ...window(), directions: ["tt_ru"] })).nextLevelExists).toBe(true);
+    });
   });
 
   it("spends at most 8 D1 calls on a grade that opens a level", async () => {

@@ -112,6 +112,32 @@ describe("levels view", () => {
     });
   });
 
+  it("tells a finished, an untouched and a half-done open level apart, with the words the learner owns a copy of", async () => {
+    const ids = await seedLevels(env.DB, { 1: ["китап", "вакыт", "авыл"], 2: ["су", "юл", "көн"], 3: ["өй", "эш", "кеше"], 4: ["сүз", "яңа"], 5: ["зур", "кул"] });
+    const { repo, user } = await seedUser(env.DB, { now: T, level: 4 });
+    for (const l of [1, 2, 3]) await repo.subscribe(user.id, ids[l]!, T);
+    const idsOf = async (deck: number) => (await env.DB.prepare("SELECT id FROM notes WHERE deck_id = ? ORDER BY id").bind(deck).all<{ id: number }>()).results.map((r) => r.id);
+    // The learner owns copies of «авыл» (the last word of level 1), «юл» (level 2), «сүз» (level 4) and «зур» (level 5, closed); «юл» twice, in two own decks.
+    await repo.insertNotes(await repo.customDeck(user.id, T), [note("авыл"), note("Юл!"), note("сүз"), note("зур")]);
+    const ai = await repo.insertDeck({ slug: null, kind: "ai", titleRu: "🤖 т", titleTt: "🤖 т", levelNo: null, coveragePct: null, ownerId: user.id });
+    await repo.insertNotes(ai, [note("юл")]);
+    // Level 1: the two words that are not copies are started — finished. Level 2: nothing started. Level 3: one of three. Level 4: nothing started.
+    for (const id of (await idsOf(ids[1]!)).slice(0, 2)) await repo.insertCard(user.id, id, "tt_ru", graded);
+    await repo.insertCard(user.id, (await idsOf(ids[3]!))[0]!, "tt_ru", graded);
+    // A card that was shown and not graded is not a started word.
+    await repo.insertCard(user.id, (await idsOf(ids[2]!))[0]!, "tt_ru", newMem(T));
+
+    const db = countingDb(env.DB);
+    expect(await new Repo(db).levelsOverview(user.id)).toEqual([
+      { levelNo: 1, total: 3, coveragePct: null, open: true, seen: 3 },
+      { levelNo: 2, total: 3, coveragePct: null, open: true, seen: 1 },
+      { levelNo: 3, total: 3, coveragePct: null, open: true, seen: 1 },
+      { levelNo: 4, total: 2, coveragePct: null, open: true, seen: 1 },
+      { levelNo: 5, total: 2, coveragePct: null, open: false, seen: 0 },
+    ]);
+    expect(db.calls).toBe(1);
+  });
+
   it("counts only the levels the catalog has above the current one as ahead", async () => {
     // Production today: level 1 is the only level published.
     const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 3 });

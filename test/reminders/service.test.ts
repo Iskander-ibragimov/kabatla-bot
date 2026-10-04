@@ -8,7 +8,7 @@ import { countingDb } from "../helpers/countingDb";
 import { fakeTelegram } from "../helpers/fakeTelegram";
 import { ru } from "../../src/i18n/ru";
 import { gradedMem } from "../helpers/review";
-import { seedLevels, seedUser } from "../helpers/seed";
+import { note, seedLevels, seedUser } from "../helpers/seed";
 
 const MIN = 60_000;
 const local = (d: number, h: number, m: number) => Date.UTC(2026, 8, d, h, m) - 180 * MIN; // +03:00
@@ -124,6 +124,30 @@ describe("reminders tick", () => {
       for (const n of notes.results) await repo.insertCard(id, n.id, "tt_ru", gradedMem(local(29, 12, 0)));
       await repo.updateUser(id, { nextDailyAt: local(30, 9, 0) });
       expect(await pushes(local(30, 9, 6))).toEqual([ru.pushDaily(8, 3)]);
+    });
+
+    it("is not reminded about a level word the learner owns a copy of: the session would not show it", async () => {
+      // Level 1: «китап» is graded, «вакыт» is in «Мои слова» and graded there; nothing is above level 1.
+      const { repo, user, noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 2 });
+      await repo.insertCard(user.id, noteIds[0]!, "tt_ru", gradedMem(local(29, 12, 0)));
+      const [own] = await repo.insertNotes(await repo.customDeck(user.id, local(30, 8, 0)), [note("вакыт")]);
+      await repo.insertCard(user.id, own!, "tt_ru", gradedMem(local(29, 12, 0)));
+      expect(await pushes()).toEqual([]);
+    });
+
+    it("counts the new words in the direction the learner asks for", async () => {
+      // Both words are started Tatar → Russian; a learner who has switched to Russian → Tatar has both ahead again.
+      await finishedLevel1(2, { direction: "ru_tt" });
+      expect(await pushes()).toEqual([ru.pushDaily(2, 1)]);
+    });
+
+    it("counts own words and the lowest open level that has new words, not the levels above it", async () => {
+      const { repo, user } = await seedUser(env.DB, { now: local(30, 8, 0), words: 3, patch: { newPerDay: 20 } });
+      const l2 = (await seedLevels(env.DB, { 2: Array.from({ length: 9 }, (_, i) => `сүз${i + 1}`) }))[2]!;
+      await repo.subscribe(user.id, l2, local(30, 8, 0));
+      await repo.insertNotes(await repo.customDeck(user.id, local(30, 8, 0)), [note("рәхмәт"), note("зинһар")]);
+      // Two own words and the three words of level 1; the nine of level 2 come after level 1.
+      expect(await pushes()).toEqual([ru.pushDaily(5, 2)]);
     });
 
     it("still counts the unseen words of the open levels first, without looking ahead", async () => {

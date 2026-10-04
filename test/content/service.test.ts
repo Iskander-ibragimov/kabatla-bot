@@ -12,6 +12,7 @@ import { tt } from "../../src/i18n/tt";
 import { dayWindow } from "../../src/users/service";
 import { countingDb } from "../helpers/countingDb";
 import { type FakeFetch, card, client, fakeFetch, failingLlm, llmReturning, provider, userPrompt } from "../helpers/llm";
+import { gradedMem } from "../helpers/review";
 import { note, seedLevels, seedUser } from "../helpers/seed";
 
 const T = Date.UTC(2026, 8, 30, 6, 0);
@@ -230,9 +231,15 @@ describe("content service: own words", () => {
     await repo.subscribe(user.id, l5, T);
     const c = await repo.candidateCards(user.id, T, { ...dayWindow(180, T), directions: ["tt_ru"] });
     expect(c.newNotes.filter((n) => n.word === "бәхет").length).toBe(1);
-    // The own copy comes first, and the level gives only its other word.
-    expect(c.newNotes.map((n) => n.word)).toEqual(["бәхет", "китап", "шатлык"]);
-    expect(c.counts.newAvailable).toBe(3);
+    // The own copy comes first; then the lowest level that has new words, which is level 1.
+    expect(c.newNotes.map((n) => n.word)).toEqual(["бәхет", "китап"]);
+    expect(c.counts.newAvailable).toBe(2);
+    // Once level 1 is done, level 5 gives only its other word.
+    const kitap = c.newNotes.find((n) => n.word === "китап")!;
+    await repo.insertCard(user.id, kitap.noteId, "tt_ru", gradedMem(T));
+    const next = await repo.candidateCards(user.id, T, { ...dayWindow(180, T), directions: ["tt_ru"] });
+    expect(next.newNotes.map((n) => n.word)).toEqual(["бәхет", "шатлык"]);
+    expect(next.counts.newAvailable).toBe(2);
     // Typed again, it is a word the user already learns: the own copy, which is the one that is shown, gets the link.
     expect(await svc.prepareAdd(user, "бәхет https://example.com/x", [])).toEqual(
       { kind: "duplicates-only", duplicates: [{ word: "бәхет", deckTitle: "Мои слова", linkAdded: true }] });

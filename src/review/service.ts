@@ -68,15 +68,16 @@ export class ReviewService {
     let c = await this.repo.candidateCards(user.id, this.now, opts);
     let levelUp: LevelUp | null = null;
     // The open decks have no unseen words and today's limit is not spent: a level is opened in the same D1 call that
-    // re-reads the queue.
+    // re-reads the queue. The first read already tells whether there is a level to open, so the second call is made
+    // only at the moment of a transition, not on every screen of a learner who is waiting for the next level.
     if (c.counts.newAvailable === 0 && newLeftOf(user, c.counts) > 0 && user.level <= LAST_LEVEL) {
       if (c.currentLevelClosed) {
         // The deck of the current level exists but was never opened (the learner finished onboarding before it was
         // published): that deck is opened, the level stays, and nothing is announced — no level was finished.
         c = await this.repo.candidateCards(user.id, this.now, opts, [this.repo.openCurrentLevelStmt(user.id, this.now)]);
-      } else {
+      } else if (c.nextLevelExists) {
         // The next level the catalog has is opened. Only the call whose UPDATE moved users.level gets the new level back
-        // and announces it (double taps, stale `user`). While no higher level is published nothing moves and nothing is said.
+        // and announces it (double taps, stale `user`).
         const from = user.level;
         const reread = await this.repo.candidateCards(user.id, this.now, opts, this.repo.openLevelStmts(user.id, from, LAST_LEVEL, this.now));
         const [moved, , coverage] = reread.pre;

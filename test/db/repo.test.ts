@@ -4,6 +4,7 @@ import { Repo, wordKey } from "../../src/db/repo";
 import { countingDb } from "../helpers/countingDb";
 import { newMem } from "../../src/srs/fsrs";
 import { dayWindow } from "../../src/users/service";
+import { gradedMem } from "../helpers/review";
 import { note, seedLevels, seedUser } from "../helpers/seed";
 
 const T = Date.UTC(2026, 8, 30, 6, 0, 0);
@@ -62,8 +63,11 @@ describe("repo", () => {
     await repo.subscribe(user.id, l2, now);
     const own = await repo.customDeck(user.id, now);
     await repo.insertNotes(own, [note("рәхмәт")]); // added after all level words
-    const c = await repo.candidateCards(user.id, now, { ...dayWindow(180, now), directions: ["tt_ru"] });
-    expect(c.newNotes.map((n) => n.word)).toEqual(["рәхмәт", "китап", "вакыт", "авыл"]);
+    const queue = async () => (await repo.candidateCards(user.id, now, { ...dayWindow(180, now), directions: ["tt_ru"] })).newNotes;
+    // Own words, then the lowest open level that has new words; level 2 waits for its turn.
+    expect((await queue()).map((n) => n.word)).toEqual(["рәхмәт", "китап", "вакыт"]);
+    for (const n of (await queue()).slice(1)) await repo.insertCard(user.id, n.noteId, "tt_ru", gradedMem(now));
+    expect((await queue()).map((n) => n.word)).toEqual(["рәхмәт", "авыл"]);
   });
 
   it("skips a level word the user already has among own words", async () => {
