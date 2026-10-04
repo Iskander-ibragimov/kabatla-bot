@@ -109,6 +109,13 @@ describe("spans storage", () => {
       expect(scopeKey({ ...u, ...change })).not.toBe(k);
     }
   });
+  it("scopeKey: «Основа», topic 0, is a chosen topic like any other and has another key than no topic", () => {
+    expect(scopeKey({ ...u, topicNo: 0 })).not.toBe(scopeKey(u));
+    expect(new Set([null, 0, 1, 20].map((topicNo) => scopeKey({ ...u, topicNo }))).size).toBe(4);
+    // A position stored while «Основа» was chosen is not read once the choice is cleared.
+    const stored = writeSpans(scopeKey({ ...u, topicNo: 0 }), 3, { 1: { from: 1_000_001, to: null } });
+    expect(readSpans(stored, scopeKey(u))).toEqual({ version: -1, spans: {} });
+  });
   it("round-trips and ignores another key", () => {
     const raw = writeSpans("k", 4, { 1: { from: 10, to: null }, 3: { from: 0, to: 7 } });
     expect(readSpans(raw, "k")).toEqual({ version: 4, spans: { 1: { from: 10, to: null }, 3: { from: 0, to: 7 } } });

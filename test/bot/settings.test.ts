@@ -4,6 +4,7 @@ import { renderSettings, renderTimeZones } from "../../src/bot/screens";
 import type { User } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
+import { DAILY_LIMITS, type Feature, consume, remaining } from "../../src/entitlements/service";
 import { TZ_OFFSETS, nextOccurrence, setSetting } from "../../src/users/service";
 import { harness } from "../helpers/botHarness";
 import { countingDb } from "../helpers/countingDb";
@@ -190,6 +191,50 @@ describe("a change of the time zone and the streak", () => {
     await repo.updateUser(user.id, { lastStudyDay: "2026-10-05" });
     await setSetting(repo, user.id, "remindAt", "21:00", T);
     expect((await repo.getUser(user.id))!.lastStudyDay).toBe("2026-10-05");
+  });
+});
+
+describe("a change of the time zone and the daily limits", () => {
+  /** 00:30 UTC on 30 September: the 29th at UTC+3 (03:30, before the day changes at 04:00), the 30th at UTC+5 (05:30). */
+  const NIGHT = Date.UTC(2026, 8, 30, 0, 30);
+  const DAY_AT = { 180: "2026-09-29", 300: "2026-09-30" } as const;
+  const KEPT = { gen: ["gensDay", "gensCount"], add: ["addsDay", "addsCount"] } as const;
+
+  for (const feature of ["gen", "add"] as Feature[]) {
+    for (const [from, to] of [[300, 180], [180, 300]] as const) {
+      it(`${feature}, UTC+${from / 60} → UTC+${to / 60} across the start of the day: the units taken today stay taken on the new clock, and moving back does not give them again`, async () => {
+        const [day, count] = KEPT[feature];
+        const limit = DAILY_LIMITS[feature];
+        const { repo, user } = await seedLearner(env.DB, { now: NIGHT, patch: { tzOffsetMin: from } });
+        const fresh = async () => (await repo.getUser(user.id))!;
+        for (let i = 0; i < limit; i++) expect(await consume(repo, await fresh(), feature, NIGHT)).toBe(true);
+        expect(await consume(repo, await fresh(), feature, NIGHT)).toBe(false);
+        expect(await fresh()).toMatchObject({ [day]: DAY_AT[from], [count]: limit });
+
+        for (const zone of [to, from, to]) {
+          await setSetting(repo, user.id, "tzOffsetMin", zone, NIGHT);
+          expect(await fresh(), `at UTC+${zone / 60}`).toMatchObject({ tzOffsetMin: zone, [day]: DAY_AT[zone], [count]: limit });
+          expect(await remaining(await fresh(), feature, NIGHT)).toBe(0);
+          expect(await consume(repo, await fresh(), feature, NIGHT)).toBe(false);
+        }
+      });
+    }
+  }
+
+  it("units taken on an earlier day are not carried to today, and a change inside one day leaves the day of the limits as it is", async () => {
+    const { repo, user } = await seedLearner(env.DB, { now: NIGHT, patch: { tzOffsetMin: 300, gensDay: "2026-09-28", gensCount: 3, addsDay: "2026-09-30", addsCount: 7 } });
+    await setSetting(repo, user.id, "tzOffsetMin", 180, NIGHT);
+    // The AI decks of the 28th stay of the 28th; the messages of today are of today on the new clock.
+    const moved = (await repo.getUser(user.id))!;
+    expect(moved).toMatchObject({ gensDay: "2026-09-28", gensCount: 3, addsDay: "2026-09-29", addsCount: 7 });
+    expect([await remaining(moved, "gen", NIGHT), await remaining(moved, "add", NIGHT)]).toEqual([3, 43]);
+    // 06:00 UTC is the 30th at UTC+3 and at UTC+12 alike.
+    await repo.updateUser(user.id, { addsDay: "2026-09-30" });
+    await setSetting(repo, user.id, "tzOffsetMin", 720, T);
+    expect(await repo.getUser(user.id)).toMatchObject({ gensDay: "2026-09-28", addsDay: "2026-09-30", addsCount: 7 });
+    // Another setting never touches them.
+    await setSetting(repo, user.id, "remindAt", "21:00", NIGHT);
+    expect(await repo.getUser(user.id)).toMatchObject({ gensDay: "2026-09-28", addsDay: "2026-09-30", addsCount: 7 });
   });
 });
 

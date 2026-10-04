@@ -81,8 +81,12 @@ export function emptyReason(f: EmptyFacts): EmptyReason {
 export interface Span { from: number; to: number | null }
 export type Spans = Partial<Record<number, Span>>;
 
+/**
+ * The settings a read position was stored for. No chosen topic is «-», not 0: topic 0 is «Основа», which can be
+ * chosen like any other, and a position stored for it must not be read once the choice is cleared.
+ */
 export function scopeKey(u: { levels: number; posGroups: number; newMode: NewMode; topicNo: number | null; direction: string }): string {
-  return [u.levels, u.posGroups, u.newMode, u.topicNo ?? 0, u.direction].join(".");
+  return [u.levels, u.posGroups, u.newMode, u.topicNo ?? "-", u.direction].join(".");
 }
 
 const NONE = { version: -1, spans: {} as Spans };

@@ -9,7 +9,7 @@ import { newMem } from "../../src/srs/fsrs";
 import { easyButton, harness } from "../helpers/botHarness";
 import { countingDb } from "../helpers/countingDb";
 import { gradedMem } from "../helpers/review";
-import { note, recountProgress, seedCatalog, seedLearner, seedTopics } from "../helpers/seed";
+import { note, recountProgress, seedCatalog, seedGuidedOrder, seedLearner, seedTopics } from "../helpers/seed";
 
 const T = Date.UTC(2026, 8, 30, 6);
 type Markup = { inline_keyboard?: { text: string; callback_data: string }[][] };
@@ -370,6 +370,35 @@ describe("«Темы»: the topics of the checked levels", () => {
     expect(u.methods).toEqual(["editMessageText", "answerCallbackQuery"]);
     expect(b.h.lastText()).toBe(TOPICS_TEXT);
     expect((await repo.getUser(user.id))!.topicNo).toBeNull();
+  });
+
+  it("«Основа» chosen and then «Не выбирать» in the guided order: the words go on from the first themed word, none is passed over", async () => {
+    // A1 in the guided order of the catalog: т1 о1 т2 о2 … — twenty themed words of two topics and twenty of «Основа» in turn.
+    await seedTopics(env.DB);
+    await seedCatalog(env.DB, [
+      ...Array.from({ length: 20 }, (_, i) => ({ level: 1, word: `т${i + 1}`, topic: i < 10 ? 1 : 2 })),
+      ...Array.from({ length: 20 }, (_, i) => ({ level: 1, word: `о${i + 1}`, topic: 0 })),
+    ]);
+    await seedGuidedOrder(env.DB);
+    const { repo, user } = await seedLearner(env.DB, { now: T, tgId: 42 });
+    const b = bot();
+    const word = () => b.h.lastText().match(/<b>(.+?)<\/b>/)![1];
+    const easy = () => b.press(easyButton(b.h), b.h.tg.lastMessageId());
+    await b.press("tp:0", 900);
+    await b.text("/learn");
+    const given: string[] = [];
+    for (let i = 0; i < 15; i++) { given.push(word()!); await easy(); }
+    expect(given).toEqual(Array.from({ length: 15 }, (_, i) => `о${i + 1}`));
+    // The sixteenth word of «Основа» is on the screen; it is a started card whatever is chosen.
+    expect(word()).toBe("о16");
+    const card = b.h.tg.lastMessageId(), button = easyButton(b.h);
+    await b.press("tp:none", 900);
+    expect((await repo.getUser(user.id))!.topicNo).toBeNull();
+    await b.press(button, card);
+    const after: string[] = [];
+    for (let i = 0; i < 6; i++) { after.push(word()!); await easy(); }
+    // The themed words from the first one; the words of «Основа» among them go on from the first that is not started.
+    expect(after).toEqual(["т1", "т2", "т3", "т4", "т5", "т6"]);
   });
 
   it("in «По частоте» the screen is not offered: a button left from another order shows the hub and chooses nothing", async () => {

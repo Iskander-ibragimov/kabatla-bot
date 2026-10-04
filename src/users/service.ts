@@ -81,6 +81,11 @@ export async function setSetting(repo: Repo, userId: number, key: SettingKey, va
         // streak as broken: that day becomes today. Moved forward it is at most yesterday, which keeps the streak.
         const today = localDay(after.tzOffsetMin, now);
         if (u.lastStudyDay != null && u.lastStudyDay > today) patch.lastStudyDay = today;
+        // The daily limits count by the local day (entitlements/service.ts): what was taken today is taken today on
+        // the new clock too, or a change of the zone across the start of the day would give the day's units again.
+        const was = localDay(u.tzOffsetMin, now);
+        if (u.gensDay === was) patch.gensDay = today;
+        if (u.addsDay === was) patch.addsDay = today;
       }
     }
   }
