@@ -126,3 +126,50 @@ export async function seedGuidedOrder(db: D1Database): Promise<void> {
     await db.batch(rows.map((n, i) => db.prepare("UPDATE notes SET tseq = ? WHERE id = ?").bind(tseq[i]!, n.id)));
   }
 }
+
+/** The topics of the catalog, as the catalog seed loads them into `topics` (design spec §3.2). */
+export const TOPICS: { no: number; slug: string; titleRu: string; titleTt: string }[] = [
+  { no: 0, slug: "core", titleRu: "Основа", titleTt: "Нигез сүзләр" },
+  { no: 1, slug: "greet", titleRu: "Знакомство и вежливость", titleTt: "Танышу һәм әдәп" },
+  { no: 2, slug: "family", titleRu: "Семья и близкие", titleTt: "Гаилә һәм якыннар" },
+  { no: 3, slug: "person", titleRu: "Человек: характер и чувства", titleTt: "Кеше: холык һәм хисләр" },
+  { no: 4, slug: "home", titleRu: "Дом и быт", titleTt: "Йорт һәм көнкүреш" },
+  { no: 5, slug: "time", titleRu: "Время и календарь", titleTt: "Вакыт һәм календарь" },
+  { no: 6, slug: "numbers", titleRu: "Числа и количество", titleTt: "Саннар һәм микъдар" },
+  { no: 7, slug: "nature", titleRu: "Природа и погода", titleTt: "Табигать һәм һава торышы" },
+  { no: 8, slug: "food", titleRu: "Еда", titleTt: "Ризык" },
+  { no: 9, slug: "shop", titleRu: "Покупки и одежда", titleTt: "Сәүдә һәм кием" },
+  { no: 10, slug: "city", titleRu: "Город и транспорт", titleTt: "Шәһәр һәм транспорт" },
+  { no: 11, slug: "study", titleRu: "Учёба и наука", titleTt: "Уку һәм фән" },
+  { no: 12, slug: "work", titleRu: "Работа и профессии", titleTt: "Эш һәм һөнәрләр" },
+  { no: 13, slug: "leisure", titleRu: "Досуг и увлечения", titleTt: "Ял һәм мавыгулар" },
+  { no: 14, slug: "health", titleRu: "Здоровье и спорт", titleTt: "Сәламәтлек һәм спорт" },
+  { no: 15, slug: "travel", titleRu: "Путешествия", titleTt: "Сәяхәт" },
+  { no: 16, slug: "culture", titleRu: "Культура и искусство", titleTt: "Мәдәният һәм сәнгать" },
+  { no: 17, slug: "tatar", titleRu: "Татарстан и традиции", titleTt: "Татарстан һәм гореф-гадәтләр" },
+  { no: 18, slug: "society", titleRu: "Общество и история", titleTt: "Җәмгыять һәм тарих" },
+  { no: 19, slug: "language", titleRu: "Язык и общение", titleTt: "Тел һәм аралашу" },
+  { no: 20, slug: "media", titleRu: "Медиа и технологии", titleTt: "Медиа һәм технологияләр" },
+];
+
+/** Fills `topics` with the 21 topics of the catalog; the helpers that write catalog notes leave that table empty. */
+export async function seedTopics(db: D1Database): Promise<void> {
+  await db.prepare("INSERT INTO topics (no, slug, title_ru, title_tt) SELECT j.value ->> 'no', j.value ->> 'slug', j.value ->> 'titleRu', j.value ->> 'titleTt' FROM json_each(?) j")
+    .bind(JSON.stringify(TOPICS)).run();
+}
+
+/**
+ * Sets the user's counters of started words (`user_progress`) to what the user's cards say, as the catalog seed
+ * counts them: the notes with a card outside state 'new', by level and topic; own words are the pair (0, 0).
+ * For fixtures that write cards straight into the table; a grade keeps the counters itself.
+ */
+export async function recountProgress(db: D1Database, userId: number): Promise<void> {
+  await db.batch([
+    db.prepare("DELETE FROM user_progress WHERE user_id = ?").bind(userId),
+    db.prepare(
+      `INSERT INTO user_progress (user_id, level, topic_no, started)
+       SELECT c.user_id, COALESCE(n.level, 0), COALESCE(n.topic_no, 0), COUNT(DISTINCT c.note_id) FROM cards c JOIN notes n ON n.id = c.note_id
+       WHERE c.user_id = ? AND c.state <> 'new' GROUP BY 2, 3`,
+    ).bind(userId),
+  ]);
+}

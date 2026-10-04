@@ -82,8 +82,9 @@ export const ru = {
   addDeckGenBtn: "✅ Добавить колоду",
   genAdded: (title: string, n: number) => `✅ Колода «${title}» добавлена · ${n} слов`,
   genCancelled: "Генерация отменена.",
-  statsText: (s: { level: number; coverage: number | null; streak: number; learned: number; known: number; learning: number; fresh: number; memory: number; total: number; r30: number; retention: string; forecast: string }) =>
-    `📊 <b>Прогресс</b> · за всё время\n\n🎓 ${s.level > 20 ? "Все 20 уровней пройдены" : `Уровень ${s.level}`}${s.coverage == null ? "" : ` · покрытие текста ≈${s.coverage}%`}\n🏆 Выучено: ${s.learned}\n🌳 Знаю: ${s.known}\n🌿 Учу: ${s.learning}\n🌱 Новых впереди: ${s.fresh}\n\n🧠 Сумма памяти: ${s.memory} дн.\n<i>сколько дней в сумме держатся все начатые слова</i>\n🔥 Серия: ${s.streak} дн.\n🔁 Повторов всего: ${s.total} · за 30 дн.: ${s.r30}\n🎯 Удержание за 30 дн.: ${s.retention}\n\n🗓 Прогноз на 7 дней: ${s.forecast}`,
+  /** `levels`: the codes of the checked levels, like "A1, A2". */
+  statsText: (s: { levels: string; coverage: number | null; streak: number; learned: number; known: number; learning: number; fresh: number; memory: number; total: number; r30: number; retention: string; forecast: string }) =>
+    `📊 <b>Прогресс</b> · за всё время\n\n🎓 Уровни: ${s.levels}${s.coverage == null ? "" : ` · покрытие текста ≈${s.coverage}%`}\n🏆 Выучено: ${s.learned}\n🌳 Знаю: ${s.known}\n🌿 Учу: ${s.learning}\n🌱 Новых впереди: ${s.fresh}\n\n🧠 Сумма памяти: ${s.memory} дн.\n<i>сколько дней в сумме держатся все начатые слова</i>\n🔥 Серия: ${s.streak} дн.\n🔁 Повторов всего: ${s.total} · за 30 дн.: ${s.r30}\n🎯 Удержание за 30 дн.: ${s.retention}\n\n🗓 Прогноз на 7 дней: ${s.forecast}`,
   settingsTitle: "⚙️ <b>Настройки</b>\nНажмите на пункт, чтобы изменить.",
   setLang: "🌐 Язык: Русский",
   setMode: (r: number) => `🎯 Режим: ${r === 0.85 ? "Лёгкий" : r === 0.95 ? "Интенсив" : "Оптимальный"} · ${Math.round(r * 100)}%`,

@@ -1,7 +1,7 @@
-import { type NewMode, tseqOf } from "../levels/scale";
+import { ALL_LEVELS, ALL_POS, LEVELS, type NewMode, levelBit, tseqOf } from "../levels/scale";
 import type { Mem } from "../srs/fsrs";
 import { type DayWindow, type NewScope, type Queue, progressStmt, readQueue, unprogressStmt } from "./queue";
-import { type Asked, CARD_COLS, type CardRow, type Direction, NEW_CARDS, type NoteFields, askedDirection, noteCols, noteFields, ownedCopy, rowToCard } from "./sql";
+import { type Asked, CARD_COLS, type CardRow, type Direction, NEW_CARDS, type NoteFields, askedDirection, noteCols, noteFields, rowToCard } from "./sql";
 
 export type { CatalogNew, DayWindow, NewScope, Queue, StreamSeen } from "./queue";
 export type { Asked, CardRow, Direction, NewNote, NoteFields } from "./sql";
@@ -67,8 +67,14 @@ export interface UserNote extends NoteRow { deckTitleRu: string; deckTitleTt: st
 export interface PairStarted { level: number; topicNo: number; started: number }
 /** The cards the catalog has in one pair (level, topic). */
 export interface PairTotal { level: number; topicNo: number; total: number }
-/** One level of the catalog as a user sees it; `seen` counts the notes that were started or are skipped as copies of own words, in an open level; 0 for a closed one. */
-export interface LevelRow { levelNo: number; total: number; coveragePct: number | null; open: boolean; seen: number }
+/** A level of the scale as the catalog has it: the cards in its deck and the share of ordinary text they cover, in percent. */
+export interface LevelDeck { level: number; total: number; coveragePct: number | null }
+export interface TopicRow { no: number; slug: string; titleRu: string; titleTt: string }
+/**
+ * The counters the screens of the levels are built from: the decks of the levels, the cards of the catalog and the
+ * words the user has started by pair (level, topic), the topics, and the decks the user owns (when they were asked for).
+ */
+export interface LevelsData { decks: LevelDeck[]; totals: PairTotal[]; progress: PairStarted[]; topics: TopicRow[]; own: DeckRow[] }
 export interface Session { userId: number; chatId: number; messageId: number | null; cardId: number | null; lastVoiceMessageId: number | null }
 export interface DeckRow {
   id: number; slug: string | null; ownerId: number | null; kind: "catalog" | "ai" | "custom";
@@ -92,28 +98,23 @@ function rowToUser(r: Record<string, unknown>): User {
   return u as unknown as User;
 }
 
-/** A card of the note was started: it is in any state but 'new'. */
-const started = (user: string, noteId: string) => `EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ${user} AND c.note_id = ${noteId} AND c.state != 'new')`;
 /**
  * A scalar subquery: 1 when a direction the user asks for has no card at all for this note, in any state. Such a
  * note is not buried either: the grade that buries a word makes sure both of its cards exist. Index only.
  */
 export const lacksCard = (user: string, noteId: string, a: Asked) =>
   `(SELECT COALESCE(MAX(r.direction = 'tt_ru'), 0) < ${a.tt} OR COALESCE(MAX(r.direction = 'ru_tt'), 0) < ${a.ru} FROM cards r WHERE r.user_id = ${user} AND r.note_id = ${noteId})`;
-/** A one-row table `(id)`: the last (`DESC`) or the first (`ASC`) note of the deck that is not a level word the user owns a copy of; no row when there is none. */
-const edgeNote = (user: string, deck: string, order: "ASC" | "DESC") =>
-  `(SELECT x.id FROM notes x WHERE x.deck_id = ${deck}.id AND NOT ${ownedCopy(user, deck, "x")} ORDER BY x.id ${order} LIMIT 1)`;
 /**
- * For the reminder: true while the last note of the deck (level words the user owns a copy of aside) has no card in a
- * direction the user asks for — the deck has words that were never shown that way. The cards that already exist in
- * state 'new' are counted apart, by `newCardRows`.
+ * For the reminder, of a deck the user owns: true while the last note of the deck has no card in a direction the
+ * user asks for — the words of such a deck are given in the order of their ids, so the deck has words that were
+ * never shown that way. The cards that already exist in state 'new' are counted apart, by `newCardRows`.
  */
 export const deckHasUnshown = (user: string, deck: string, a: Asked) =>
-  `EXISTS (SELECT 1 FROM ${edgeNote(user, deck, "DESC")} l WHERE ${lacksCard(user, "l.id", a)})`;
+  `EXISTS (SELECT 1 FROM (SELECT x.id FROM notes x WHERE x.deck_id = ${deck}.id ORDER BY x.id DESC LIMIT 1) l WHERE ${lacksCard(user, "l.id", a)})`;
 /**
  * How many of the last `limit` notes of the deck have no card in a direction the user asks for: the words of the deck
- * that were never shown that way, counted up to `limit`. An estimate for the reminder: a level word the user owns a
- * copy of is counted too, while `deckHasUnshown` makes sure the deck has at least one such word.
+ * that were never shown that way, counted up to `limit`. An estimate for the reminder, of a deck that `deckHasUnshown`
+ * says has at least one such word.
  */
 export const unshownInTail = (user: string, deck: string, a: Asked, limit: number) =>
   `(SELECT COUNT(*) FROM (SELECT x.id FROM notes x WHERE x.deck_id = ${deck}.id ORDER BY x.id DESC LIMIT ${Math.trunc(limit)}) t WHERE ${lacksCard(user, "t.id", a)})`;
@@ -129,6 +130,12 @@ const pairsStarted = (rows: Record<string, unknown>[]): PairStarted[] =>
   rows.map((r) => ({ level: r.level as number, topicNo: r.topic_no as number, started: r.started as number }));
 const pairTotals = (rows: Record<string, unknown>[]): PairTotal[] =>
   rows.map((r) => ({ level: r.level as number, topicNo: r.topic_no as number, total: r.total as number }));
+const levelDecksOf = (rows: Record<string, unknown>[]): LevelDeck[] =>
+  rows.map((r) => ({ level: r.level as number, total: r.total as number, coveragePct: (r.coverage_pct as number) ?? null }));
+const topicRows = (rows: Record<string, unknown>[]): TopicRow[] =>
+  rows.map((r) => ({ no: r.no as number, slug: r.slug as string, titleRu: r.title_ru as string, titleTt: r.title_tt as string }));
+/** `mask` with the bits of `bits` flipped, as SQL: SQLite has no operator for it. */
+const flipped = (mask: string, bits: string) => `((${mask} | ${bits}) - (${mask} & ${bits}))`;
 const todayOf = (rows: Record<string, unknown>[]) => ({ reviewsToday: rows[0]!.reviews as number, learnedToday: rows[0]!.learned as number });
 /**
  * Spaces, . , ! ? … : ; « » " ' ( ) - – — and the typographic quotes “ ” „ ‘ ’ at either end of a word or phrase.
@@ -177,6 +184,46 @@ export class Repo {
    */
   async endTopic(userId: number, topicNo: number, newCursors: string): Promise<void> {
     await this.db.prepare("UPDATE users SET topic_no = NULL, new_cursors = ?3 WHERE id = ?1 AND topic_no = ?2").bind(userId, topicNo, newCursors).run();
+  }
+  /**
+   * Checks or unchecks level `no` of the scale for the user, in one UPDATE that looks at the stored set and changes
+   * it: of taps that arrive together each changes the set the other left, and the set is never left empty. Nothing
+   * is written when the catalog has no card of the level (`hasCards` is false then; so it is for a number off the
+   * scale) or when the level is the only one checked. A chosen topic that has no card in the new set of levels is cleared by the same statement. The
+   * second statement of the batch reads, for the answer alone, whether the level has cards. One D1 call.
+   */
+  async toggleLevel(userId: number, no: number): Promise<{ changed: boolean; hasCards: boolean }> {
+    const levels = flipped("users.levels", "?2");
+    const hasCards = (level: string) => `EXISTS (SELECT 1 FROM decks d WHERE d.level_no = ${level} AND d.level_no BETWEEN 1 AND ${LEVELS.length} AND d.kind = 'catalog' AND d.total > 0)`;
+    const [write, read] = await this.db.batch<{ has_cards: number }>([
+      this.db.prepare(
+        `UPDATE users SET levels = ${levels},
+           topic_no = CASE WHEN EXISTS (SELECT 1 FROM catalog_groups g WHERE g.topic_no = users.topic_no AND g.total > 0 AND (${levels} >> (g.level - 1)) & 1) THEN topic_no END
+         WHERE id = ?1 AND (${levels} & ${ALL_LEVELS}) != 0 AND ${hasCards("?3")}`,
+      ).bind(userId, levelBit(no), no),
+      this.db.prepare(`SELECT ${hasCards("?1")} AS has_cards`).bind(no),
+    ]);
+    return { changed: (write!.meta.changes ?? 0) > 0, hasCards: read!.results[0]!.has_cards === 1 };
+  }
+  /**
+   * Checks or unchecks the part-of-speech group at bit index `bit`, in one UPDATE that looks at the stored set and
+   * changes it (see `toggleLevel`). False, and nothing written, when the group is the only one checked.
+   */
+  async togglePosGroup(userId: number, bit: number): Promise<boolean> {
+    const groups = flipped("pos_groups", "?2");
+    const r = await this.db.prepare(`UPDATE users SET pos_groups = ${groups} WHERE id = ?1 AND (${groups} & ${ALL_POS}) != 0`).bind(userId, 1 << bit).run();
+    return (r.meta.changes ?? 0) > 0;
+  }
+  /**
+   * Chooses the topic of the new words, or none (null), in one UPDATE: a topic is taken only when the catalog has a
+   * card of it in a level the user has checked — by the stored set of levels. False, and nothing written, when it has none.
+   */
+  async chooseTopic(userId: number, topicNo: number | null): Promise<boolean> {
+    const r = await this.db.prepare(
+      `UPDATE users SET topic_no = ?2 WHERE id = ?1
+         AND (?2 IS NULL OR EXISTS (SELECT 1 FROM catalog_groups g WHERE g.topic_no = ?2 AND g.total > 0 AND (users.levels >> (g.level - 1)) & 1))`,
+    ).bind(userId, topicNo).run();
+    return (r.meta.changes ?? 0) > 0;
   }
   /**
    * The write that ends onboarding, two statements for one batch: the user patch, applied only while the user is still on
@@ -233,44 +280,41 @@ export class Repo {
     const r = await this.db.prepare("SELECT * FROM decks WHERE slug = ?").bind(slug).first<Record<string, unknown>>();
     return r ? this.rowToDeck(r) : null;
   }
+  private ownDecksStmt(userId: number): D1PreparedStatement {
+    return this.db.prepare("SELECT * FROM decks WHERE owner_id = ? ORDER BY id").bind(userId);
+  }
   /** The decks a user owns: «Мои слова» and the AI decks. */
   async ownDecks(userId: number): Promise<DeckRow[]> {
-    const { results } = await this.db.prepare("SELECT * FROM decks WHERE owner_id = ? ORDER BY id").bind(userId).all<Record<string, unknown>>();
-    return results.map((r) => this.rowToDeck(r));
+    return (await this.ownDecksStmt(userId).all<Record<string, unknown>>()).results.map((r) => this.rowToDeck(r));
+  }
+  /** Read through idx_decks_level: the decks of the catalog alone, not those of the learners. */
+  private levelDecksStmt(): D1PreparedStatement {
+    return this.db.prepare(`SELECT level_no AS level, total, coverage_pct FROM decks WHERE level_no BETWEEN 1 AND ${LEVELS.length} AND kind = 'catalog' ORDER BY level_no`);
+  }
+  private topicsStmt(): D1PreparedStatement {
+    return this.db.prepare("SELECT no, slug, title_ru, title_tt FROM topics ORDER BY no");
+  }
+  /** The levels of the scale the catalog has a deck of, by number, with the cards in each and its coverage. */
+  async levelDecks(): Promise<LevelDeck[]> {
+    return levelDecksOf((await this.levelDecksStmt().all<Record<string, unknown>>()).results);
+  }
+  /** The topics of the catalog, by number. */
+  async topicsList(): Promise<TopicRow[]> {
+    return topicRows((await this.topicsStmt().all<Record<string, unknown>>()).results);
   }
   /**
-   * Every level of the catalog with the user's progress in it, in one D1 call.
-   * `seen` is counted note by note only for an open level the user is in the middle of. A word is seen once one of
-   * its cards is started, in either direction, and words are given in the order of their ids — a word is passed over
-   * only on the day it was graded, when it is seen already. So the seen words of a level are its beginning: a level
-   * whose last note is started is seen whole, and one whose first note is not started has nothing seen but the words
-   * the user owns a copy of; those are counted for all levels at once, from the user's own notes. A closed level is
-   * not looked into. (One case is off by a word for a day: a first grade that was taken back and not given again
-   * leaves the word hidden until tomorrow, when the session gives it first.) This is about words; the cards of the
-   * second direction, which do get started out of order, are the business of the session queue (`queue`).
+   * What the screens of the levels are built from, in one D1 call: what `levelDecks`, `catalogTotals`, `progress`
+   * and `topicsList` give, and, with `own`, the decks the user owns (`ownDecks`); without it that list is empty and
+   * is not read. Counters only: no note and no card is read, whatever the size of the catalog.
    */
-  async levelsOverview(userId: number): Promise<LevelRow[]> {
-    const [levels, owned] = await this.db.batch<Record<string, unknown>>([
-      this.db.prepare(
-        `SELECT dk.id, dk.level_no, dk.total, dk.coverage_pct, (ud.user_id IS NOT NULL) AS open,
-           CASE WHEN ud.user_id IS NULL THEN 0
-                WHEN NOT EXISTS (SELECT 1 FROM ${edgeNote("?1", "dk", "DESC")} l WHERE NOT ${started("?1", "l.id")}) THEN dk.total
-                WHEN EXISTS (SELECT 1 FROM ${edgeNote("?1", "dk", "ASC")} f WHERE NOT ${started("?1", "f.id")}) THEN NULL
-                ELSE (SELECT COUNT(*) FROM notes n WHERE n.deck_id = dk.id AND (${started("?1", "n.id")} OR ${ownedCopy("?1")})) END AS seen
-         FROM decks dk LEFT JOIN user_decks ud ON ud.deck_id = dk.id AND ud.user_id = ?1
-         WHERE dk.level_no <= ${LAST_LEVEL} ORDER BY dk.level_no`,
-      ).bind(userId),
-      this.db.prepare(
-        `SELECT n.deck_id, COUNT(DISTINCT n.id) AS owned FROM decks od JOIN notes o ON o.deck_id = od.id
-           JOIN notes n ON n.word_key = o.word_key JOIN decks dk ON dk.id = n.deck_id
-         WHERE od.owner_id = ?1 AND dk.kind = 'catalog' AND dk.level_no <= ${LAST_LEVEL} GROUP BY n.deck_id`,
-      ).bind(userId),
-    ]);
-    const ownedIn = new Map(owned!.results.map((r) => [r.deck_id as number, r.owned as number]));
-    return levels!.results.map((r) => ({
-      levelNo: r.level_no as number, total: r.total as number, coveragePct: (r.coverage_pct as number) ?? null, open: r.open === 1,
-      seen: (r.seen as number | null) ?? ownedIn.get(r.id as number) ?? 0,
-    }));
+  async levelsData(userId: number, own: boolean): Promise<LevelsData> {
+    const [decks, totals, progress, topics, owned] = await this.db.batch<Record<string, unknown>>(
+      [this.levelDecksStmt(), this.catalogTotalsStmt(), this.progressRowsStmt(userId), this.topicsStmt(), ...(own ? [this.ownDecksStmt(userId)] : [])],
+    );
+    return {
+      decks: levelDecksOf(decks!.results), totals: pairTotals(totals!.results), progress: pairsStarted(progress!.results), topics: topicRows(topics!.results),
+      own: (owned?.results ?? []).map((r) => this.rowToDeck(r)),
+    };
   }
   /**
    * The level a learner placed at `placed` starts from while the catalog is not complete: the highest existing level
@@ -282,14 +326,6 @@ export class Repo {
        ORDER BY (level_no <= ?1) DESC, CASE WHEN level_no <= ?1 THEN -level_no ELSE level_no END LIMIT 1`,
     ).bind(placed).first<{ id: number; level_no: number }>();
     return r ? { deckId: r.id, levelNo: r.level_no } : null;
-  }
-  /** Opens every level below the user's current one; returns how many were opened. */
-  async openSkippedLevels(userId: number, now: number): Promise<number> {
-    const r = await this.db.prepare(
-      `INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at)
-       SELECT u.id, d.id, ?2 FROM users u JOIN decks d ON d.level_no < u.level AND d.level_no <= ${LAST_LEVEL} WHERE u.id = ?1`,
-    ).bind(userId, now).run();
-    return r.meta.changes ?? 0;
   }
   private rowToDeck(r: Record<string, unknown>): DeckRow {
     return { id: r.id as number, slug: (r.slug as string) ?? null, ownerId: (r.owner_id as number) ?? null, kind: r.kind as DeckRow["kind"],
@@ -452,20 +488,19 @@ export class Repo {
     ).bind(userId, noteId, direction, m.due).first<{ id: number }>();
     return r!.id;
   }
-  /** Today's activity and cumulative totals by stage for one display direction. */
-  async summary(userId: number, dayStartMs: number, direction: Direction): Promise<{ reviewsToday: number; learnedToday: number; learned: number; known: number; learning: number; new: number }> {
+  /**
+   * The user's cards of one direction by stage: «учу» — in the learning steps or repeated at less than a week,
+   * «знаю» — at one to three weeks, «выучено» — at three weeks and more. Over the cards of the user alone; a card
+   * that was never graded is in no stage.
+   */
+  async stageCounts(userId: number, direction: Direction): Promise<{ learned: number; known: number; learning: number }> {
     const r = await this.db.prepare(
-      `SELECT
-         (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?2) AS reviews_today,
-         (SELECT COALESCE(SUM(learned_now), 0) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?2) AS learned_today,
-         COALESCE(SUM(CASE WHEN c.id IS NULL OR c.state = 'new' THEN 1 ELSE 0 END), 0) AS new_n,
-         COALESCE(SUM(CASE WHEN c.state IN ('learning','relearning') OR (c.state = 'review' AND c.scheduled_days < 7) THEN 1 ELSE 0 END), 0) AS learning_n,
-         COALESCE(SUM(CASE WHEN c.state = 'review' AND c.scheduled_days BETWEEN 7 AND 20 THEN 1 ELSE 0 END), 0) AS known_n,
-         COALESCE(SUM(CASE WHEN c.state = 'review' AND c.scheduled_days >= 21 THEN 1 ELSE 0 END), 0) AS learned_n
-       FROM notes n LEFT JOIN cards c ON c.note_id = n.id AND c.user_id = ?1 AND c.direction = ?3
-       WHERE n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)`,
-    ).bind(userId, dayStartMs, direction).first<Record<string, number>>();
-    return { reviewsToday: r!.reviews_today!, learnedToday: r!.learned_today!, learned: r!.learned_n!, known: r!.known_n!, learning: r!.learning_n!, new: r!.new_n! };
+      `SELECT COALESCE(SUM(state = 'review' AND scheduled_days >= 21), 0) AS learned,
+              COALESCE(SUM(state = 'review' AND scheduled_days BETWEEN 7 AND 20), 0) AS known,
+              COALESCE(SUM(state IN ('learning','relearning') OR (state = 'review' AND scheduled_days < 7)), 0) AS learning
+       FROM cards WHERE user_id = ? AND direction = ?`,
+    ).bind(userId, direction).first<{ learned: number; known: number; learning: number }>();
+    return { learned: r!.learned, known: r!.known, learning: r!.learning };
   }
   async getCard(userId: number, cardId: number): Promise<CardRow | null> {
     const r = await this.db.prepare(`SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.id = ? AND c.user_id = ?`)
@@ -518,8 +553,8 @@ export class Repo {
     return { ...todayOf(log!.results), progress: pairsStarted(started?.results ?? []), totals: pairTotals(totals?.results ?? []) };
   }
 
-  /** Cumulative numbers for /stats in one D1 call; `coveragePct` is the coverage of the nearest level the catalog has below the user's current one. */
-  async statsExtra(userId: number, now: number, dayStartMs: number, direction: Direction): Promise<{ memory: number; total: number; r30: number; rev30: number; ok30: number; coveragePct: number | null; forecast: { d: number; n: number }[] }> {
+  /** Cumulative numbers for /stats in one D1 call: the memory held by the cards of one direction, the grades in all and in the last 30 days, and the cards due on each of the next 7 days. */
+  async statsExtra(userId: number, now: number, dayStartMs: number, direction: Direction): Promise<{ memory: number; total: number; r30: number; rev30: number; ok30: number; forecast: { d: number; n: number }[] }> {
     const since = now - 30 * 86_400_000;
     const [a, f] = await this.db.batch<Record<string, number | null>>([
       this.db.prepare(`SELECT
@@ -528,14 +563,13 @@ export class Repo {
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0) AS total,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3) AS r30,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3 AND json_extract(state_before, '$.state') = 'review') AS rev30,
-          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3 AND json_extract(state_before, '$.state') = 'review' AND rating > 1) AS ok30,
-          (SELECT d.coverage_pct FROM decks d JOIN users u ON u.id = ?1 WHERE d.level_no < u.level AND d.level_no <= ${LAST_LEVEL} ORDER BY d.level_no DESC LIMIT 1) AS coverage`)
+          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3 AND json_extract(state_before, '$.state') = 'review' AND rating > 1) AS ok30`)
         .bind(userId, direction, since),
       this.db.prepare(`SELECT MAX(0, CAST((due - ?2) / 86400000 AS INTEGER)) AS d, COUNT(*) AS n FROM cards
           WHERE user_id = ?1 AND state != 'new' AND due < ?2 + 7 * 86400000 GROUP BY d`).bind(userId, dayStartMs),
     ]);
     const r = a!.results[0]!;
-    return { memory: r.memory!, total: r.total!, r30: r.r30!, rev30: r.rev30!, ok30: r.ok30!, coveragePct: r.coverage ?? null, forecast: f!.results.map((x) => ({ d: x.d!, n: x.n! })) };
+    return { memory: r.memory!, total: r.total!, r30: r.r30!, rev30: r.rev30!, ok30: r.ok30!, forecast: f!.results.map((x) => ({ d: x.d!, n: x.n! })) };
   }
 
   /* review log */

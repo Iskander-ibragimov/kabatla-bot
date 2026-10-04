@@ -1,7 +1,8 @@
 import { PREVIEW_TTL_MS } from "../content/service";
-import { type Asked, LAST_LEVEL, type Lang, type Repo, deckHasUnshown, newCardRows, unshownInTail } from "../db/repo";
+import { type Asked, type Lang, type Repo, deckHasUnshown, newCardRows, unshownInTail } from "../db/repo";
 import { dict } from "../i18n";
 import { claim, completeMany, fail } from "../jobs/queue";
+import { LEVELS } from "../levels/scale";
 import { type TgApi, tgErrorInfo } from "../tg/client";
 import { EVENING_AT, localDay, nextOccurrence } from "../users/service";
 
@@ -22,27 +23,25 @@ const MOST_NEW = 20;
 /** The directions the user learns. A reminder comes before the day's first review, so no card counts as buried today. */
 const ASKED: Asked = { today: "''", tt: "(u.direction != 'ru_tt')", ru: "(u.direction != 'tt_ru')" };
 /**
- * The new cards waiting in the open decks, an estimate that is zero only when there are none. Two kinds are counted:
- * the cards that exist in state 'new' — with both directions, the other card of a word that was graded, which waits
- * for its day, in whatever deck it is — up to MOST_NEW; and the words that were never shown in a direction the user
- * asks for, up to MOST_NEW per deck, in the own decks that have any and in the lowest open level that has any — the
- * decks the session takes new words from (`Repo.candidateCards`).
- * Every open deck is asked through its last note, and only the decks that are counted through their last MOST_NEW
- * notes, so the cost does not grow with the size of the open levels. The window function keeps the list of decks
- * from being built twice.
+ * The new words that wait for the user, an estimate that costs a few rows however large the catalog is. Three kinds
+ * are added up:
+ * - the cards that exist in state 'new' in a direction the user asks for — with both directions, the other card of a
+ *   word that was graded, which waits for its day — up to MOST_NEW;
+ * - the words of the user's own decks («Мои слова», AI decks) that were never shown in such a direction, up to
+ *   MOST_NEW per deck. Every own deck is asked through its last note, and only a deck that has such words is
+ *   counted, through its last MOST_NEW notes;
+ * - the cards of the checked levels that are not started, by the counters: for every checked level, the cards in its
+ *   deck less the words the user has started in it (`user_progress`), never below 0. Five decks through
+ *   idx_decks_level and the counters of the checked levels are read, no note and no card.
+ * The last one takes no notice of the checked parts of speech, of the chosen topic or of the direction: with narrow
+ * settings the number says more than the session gives, and a learner who went over to another direction with
+ * every checked level started is told of no new word though the session has some.
  */
-const NEW_IN_OPEN_DECKS = `(${newCardRows("u.id", ASKED, MOST_NEW)} + (SELECT COALESCE(SUM(${unshownInTail("u.id", "t", ASKED, MOST_NEW)}), 0) FROM (
-    SELECT dk.id, dk.level_no, MIN(dk.level_no) OVER () AS lowest FROM user_decks ud JOIN decks dk ON dk.id = ud.deck_id
-    WHERE ud.user_id = u.id AND ${deckHasUnshown("u.id", "dk", ASKED)}) t
-  WHERE t.level_no IS NULL OR t.level_no = t.lowest))`;
-/**
- * The words of the level a tap on «Учить» would open: levels open lazily, in the review session, once the open ones have
- * no unseen words. That level is the user's current one when its deck was never opened, else the next level the catalog
- * has above it. NULL while there is no such level.
- */
-const NEXT_LEVEL_WORDS = `(SELECT d.total FROM decks d WHERE d.level_no <= ${LAST_LEVEL} AND (d.level_no > u.level
-    OR (d.level_no = u.level AND NOT EXISTS (SELECT 1 FROM user_decks ud WHERE ud.user_id = u.id AND ud.deck_id = d.id)))
-  ORDER BY d.level_no LIMIT 1)`;
+const NEW_WAITING = `(${newCardRows("u.id", ASKED, MOST_NEW)}
+  + (SELECT COALESCE(SUM(${unshownInTail("u.id", "dk", ASKED, MOST_NEW)}), 0) FROM user_decks ud JOIN decks dk ON dk.id = ud.deck_id
+     WHERE ud.user_id = u.id AND dk.owner_id IS NOT NULL AND ${deckHasUnshown("u.id", "dk", ASKED)})
+  + (SELECT COALESCE(SUM(MAX(0, d.total - COALESCE((SELECT SUM(p.started) FROM user_progress p WHERE p.user_id = u.id AND p.level = d.level_no), 0))), 0)
+     FROM decks d WHERE d.level_no BETWEEN 1 AND ${LEVELS.length} AND d.kind = 'catalog' AND (u.levels >> (d.level_no - 1)) & 1))`;
 
 interface Push { chat_id: number; text: string; reply_markup: unknown; parse_mode: "HTML" }
 interface Planned { userId: number; push: Push }
@@ -53,8 +52,9 @@ const button = (text: string) => ({ inline_keyboard: [[{ text, callback_data: "l
  * Runs every minute. Candidates come from indexed columns (next_daily_at, next_evening_at, last_review_at),
  * so only due users are read. The same first batch deletes previews that can no longer be confirmed and old finished jobs. The reviews due today are counted in the index idx_cards_user_state_due alone, one row
  * per due card: a deck, once open, is never closed, so the deck of a card is not looked up. Users are marked before sending (at-most-once), so a crashed or slow tick never repeats a push.
- * The daily push counts the reviews due today and the new words today's limit still allows: the new words of the
- * open decks (NEW_IN_OPEN_DECKS), or, when there are none, the words of the next level the catalog has.
+ * The daily push counts the reviews due today and the new words today's limit still allows, of those that wait
+ * (NEW_WAITING). The bot checks no level by itself: a learner whose checked levels are started whole, with nothing
+ * due and no word of their own to learn, gets no push.
  */
 export async function tick(d: TickDeps): Promise<{ sent: number }> {
   const { repo, tg, now } = d;
@@ -63,7 +63,7 @@ export async function tick(d: TickDeps): Promise<{ sent: number }> {
     db.prepare(`SELECT u.id, u.chat_id, u.lang, u.tz_offset_min, u.remind_at,
         (SELECT COUNT(*) FROM cards c WHERE c.user_id = u.id AND c.state IN ('learning','review','relearning') AND c.due < ${DAY_START} + 86400000) AS due_n,
         MIN(MAX(0, u.new_per_day - (SELECT COUNT(*) FROM review_log r WHERE r.user_id = u.id AND r.was_new = 1 AND r.undone = 0 AND r.reviewed_at >= ${DAY_START})),
-            COALESCE(NULLIF(${NEW_IN_OPEN_DECKS}, 0), ${NEXT_LEVEL_WORDS}, 0)) AS new_n
+            ${NEW_WAITING}) AS new_n
       FROM users u WHERE u.next_daily_at <= ${NOW} AND ${READY}
       ORDER BY u.next_daily_at, u.id LIMIT ${MAX_SENDS}`).bind(now),
     db.prepare(`SELECT u.id, u.chat_id, u.lang, u.tz_offset_min, u.streak, u.last_study_day FROM users u

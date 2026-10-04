@@ -59,15 +59,15 @@ describe("repo", () => {
     expect(c.streams[1]!.map((x) => [x.word, x.direction])).toEqual([["китап", "tt_ru"], ["китап", "ru_tt"]]);
   });
 
-  it("a deck numbered above the last level is not a level: not for /levels, the button for skipped levels, the start of a new learner or the lookup of ready cards", async () => {
+  it("a deck numbered above the last level is not a level: not for /levels, the start of a new learner or the lookup of ready cards", async () => {
     expect(LAST_LEVEL).toBe(20);
     const { repo, user } = await seedUser(env.DB, { now: T, level: 20, words: 1 });
     const ids = await seedLevels(env.DB, { 21: ["авыл"] }, { 20: 80 });
     // The learner is done with the levels: «level 21», the number of that deck.
     await repo.updateUser(user.id, { level: 21 });
-    expect(await repo.openSkippedLevels(user.id, T)).toBe(0);
     expect(await repo.userDeckIds(user.id)).not.toContain(ids[21]);
-    expect((await repo.levelsOverview(user.id)).map((l) => l.levelNo)).toEqual([20]);
+    // /levels goes by the scale A1…C1 (1–5): neither deck is a level of it.
+    expect(await repo.levelDecks()).toEqual([]);
     expect(await repo.startLevel(21)).toEqual({ deckId: (await repo.getDeckBySlug("l20"))!.id, levelNo: 20 });
     expect((await repo.findCatalogNotes(["авыл"])).size).toBe(0);
   });

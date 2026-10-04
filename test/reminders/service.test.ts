@@ -1,22 +1,34 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { Repo } from "../../src/db/repo";
+import { Repo, type User } from "../../src/db/repo";
 import { enqueue } from "../../src/jobs/queue";
 import { tick } from "../../src/reminders/service";
 import { newMem } from "../../src/srs/fsrs";
+import { bulkCatalog } from "../helpers/catalog";
 import { countingDb } from "../helpers/countingDb";
 import { fakeTelegram } from "../helpers/fakeTelegram";
 import { ru } from "../../src/i18n/ru";
 import { gradedMem, logStmt } from "../helpers/review";
-import { note, seedLevels, seedUser } from "../helpers/seed";
+import { note, recountProgress, seedCatalog, seedLearner } from "../helpers/seed";
 
 const MIN = 60_000;
 const local = (d: number, h: number, m: number) => Date.UTC(2026, 8, d, h, m) - 180 * MIN; // +03:00
 const run = (db: D1Database, tg: ReturnType<typeof fakeTelegram>, now: number) => tick({ repo: new Repo(db), tg, now });
 
+/** The `n` catalog words of a level (A1 unless given), «сүз1х1»…; returns their note ids. Once per level in a test. */
+const catalog = (n: number, level = 1) => seedCatalog(env.DB, Array.from({ length: n }, (_, i) => ({ level, word: `сүз${level}х${i + 1}` })));
+/** A learner who finished onboarding at 08:00 on the 30th (UTC+3), A1 checked, the daily reminder due at 09:00. */
+const learner = (o: { tgId?: number; patch?: Partial<User> } = {}) => seedLearner(env.DB, { now: local(30, 8, 0), ...o });
+/** The notes are started for the user: a card graded yesterday noon, not due today; the counters of started words follow the cards. */
+async function start(repo: Repo, userId: number, noteIds: number[]) {
+  for (let i = 0; i < noteIds.length; i += 50) await repo.batch(noteIds.slice(i, i + 50).map((id) => repo.insertCardStmt(userId, id, "tt_ru", gradedMem(local(29, 12, 0)))));
+  await recountProgress(env.DB, userId);
+}
+
 describe("reminders tick", () => {
   it("missed tick still sends exactly one daily push", async () => {
-    await seedUser(env.DB, { now: local(30, 8, 0), words: 3, patch: { remindAt: "09:00" } });
+    await catalog(3);
+    await learner({ patch: { remindAt: "09:00" } });
     const tg = fakeTelegram();
     await run(env.DB, tg, local(30, 8, 58));
     expect(tg.of("sendMessage")).toHaveLength(0);
@@ -29,7 +41,8 @@ describe("reminders tick", () => {
   });
 
   it("next day sends again", async () => {
-    await seedUser(env.DB, { now: local(30, 8, 0), words: 3 });
+    await catalog(3);
+    await learner();
     const tg = fakeTelegram();
     await run(env.DB, tg, local(30, 9, 5));
     await run(env.DB, tg, local(30, 9, 5) + 86_400_000);
@@ -37,155 +50,155 @@ describe("reminders tick", () => {
   });
 
   it("no push when nothing is due", async () => {
-    // Nothing is open, and the catalog has no deck of the learner's level nor of a higher one: a tap would open nothing.
-    await seedUser(env.DB, { now: local(30, 8, 0), words: 3, patch: { newPerDay: 5 } });
-    await env.DB.batch([env.DB.prepare("DELETE FROM user_decks"), env.DB.prepare("UPDATE users SET level = 5")]);
+    // The checked level has no cards, the learner has no card and no word of their own.
+    await catalog(3, 2);
+    await learner({ patch: { newPerDay: 5 } });
     const tg = fakeTelegram();
     await run(env.DB, tg, local(30, 9, 5));
     expect(tg.of("sendMessage")).toHaveLength(0);
   });
 
-  describe("a learner who finished every open level", () => {
-    /** Level 1 with `words` words, all graded and not due today, for a user whose reminder is due at 09:00. */
-    async function finishedLevel1(words: number, patch: Parameters<typeof seedUser>[1]["patch"] = {}) {
-      const seeded = await seedUser(env.DB, { now: local(30, 8, 0), words, patch });
-      for (const id of seeded.noteIds) await seeded.repo.insertCard(seeded.user.id, id, "tt_ru", gradedMem(local(29, 12, 0)));
-      return seeded;
-    }
+  describe("the new words of the daily reminder: an estimate by the counters of the checked levels", () => {
     const pushes = async (now = local(30, 9, 1)) => { const tg = fakeTelegram(); await run(env.DB, tg, now); return tg.of("sendMessage").map((c) => String(c.payload.text)); };
+    /** The reminder is due again at 09:00, for a second tick of the same morning. */
+    const dueAgain = (repo: Repo, userId: number, patch: Partial<User> = {}) => repo.updateUser(userId, { ...patch, nextDailyAt: local(30, 9, 0) });
 
-    it("is reminded when a higher level is in the catalog: a tap would open it", async () => {
-      await finishedLevel1(2);
-      await seedLevels(env.DB, { 2: ["авыл", "су", "юл"] });
-      // Three new words wait in level 2, fewer than the daily limit of ten.
-      expect(await pushes()).toEqual([ru.pushDaily(3, 1)]);
+    it("a learner with A1 checked, 10 of 400 started and nothing due is reminded of as many new words as the day allows", async () => {
+      const notes = await bulkCatalog(env.DB, { sizes: { 1: 400 } });
+      const { repo, user } = await learner();
+      await start(repo, user.id, notes.slice(0, 10).map((n) => n.id));
+      // 390 words are left and ten are allowed today.
+      expect(await pushes()).toEqual([ru.pushDaily(10, 4)]);
+      await dueAgain(repo, user.id, { newPerDay: 20 });
+      expect(await pushes(local(30, 9, 2))).toEqual([ru.pushDaily(20, 7)]);
     });
 
-    it("counts the new words up to the daily limit", async () => {
-      await finishedLevel1(2, { newPerDay: 5 });
-      await seedLevels(env.DB, { 2: Array.from({ length: 12 }, (_, i) => `сүз${i + 1}`) });
-      expect(await pushes()).toEqual([ru.pushDaily(5, 2)]);
-    });
-
-    it("the next level may be behind a gap", async () => {
-      await finishedLevel1(1);
-      await seedLevels(env.DB, { 4: ["авыл", "су"] });
+    it("counts no more new words than the checked levels have left", async () => {
+      const ids = await catalog(12);
+      const { repo, user } = await learner();
+      await start(repo, user.id, ids.slice(0, 10));
       expect(await pushes()).toEqual([ru.pushDaily(2, 1)]);
     });
 
-    it("adds the reviews due today to the new words of the next level", async () => {
-      const { repo, user, noteIds } = await finishedLevel1(2);
-      await seedLevels(env.DB, { 2: ["авыл"] });
-      await repo.updateCardStmt((await repo.getCardByNote(user.id, noteIds[0]!, "tt_ru"))!.id, { ...gradedMem(local(25, 12, 0)), due: local(30, 7, 0) }).run();
-      expect(await pushes()).toEqual([ru.pushDaily(2, 1)]);
-    });
-
-    it("is not reminded while no higher level is published", async () => {
-      await finishedLevel1(2);
+    it("a learner whose checked levels are started whole and who has nothing due gets no push: the bot checks no level by itself", async () => {
+      const ids = await catalog(2);
+      // A2 has words, and it is not checked.
+      await catalog(3, 2);
+      const { repo, user } = await learner();
+      await start(repo, user.id, ids);
       expect(await pushes()).toEqual([]);
-      // A level below the current one is a skipped level: a tap on the reminder would not open it.
-      await seedLevels(env.DB, { 3: ["бер"] }); // a catalog word key is unique across levels, so level 3 may not reuse WORDS[0]
-      const { repo, user } = await seedUser(env.DB, { now: local(30, 8, 0), level: 3, tgId: 2 });
-      await repo.insertCard(user.id, (await env.DB.prepare("SELECT id FROM notes WHERE deck_id = (SELECT id FROM decks WHERE level_no = 3)").first<{ id: number }>())!.id, "tt_ru", gradedMem(local(29, 12, 0)));
-      expect(await pushes(local(30, 9, 2))).toEqual([]);
+      // Once the learner checks A2, its words are counted.
+      await dueAgain(repo, user.id, { levels: 0b11 });
+      expect(await pushes(local(30, 9, 2))).toEqual([ru.pushDaily(3, 1)]);
+    });
+
+    it("counts every checked level and no other", async () => {
+      const a1 = await catalog(3);
+      await catalog(9, 2);
+      await catalog(5, 3);
+      const { repo, user } = await learner({ patch: { levels: 0b101, newPerDay: 20 } });
+      await start(repo, user.id, a1.slice(0, 1));
+      // Two words of A1 and the five of B1; the nine of A2 are not checked.
+      expect(await pushes()).toEqual([ru.pushDaily(7, 3)]);
+    });
+
+    it("a word started in a level that is not checked is not taken from what the checked levels have left", async () => {
+      await catalog(2);
+      const a2 = await catalog(4, 2);
+      const { repo, user } = await learner({ patch: { newPerDay: 20 } });
+      await start(repo, user.id, a2);
+      expect(await pushes()).toEqual([ru.pushDaily(2, 1)]);
+    });
+
+    it("adds the reviews due today to the new words", async () => {
+      const ids = await catalog(3);
+      const { repo, user } = await learner();
+      await start(repo, user.id, ids.slice(0, 2));
+      await repo.updateCardStmt((await repo.getCardByNote(user.id, ids[0]!, "tt_ru"))!.id, { ...gradedMem(local(25, 12, 0)), due: local(30, 7, 0) }).run();
+      // One review and the one word that is left.
+      expect(await pushes()).toEqual([ru.pushDaily(2, 1)]);
+    });
+
+    it("is reminded of the reviews alone when the checked levels are started whole", async () => {
+      const ids = await catalog(2);
+      const { repo, user } = await learner();
+      await start(repo, user.id, ids);
+      await repo.updateCardStmt((await repo.getCardByNote(user.id, ids[0]!, "tt_ru"))!.id, { ...gradedMem(local(25, 12, 0)), due: local(30, 7, 0) }).run();
+      expect(await pushes()).toEqual([ru.pushDaily(1, 1)]);
     });
 
     it("is not reminded when today's limit of new words is already used up", async () => {
-      const { repo, user, noteIds } = await finishedLevel1(2, { newPerDay: 2 });
-      await seedLevels(env.DB, { 2: ["авыл", "су"] });
+      const ids = await catalog(4);
+      const { repo, user } = await learner({ patch: { newPerDay: 2 } });
+      await start(repo, user.id, ids.slice(0, 2));
       // Both words were first graded this morning, after the 04:00 day boundary.
       const mem = gradedMem(local(30, 6, 0));
-      await repo.batch(noteIds.map((_, i) => logStmt(env.DB, {
+      await repo.batch(ids.slice(0, 2).map((_, i) => logStmt(env.DB, {
         cardId: i + 1, userId: user.id, rating: 3, stateBefore: newMem(local(30, 6, 0)), intervalBeforeDays: 0, intervalAfterMs: mem.due - local(30, 6, 0),
         reviewedAt: local(30, 6, 0), wasNew: true,
       })));
       expect(await pushes()).toEqual([]);
     });
 
-    it("is not reminded after the last level: there is nothing left to open", async () => {
-      const { repo, user, noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), level: 20, words: 1 });
-      await repo.insertCard(user.id, noteIds[0]!, "tt_ru", gradedMem(local(29, 12, 0)));
-      // A deck numbered above the last level is not a level.
-      await seedLevels(env.DB, { 21: ["авыл"] });
-      expect(await pushes()).toEqual([]);
-      await repo.updateUser(user.id, { level: 21, nextDailyAt: local(30, 9, 0) });
-      expect(await pushes(local(30, 9, 2))).toEqual([]);
+    it("counts the learner's own words that were never shown together with the checked levels", async () => {
+      await catalog(3);
+      const { repo, user } = await learner({ patch: { newPerDay: 20 } });
+      await repo.insertNotes(await repo.customDeck(user.id, local(30, 8, 0)), [note("рәхмәт"), note("зинһар")]);
+      expect(await pushes()).toEqual([ru.pushDaily(5, 2)]);
     });
 
-    it("a current level that was never opened counts as the level a tap would open (ruling T16c)", async () => {
-      // Finished onboarding at level 4 when the catalog had no such level; now it has, and level 5 behind it.
-      const repo = new Repo(env.DB);
-      const id = await repo.insertUser({ tgId: 7, chatId: 7, lang: "ru", now: local(30, 8, 0) });
-      await repo.updateUser(id, { onboardingStep: null, tzOffsetMin: 180, level: 4, nextDailyAt: local(30, 9, 0) });
-      await seedLevels(env.DB, { 4: ["авыл", "су", "юл"], 5: Array.from({ length: 8 }, (_, i) => `сүз${i + 1}`) });
+    it("is reminded of own words alone when the checked levels are started whole", async () => {
+      const ids = await catalog(2);
+      const { repo, user } = await learner();
+      await start(repo, user.id, ids);
+      const own = await repo.insertNotes(await repo.customDeck(user.id, local(30, 8, 0)), [note("рәхмәт"), note("зинһар"), note("әйе")]);
       expect(await pushes()).toEqual([ru.pushDaily(3, 1)]);
-      // Once it is open and finished, the level above is the next one.
-      await repo.subscribe(id, (await repo.getDeckBySlug("l04"))!.id, local(30, 9, 5));
-      const notes = await env.DB.prepare("SELECT id FROM notes WHERE deck_id = (SELECT id FROM decks WHERE level_no = 4)").all<{ id: number }>();
-      for (const n of notes.results) await repo.insertCard(id, n.id, "tt_ru", gradedMem(local(29, 12, 0)));
-      await repo.updateUser(id, { nextDailyAt: local(30, 9, 0) });
-      expect(await pushes(local(30, 9, 6))).toEqual([ru.pushDaily(8, 3)]);
-    });
-
-    it("is not reminded about a level word the learner owns a copy of: the session would not show it", async () => {
-      // Level 1: «китап» is graded, «вакыт» is in «Мои слова» and graded there; nothing is above level 1.
-      const { repo, user, noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 2 });
-      await repo.insertCard(user.id, noteIds[0]!, "tt_ru", gradedMem(local(29, 12, 0)));
-      const [own] = await repo.insertNotes(await repo.customDeck(user.id, local(30, 8, 0)), [note("вакыт")]);
-      await repo.insertCard(user.id, own!, "tt_ru", gradedMem(local(29, 12, 0)));
-      expect(await pushes()).toEqual([]);
-    });
-
-    it("counts the new words in the direction the learner asks for", async () => {
-      // Both words are started Tatar → Russian; a learner who has switched to Russian → Tatar has both ahead again.
-      await finishedLevel1(2, { direction: "ru_tt" });
-      expect(await pushes()).toEqual([ru.pushDaily(2, 1)]);
+      // An own word that is started is no new word.
+      await start(repo, user.id, own.slice(0, 2));
+      await dueAgain(repo, user.id);
+      expect(await pushes(local(30, 9, 2))).toEqual([ru.pushDaily(1, 1)]);
+      await start(repo, user.id, own.slice(2));
+      await dueAgain(repo, user.id);
+      expect(await pushes(local(30, 9, 3))).toEqual([]);
     });
 
     it("is reminded about a reverse card that was hidden on the day the rest of its level was asked: the session will give it", async () => {
-      // «оба». Three words, all asked Tatar → Russian. Two were asked Russian → Tatar too, the last word of the level
-      // among them; the reverse card of «китап» was hidden that day and still waits. Nothing is above level 1.
-      const { repo, user, noteIds } = await finishedLevel1(3, { direction: "both" });
-      for (const id of noteIds.slice(1)) await repo.insertCard(user.id, id, "ru_tt", gradedMem(local(29, 12, 0)));
-      await repo.insertCard(user.id, noteIds[0]!, "ru_tt", newMem(local(28, 12, 0)), "2026-09-28");
+      // «оба». Three words, all asked Tatar → Russian. Two were asked Russian → Tatar too; the reverse card of the
+      // first word was hidden that day and still waits. Every word of the level is started.
+      const ids = await catalog(3);
+      const { repo, user } = await learner({ patch: { direction: "both" } });
+      for (const id of ids.slice(1)) await repo.insertCard(user.id, id, "ru_tt", gradedMem(local(29, 12, 0)));
+      await repo.insertCard(user.id, ids[0]!, "ru_tt", newMem(local(28, 12, 0)), "2026-09-28");
+      await start(repo, user.id, ids);
       expect(await pushes()).toEqual([ru.pushDaily(1, 1)]);
       // A learner who asks for Tatar → Russian only has nothing new: the card that waits is of the other direction.
-      await repo.updateUser(user.id, { direction: "tt_ru", nextDailyAt: local(30, 9, 0) });
+      await dueAgain(repo, user.id, { direction: "tt_ru" });
       expect(await pushes(local(30, 9, 2))).toEqual([]);
     });
 
     it("with both directions counts the reverse cards that wait and the words never shown, each once", async () => {
       // Four words: two were asked Tatar → Russian yesterday, so their reverse cards wait; two were never shown.
-      const { repo, user, noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 4, patch: { direction: "both" } });
-      for (const id of noteIds.slice(0, 2)) {
-        await repo.insertCard(user.id, id, "tt_ru", gradedMem(local(29, 12, 0)));
-        await repo.insertCard(user.id, id, "ru_tt", newMem(local(29, 12, 0)), "2026-09-29");
-      }
+      const ids = await catalog(4);
+      const { repo, user } = await learner({ patch: { direction: "both" } });
+      for (const id of ids.slice(0, 2)) await repo.insertCard(user.id, id, "ru_tt", newMem(local(29, 12, 0)), "2026-09-29");
+      await start(repo, user.id, ids.slice(0, 2));
       expect(await pushes()).toEqual([ru.pushDaily(4, 2)]);
     });
 
-    it("counts own words and the lowest open level that has new words, not the levels above it", async () => {
-      const { repo, user } = await seedUser(env.DB, { now: local(30, 8, 0), words: 3, patch: { newPerDay: 20 } });
-      const l2 = (await seedLevels(env.DB, { 2: Array.from({ length: 9 }, (_, i) => `сүз${i + 1}`) }))[2]!;
-      await repo.subscribe(user.id, l2, local(30, 8, 0));
-      await repo.insertNotes(await repo.customDeck(user.id, local(30, 8, 0)), [note("рәхмәт"), note("зинһар")]);
-      // Two own words and the three words of level 1; the nine of level 2 come after level 1.
-      expect(await pushes()).toEqual([ru.pushDaily(5, 2)]);
-    });
-
-    it("still counts the unseen words of the open levels first, without looking ahead", async () => {
-      const { repo, user, noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 3 });
-      await repo.insertCard(user.id, noteIds[0]!, "tt_ru", gradedMem(local(29, 12, 0)));
-      await seedLevels(env.DB, { 2: Array.from({ length: 9 }, (_, i) => `сүз${i + 1}`) });
-      expect(await pushes()).toEqual([ru.pushDaily(2, 1)]);
+    it("takes no notice of the checked parts of speech nor of the chosen topic: the number may say more than the session gives (spec §6)", async () => {
+      await seedCatalog(env.DB, [{ level: 1, word: "китап", topic: 2 }, { level: 1, word: "су", topic: 8 }, { level: 1, word: "юл", topic: 10 }]);
+      // Numerals only, and the topic «Еда»: of the three nouns the session would give none.
+      await learner({ patch: { posGroups: 1 << 5, newMode: "topic", topicNo: 8 } });
+      expect(await pushes()).toEqual([ru.pushDaily(3, 1)]);
     });
   });
 
   it("evening push only with a streak of 2+ and no study today", async () => {
     const future = local(30, 9, 0) + 10 * 86_400_000;
-    await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 1, patch: { streak: 1, lastStudyDay: "2026-09-29", nextDailyAt: future } });
-    await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 2, patch: { streak: 3, lastStudyDay: "2026-09-29", nextDailyAt: future } });
-    await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 3, patch: { streak: 3, lastStudyDay: "2026-09-30", nextDailyAt: future } });
+    await catalog(1);
+    await learner({ tgId: 1, patch: { streak: 1, lastStudyDay: "2026-09-29", nextDailyAt: future } });
+    await learner({ tgId: 2, patch: { streak: 3, lastStudyDay: "2026-09-29", nextDailyAt: future } });
+    await learner({ tgId: 3, patch: { streak: 3, lastStudyDay: "2026-09-30", nextDailyAt: future } });
     const tg = fakeTelegram();
     await run(env.DB, tg, local(30, 19, 59));
     expect(tg.of("sendMessage")).toHaveLength(0);
@@ -197,7 +210,8 @@ describe("reminders tick", () => {
   });
 
   it("step ping once and never in quiet hours", async () => {
-    const { repo, user, noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 1, patch: { nextDailyAt: local(30, 9, 0) + 10 * 86_400_000 } });
+    const noteIds = await catalog(1);
+    const { repo, user } = await learner({ patch: { nextDailyAt: local(30, 9, 0) + 10 * 86_400_000 } });
     const t0 = local(30, 12, 0);
     await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(t0), state: "learning", step: 1, due: t0 + 10 * MIN, reps: 1, lastReview: t0, stability: 2, difficulty: 5 });
     await repo.updateUser(user.id, { lastReviewAt: t0 });
@@ -216,7 +230,8 @@ describe("reminders tick", () => {
   });
 
   it("caps sends at 35 per tick, rest next tick", async () => {
-    for (let i = 0; i < 40; i++) await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 1000 + i });
+    await catalog(1);
+    for (let i = 0; i < 40; i++) await learner({ tgId: 1000 + i });
     const tg = fakeTelegram();
     await run(env.DB, tg, local(30, 9, 1));
     expect(tg.of("sendMessage")).toHaveLength(35);
@@ -225,7 +240,8 @@ describe("reminders tick", () => {
   });
 
   it("403 deactivates the user", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: local(30, 8, 0), words: 1 });
+    await catalog(1);
+    const { repo, user } = await learner();
     const tg = fakeTelegram();
     tg.failNext("sendMessage", 403, "Forbidden: bot was blocked by the user");
     await run(env.DB, tg, local(30, 9, 1));
@@ -233,7 +249,8 @@ describe("reminders tick", () => {
   });
 
   it("429 reschedules as a job and the job is delivered later", async () => {
-    await seedUser(env.DB, { now: local(30, 8, 0), words: 1 });
+    await catalog(1);
+    await learner();
     const tg = fakeTelegram();
     tg.failNext("sendMessage", 429, "Too Many Requests", 30);
     await run(env.DB, tg, local(30, 9, 1));
@@ -260,6 +277,9 @@ describe("reminders tick", () => {
     });
 
     it("costs no D1 call: an idle tick still makes two", async () => {
+      // Learners there are, with words to learn; none is due this minute.
+      await catalog(3);
+      for (const tgId of [1, 2]) await learner({ tgId, patch: { nextDailyAt: now + DAY, nextEveningAt: now + DAY } });
       await preview(now - 2 * DAY);
       const db = countingDb(env.DB);
       await run(db, fakeTelegram(), now);
@@ -269,7 +289,8 @@ describe("reminders tick", () => {
   });
 
   it("tick uses at most 10 D1 calls", async () => {
-    for (let i = 0; i < 5; i++) await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 2000 + i });
+    await catalog(1);
+    for (let i = 0; i < 5; i++) await learner({ tgId: 2000 + i });
     await enqueue(env.DB, "push", { chat_id: 1, text: "x" }, local(30, 9, 0));
     const db = countingDb(env.DB);
     await run(db, fakeTelegram(), local(30, 9, 1));
@@ -277,7 +298,8 @@ describe("reminders tick", () => {
   });
 
   it("a tick with 40 users due for a reminder makes at most 35 sends and 10 D1 calls", async () => {
-    for (let i = 0; i < 40; i++) await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 4000 + i });
+    await catalog(1);
+    for (let i = 0; i < 40; i++) await learner({ tgId: 4000 + i });
     // Pushes that an earlier tick put off wait in the queue as well.
     for (let i = 0; i < 10; i++) await enqueue(env.DB, "push", { chat_id: 5000 + i, text: "x" }, local(30, 9, 0));
     const db = countingDb(env.DB);
@@ -297,7 +319,8 @@ describe("reminders tick", () => {
   });
 
   it("stays within 10 D1 calls when Telegram refuses some users and limits the rest", async () => {
-    for (let i = 0; i < 40; i++) await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 6000 + i });
+    await catalog(1);
+    for (let i = 0; i < 40; i++) await learner({ tgId: 6000 + i });
     const db = countingDb(env.DB);
     const tg = fakeTelegram();
     // The first user has blocked the bot; then Telegram asks to slow down: the rest of the plan is queued in one batch.
@@ -316,7 +339,8 @@ describe("reminders tick", () => {
   });
 
   it("does not voice words: a voice job left in the queue costs no Telegram call and writes nothing to the note", async () => {
-    const { repo, noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 1, patch: { nextDailyAt: local(30, 9, 0) + 10 * 86_400_000 } });
+    const noteIds = await catalog(1);
+    await learner({ patch: { nextDailyAt: local(30, 9, 0) + 10 * 86_400_000 } });
     await enqueue(env.DB, "voice", { noteId: noteIds[0] }, local(30, 9, 0));
     const db = countingDb(env.DB);
     const tg = fakeTelegram();
@@ -330,7 +354,8 @@ describe("reminders tick", () => {
   });
 
   it("a failed send is not retried every minute", async () => {
-    await seedUser(env.DB, { now: local(30, 8, 0), words: 1 });
+    await catalog(1);
+    await learner();
     const tg = fakeTelegram();
     tg.failNext("sendMessage", 400, "Bad Request: chat not found");
     await run(env.DB, tg, local(30, 9, 1));
@@ -339,7 +364,8 @@ describe("reminders tick", () => {
   });
 
   it("users are marked before sending, so a crashed send never repeats", async () => {
-    await seedUser(env.DB, { now: local(30, 8, 0), words: 1 });
+    await catalog(1);
+    await learner();
     const crashing = { call: async () => { throw new Error("network reset"); } };
     await tick({ repo: new Repo(env.DB), tg: crashing, now: local(30, 9, 1) }).catch(() => undefined);
     const tg = fakeTelegram();
@@ -348,7 +374,7 @@ describe("reminders tick", () => {
   });
 
   it("the tick reads only due users (indexed next_daily_at)", async () => {
-    for (let i = 0; i < 30; i++) await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 3000 + i, patch: { nextDailyAt: local(30, 9, 0) + 86_400_000 } });
+    for (let i = 0; i < 30; i++) await learner({ tgId: 3000 + i, patch: { nextDailyAt: local(30, 9, 0) + 86_400_000 } });
     const plan = await env.DB.prepare("EXPLAIN QUERY PLAN SELECT u.id, u.chat_id FROM users u WHERE u.next_daily_at <= CAST(?1 AS INTEGER) AND +u.active = 1 AND u.onboarding_step IS NULL ORDER BY u.next_daily_at, u.id LIMIT 35").bind(local(30, 9, 1)).all<{ detail: string }>();
     const detail = plan.results.map((r) => r.detail).join(" ");
     expect(detail).toMatch(/USING (COVERING )?INDEX idx_users_next_daily/);

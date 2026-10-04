@@ -1,7 +1,9 @@
 import type { User } from "../db/repo";
 import { dict } from "../i18n";
+import { levelCode } from "../levels/scale";
+import { type Hub, coverageOf } from "../levels/service";
 import type { Lang } from "../srs/fsrs";
-import type { Cumulative, LevelsView } from "../stats/service";
+import type { Cumulative } from "../stats/service";
 import type { OnboardingScreen } from "../users/service";
 import { REMIND_TIMES } from "../users/service";
 import type { Button, Keyboard, PreviewItem, Rendered } from "./views";
@@ -9,16 +11,6 @@ import { esc, fitMessage, previewLines } from "./views";
 
 const btn = (text: string, data: string, style?: Button["style"]): Button => (style ? { text, callback_data: data, style } : { text, callback_data: data });
 const tzLabel = (min: number) => `UTC${min >= 0 ? "+" : "−"}${Math.floor(Math.abs(min) / 60)}${Math.abs(min) % 60 ? ":" + String(Math.abs(min) % 60).padStart(2, "0") : ""}`;
-/** Sorted level numbers as ranges: [1, 2, 3, 5] → "1–3, 5". */
-function ranges(levels: number[]): string {
-  const out: string[] = [];
-  for (let i = 0; i < levels.length; i++) {
-    const first = levels[i]!;
-    while (levels[i + 1] === levels[i]! + 1) i++;
-    out.push(levels[i] === first ? `${first}` : `${first}–${levels[i]}`);
-  }
-  return out.join(", ");
-}
 
 export function renderOnboarding(s: OnboardingScreen, lang: Lang): Rendered {
   const t = dict(lang);
@@ -40,18 +32,19 @@ export function renderOnboarding(s: OnboardingScreen, lang: Lang): Rendered {
   }
 }
 
-export function renderLevels(v: LevelsView, lang: Lang): Rendered {
+/**
+ * A stand-in until the levels screen proper is built: the numbers of the hub in the texts the bot has. A line for
+ * every checked level that has cards, with the words started of it; the own decks; the coverage of the levels started whole.
+ */
+export function renderLevels(h: Hub, lang: Lang): Rendered {
   const t = dict(lang);
   const lines = [t.levelsTitle];
-  if (v.passed.length) lines.push(t.levelsPassed(ranges(v.passed)));
-  // A level the learner never opened is not shown as passed; the button below opens such levels.
-  if (v.skipped.length) lines.push(t.levelsSkipped(ranges(v.skipped)));
-  for (const l of v.inProgress) lines.push(t.levelProgress(l.levelNo, l.seen, l.total));
-  if (v.ahead > 0) lines.push(t.levelsAhead(v.ahead));
+  for (const l of h.levels) if (l.checked && l.total > 0) lines.push(t.levelProgress(l.no, l.started, l.total));
   // The title of an AI deck already starts with 🤖.
-  for (const d of v.own) lines.push(`${d.kind === "custom" ? "📝 " : ""}${esc(lang === "ru" ? d.titleRu : d.titleTt)} · ${d.total}`);
-  if (v.coveragePct != null) lines.push(t.levelsCoverage(v.coveragePct));
-  return { text: lines.join("\n"), keyboard: v.skipped.length ? [[btn(t.openSkippedBtn(ranges(v.skipped)), "lv:skip")]] : [] };
+  for (const d of h.own) lines.push(`${d.kind === "custom" ? "📝 " : ""}${esc(lang === "ru" ? d.titleRu : d.titleTt)} · ${d.total}`);
+  const coverage = coverageOf(h.levels);
+  if (coverage != null) lines.push(t.levelsCoverage(coverage));
+  return { text: lines.join("\n"), keyboard: [] };
 }
 
 export function renderSettings(u: User): Rendered {
@@ -68,7 +61,7 @@ export function renderSettings(u: User): Rendered {
 export function renderStats(s: Cumulative, lang: Lang): string {
   const t = dict(lang);
   return t.statsText({
-    level: s.level, coverage: s.coveragePct, streak: s.streak, learned: s.learned, known: s.known, learning: s.learning, fresh: s.fresh, memory: s.memory, total: s.total, r30: s.r30,
+    levels: s.levels.map(levelCode).join(", "), coverage: s.coveragePct, streak: s.streak, learned: s.learned, known: s.known, learning: s.learning, fresh: s.fresh, memory: s.memory, total: s.total, r30: s.r30,
     retention: s.retention30 == null ? "—" : `${Math.round(s.retention30 * 100)}%`, forecast: s.forecast7.join(" · "),
   });
 }

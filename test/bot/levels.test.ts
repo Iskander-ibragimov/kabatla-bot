@@ -4,127 +4,111 @@ import { renderLevels } from "../../src/bot/screens";
 import { Repo } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
+import type { Hub } from "../../src/levels/service";
 import { newMem } from "../../src/srs/fsrs";
-import type { LevelsView } from "../../src/stats/service";
 import { easyButton, harness } from "../helpers/botHarness";
 import { countingDb } from "../helpers/countingDb";
 import { gradedMem } from "../helpers/review";
-import { note, seedLevels, seedUser } from "../helpers/seed";
+import { note, recountProgress, seedCatalog, seedLearner, seedLevels, seedTopics, seedUser } from "../helpers/seed";
 
 const T = Date.UTC(2026, 8, 30, 6);
 const buttons = (m: { inline_keyboard?: { text: string; callback_data: string }[][] }) => (m.inline_keyboard ?? []).flat().map((b) => [b.text, b.callback_data]);
 
 /**
- * The picture from the brief: the learner (Telegram id 42) started at level 4 of 100 words; 36 words are graded, one more
- * is a copy in «Мои слова» (12 words), one was shown but not graded; an AI deck of 20 words; levels 1–3 cover 54%.
- * The catalog has six levels so far, so two are ahead.
+ * The learner at the bot (Telegram id 42) has A1 and A2 checked. A1: 40 words, 36 graded and one more shown but not
+ * graded; it covers 45% of a text. A2: 3 words, none started. B1 has two words and is not checked. «Мои слова» holds
+ * 12 words, an AI deck 20.
  */
-async function learnerAtLevel4(db: D1Database) {
-  const level4 = Array.from({ length: 100 }, (_, i) => `сүз${i + 1}`);
-  await seedLevels(db, { 1: ["китап", "вакыт"], 2: ["авыл", "су"], 3: ["юл", "көн"], 4: level4, 5: ["өй"], 6: ["эш"] }, { 3: 54, 4: 61 });
-  const { repo, user, noteIds } = await seedUser(db, { now: T, level: 4, tgId: 42 });
-  await repo.batch(noteIds.slice(0, 36).map((id) => repo.insertCardStmt(user.id, id, "tt_ru", gradedMem(T))));
-  await repo.insertCard(user.id, noteIds[36]!, "tt_ru", newMem(T));
-  await repo.insertNotes(await repo.customDeck(user.id, T), ["сүз100", ...Array.from({ length: 11 }, (_, i) => `үзем${i + 1}`)].map((w) => note(w)));
+async function learnerInA1(db: D1Database) {
+  await seedTopics(db);
+  const a1 = await seedCatalog(db, Array.from({ length: 40 }, (_, i) => ({ level: 1, word: `сүз${i + 1}`, topic: i % 3 })));
+  await seedCatalog(db, [...["авыл", "су", "юл"].map((word) => ({ level: 2, word })), ...["көн", "өй"].map((word) => ({ level: 3, word }))]);
+  await db.prepare("UPDATE decks SET coverage_pct = 45 WHERE level_no = 1").run();
+  const { repo, user } = await seedLearner(db, { now: T, tgId: 42, patch: { levels: 0b11 } });
+  await repo.batch(a1.slice(0, 36).map((id) => repo.insertCardStmt(user.id, id, "tt_ru", gradedMem(T))));
+  await repo.insertCard(user.id, a1[36]!, "tt_ru", newMem(T));
+  await recountProgress(db, user.id);
+  await repo.insertNotes(await repo.customDeck(user.id, T), Array.from({ length: 12 }, (_, i) => note(`үзем${i + 1}`)));
   const ai = await repo.insertDeck({ slug: null, kind: "ai", titleRu: "🤖 Путешествия", titleTt: "🤖 Путешествия", levelNo: null, coveragePct: null, ownerId: user.id });
   await repo.insertNotes(ai, Array.from({ length: 20 }, (_, i) => note(`сәяхәт${i + 1}`)));
   await repo.subscribe(user.id, ai, T);
   return { repo, user };
 }
 
+// The screen of this task is a stand-in built from the texts the bot has: the levels screen proper comes with the
+// bot screens of the plan (hub, checkboxes, topics). What is pinned here is that its numbers are the learner's.
 describe("/levels", () => {
-  it("shows passed levels, the current one with progress, what is ahead, own decks, coverage and the button for skipped levels", async () => {
-    await learnerAtLevel4(env.DB);
+  it("shows every checked level with the words started of those it has, the own decks and the coverage; no button", async () => {
+    await learnerInA1(env.DB);
     const db = countingDb(env.DB);
     const h = harness(db, { now: T });
     await h.text("/levels");
     expect(h.lastText()).toBe([
       "📚 <b>Уровни</b>",
-      "⏭ Пропущено: 1–3",
-      "▶️ Уровень 4 · 37 из 100",
-      "🔒 Впереди: 2",
+      "▶️ Уровень 1 · 36 из 40",
+      "▶️ Уровень 2 · 0 из 3",
       "📝 Мои слова · 12",
       "🤖 Путешествия · 20",
-      "📖 Покрытие текста ≈54%",
     ].join("\n"));
-    expect(buttons(h.lastMarkup())).toEqual([["Открыть пропущенные (1–3)", "lv:skip"]]);
+    expect(buttons(h.lastMarkup())).toEqual([]);
     expect(h.tg.calls.map((c) => c.method)).toEqual(["sendMessage"]);
     expect(db.calls).toBeLessThanOrEqual(8);
   });
 
-  it("opens the skipped levels with the button and then shows no button", async () => {
-    const { repo, user } = await learnerAtLevel4(env.DB);
-    const db = countingDb(env.DB);
-    const h = harness(db, { now: T });
+  it("names the coverage of the levels that are started whole", async () => {
+    const { repo, user } = await learnerInA1(env.DB);
+    const left = await env.DB.prepare("SELECT id FROM notes WHERE level = 1 AND id NOT IN (SELECT note_id FROM cards WHERE user_id = ?1 AND state != 'new') ORDER BY id").bind(user.id).all<{ id: number }>();
+    for (const n of left.results) await repo.updateCardStmt(await repo.ensureNewCard(user.id, n.id, "tt_ru", newMem(T)), gradedMem(T)).run();
+    await recountProgress(env.DB, user.id);
+    const h = harness(env.DB, { now: T });
     await h.text("/levels");
-    const screen = h.tg.lastMessageId();
-    const telegramBefore = h.tg.calls.length;
-    db.calls = 0;
-    await h.press("lv:skip", screen);
-    expect(h.tg.calls.slice(telegramBefore).map((c) => c.method)).toEqual(["editMessageText", "answerCallbackQuery"]);
-    expect(db.calls).toBeLessThanOrEqual(8);
-    const edit = h.tg.of("editMessageText").at(-1)!;
-    expect(edit.payload.message_id).toBe(screen);
-    expect(edit.payload.reply_markup).toBeUndefined();
-    expect(edit.payload.text).toBe([
+    expect(h.lastText()).toBe([
       "📚 <b>Уровни</b>",
-      "▶️ Уровень 1 · 0 из 2",
-      "▶️ Уровень 2 · 0 из 2",
-      "▶️ Уровень 3 · 0 из 2",
-      "▶️ Уровень 4 · 37 из 100",
-      "🔒 Впереди: 2",
+      "▶️ Уровень 1 · 40 из 40",
+      "▶️ Уровень 2 · 0 из 3",
       "📝 Мои слова · 12",
       "🤖 Путешествия · 20",
-      "📖 Покрытие текста ≈54%",
+      "📖 Покрытие текста ≈45%",
     ].join("\n"));
-    expect((await repo.getUser(user.id))!.level).toBe(4);
-    const open = await env.DB.prepare("SELECT d.level_no FROM user_decks ud JOIN decks d ON d.id = ud.deck_id WHERE ud.user_id = ? AND d.level_no IS NOT NULL ORDER BY d.level_no")
-      .bind(user.id).all<{ level_no: number }>();
-    expect(open.results.map((r) => r.level_no)).toEqual([1, 2, 3, 4]);
-    await h.text("/levels");
-    expect(buttons(h.lastMarkup())).toEqual([]);
+  });
+
+  it("the button of the old screen that opened skipped levels answers that it is out of date and changes nothing", async () => {
+    const { repo, user } = await learnerInA1(env.DB);
+    const db = countingDb(env.DB);
+    const h = harness(db, { now: T });
+    await h.press("lv:skip");
+    expect(h.tg.calls.map((c) => [c.method, c.payload.text])).toEqual([["answerCallbackQuery", ru.staleButton]]);
+    expect(db.calls).toBeLessThanOrEqual(8);
+    expect(await repo.getUser(user.id)).toEqual(user);
+    expect(await repo.userDeckIds(user.id)).toHaveLength(2);
   });
 
   it("is in Tatar for a tt user", async () => {
-    const { repo, user } = await learnerAtLevel4(env.DB);
+    const { repo, user } = await learnerInA1(env.DB);
     await repo.updateUser(user.id, { lang: "tt" });
     const h = harness(env.DB, { now: T });
     await h.text("/levels");
     expect(h.lastText()).toBe([
       "📚 <b>Дәрәҗәләр</b>",
-      tt.levelsSkipped("1–3"),
-      "▶️ 4 нче дәрәҗә · 37/100",
-      tt.levelsAhead(2),
+      "▶️ 1 нче дәрәҗә · 36/40",
+      "▶️ 2 нче дәрәҗә · 0/3",
       "📝 Минем сүзләр · 12",
       "🤖 Путешествия · 20",
-      tt.levelsCoverage(54),
     ].join("\n"));
-    expect(buttons(h.lastMarkup())).toEqual([[tt.openSkippedBtn("1–3"), "lv:skip"]]);
+    expect(buttons(h.lastMarkup())).toEqual([]);
   });
 
   it("the «Уровни» button of the done screen opens the same screen", async () => {
-    await seedUser(env.DB, { now: T, level: 1, words: 1, tgId: 42 });
+    await seedCatalog(env.DB, [{ level: 1, word: "китап" }]);
+    await seedLearner(env.DB, { now: T, tgId: 42 });
     const h = harness(env.DB, { now: T });
     await h.text("/learn");
     await h.press(easyButton(h), h.tg.lastMessageId());
     expect(h.lastText()).toContain(ru.doneTitle);
     expect(buttons(h.lastMarkup())).toEqual([[ru.addWords, "help:add"], ["📚 Уровни", "levels"]]);
     await h.press("levels", h.tg.lastMessageId());
-    // Level 1 is the only level published: nothing is said about levels ahead.
     expect(h.lastText()).toBe(["📚 <b>Уровни</b>", "▶️ Уровень 1 · 1 из 1"].join("\n"));
     expect(buttons(h.lastMarkup())).toEqual([]);
-  });
-
-  it("a learner placed above the only published level sees it as skipped, with no current level and nothing ahead", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 2, tgId: 42 });
-    await env.DB.prepare("DELETE FROM user_decks").run();
-    await repo.updateUser(user.id, { level: 7 });
-    const h = harness(env.DB, { now: T });
-    await h.text("/levels");
-    expect(h.lastText()).toBe(["📚 <b>Уровни</b>", "⏭ Пропущено: 1"].join("\n"));
-    expect(buttons(h.lastMarkup())).toEqual([["Открыть пропущенные (1)", "lv:skip"]]);
-    await h.press("lv:skip", h.tg.lastMessageId());
-    expect(h.tg.of("editMessageText").at(-1)!.payload.text).toBe(["📚 <b>Уровни</b>", "▶️ Уровень 1 · 0 из 2"].join("\n"));
   });
 
   it("the empty screen offers the levels", async () => {
@@ -139,32 +123,25 @@ describe("/levels", () => {
     await h.text("/learn");
     expect(h.lastText()).toBe(tt.nothingToLearn);
     expect(buttons(h.lastMarkup())).toEqual([["📚 Дәрәҗәләр", "levels"]]);
+    // A learner who has nothing at all still gets the screen: its title alone, for the checked level has no cards.
+    await repo.updateUser((await repo.getUserByTg(42))!.id, { lang: "ru" });
+    await h.press("levels", h.tg.lastMessageId());
+    expect(h.lastText()).toBe("📚 <b>Уровни</b>");
   });
 
   it("/decks answers as an unknown command and the old deck buttons do nothing", async () => {
-    const { repo, user } = await learnerAtLevel4(env.DB);
+    const { repo, user } = await learnerInA1(env.DB);
     const h = harness(env.DB, { now: T });
     await h.text("/decks");
     expect(h.lastText()).toBe(ru.unknownCommand);
     const sent = h.tg.calls.length;
     await h.press("decks");
-    await h.press(`sub:${(await repo.getDeckBySlug("l01"))!.id}`);
+    await h.press(`sub:${(await repo.getDeckBySlug("a2"))!.id}`);
     expect(h.tg.calls.length).toBe(sent);
-    expect(await repo.userDeckIds(user.id)).toHaveLength(3);
+    expect(await repo.userDeckIds(user.id)).toHaveLength(2);
     expect(ru.help).toContain("/levels — уровни");
     expect(ru.help + tt.help).not.toContain("/decks");
     expect([ru.cmdLevels, tt.cmdLevels]).toEqual(["Уровни", "Дәрәҗәләр"]);
-  });
-
-  it("does not open skipped levels for a user who is still in onboarding", async () => {
-    await seedLevels(env.DB, { 1: ["китап"], 7: ["авыл"] });
-    const h = harness(env.DB, { now: T });
-    await h.text("/start");
-    const repo = new Repo(env.DB);
-    const u = (await repo.getUserByTg(42))!;
-    await repo.updateUser(u.id, { level: 7 });
-    await h.press("lv:skip");
-    expect(await repo.userDeckIds(u.id)).toEqual([]);
   });
 });
 
@@ -188,27 +165,18 @@ describe("the bot opens no level by itself", () => {
 });
 
 describe("renderLevels", () => {
-  const view = (over: Partial<LevelsView>): LevelsView => ({ passed: [], inProgress: [], ahead: 0, own: [], coveragePct: null, skipped: [], ...over });
+  const hubOf = (over: Partial<Hub>): Hub => ({ levels: [], mode: "guided", posGroups: 255, topic: null, own: [], ...over });
+  const level = (no: 1 | 2 | 3 | 4 | 5, checked: boolean, started: number, total: number, coveragePct: number | null = null) =>
+    ({ no, code: `L${no}`, checked, total, size: 850, started, coveragePct });
 
-  it("writes level numbers as ranges", () => {
-    const r = renderLevels(view({ passed: [1, 3, 5, 7, 8], skipped: [2, 4, 6], inProgress: [{ levelNo: 9, seen: 0, total: 100 }], ahead: 11 }), "ru");
-    expect(r.text).toBe(["📚 <b>Уровни</b>", "✅ Пройдено: 1, 3, 5, 7–8", "⏭ Пропущено: 2, 4, 6", "▶️ Уровень 9 · 0 из 100", "🔒 Впереди: 11"].join("\n"));
-    expect(r.keyboard.flat().map((b) => [b.text, b.callback_data])).toEqual([["Открыть пропущенные (2, 4, 6)", "lv:skip"]]);
-    // In Tatar, with the word the button uses.
-    expect(renderLevels(view({ passed: [3], skipped: [1, 2] }), "tt").text).toBe(["📚 <b>Дәрәҗәләр</b>", "✅ Үтелгән: 3", "⏭ Калдырылган: 1–2"].join("\n"));
-    // A learner who skipped nothing has no such line.
-    expect(renderLevels(view({ passed: [1, 2] }), "ru").text).toBe(["📚 <b>Уровни</b>", "✅ Пройдено: 1–2"].join("\n"));
-  });
-
-  it("when every level is done shows neither a current level nor what is ahead", () => {
-    const all = Array.from({ length: 20 }, (_, i) => i + 1);
-    const r = renderLevels(view({ passed: all, coveragePct: 80 }), "ru");
-    expect(r.text).toBe(["📚 <b>Уровни</b>", "✅ Пройдено: 1–20", "📖 Покрытие текста ≈80%"].join("\n"));
+  it("has a line for a checked level that has cards, and none for an unchecked or an empty one", () => {
+    const r = renderLevels(hubOf({ levels: [level(1, true, 400, 400, 45), level(2, false, 3, 850, 60), level(3, true, 0, 20), level(4, true, 0, 0)] }), "ru");
+    expect(r.text).toBe(["📚 <b>Уровни</b>", "▶️ Уровень 1 · 400 из 400", "▶️ Уровень 3 · 0 из 20", "📖 Покрытие текста ≈45%"].join("\n"));
     expect(r.keyboard).toEqual([]);
   });
 
   it("escapes the title of an own deck", () => {
-    const r = renderLevels(view({ own: [{ kind: "ai", titleRu: "🤖 <b>x&y", titleTt: "🤖 <b>x&y", total: 3 }] }), "ru");
+    const r = renderLevels(hubOf({ own: [{ kind: "ai", titleRu: "🤖 <b>x&y", titleTt: "🤖 <b>x&y", total: 3 }] }), "ru");
     expect(r.text).toContain("🤖 &lt;b&gt;x&amp;y · 3");
   });
 });

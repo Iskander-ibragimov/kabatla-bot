@@ -8,9 +8,10 @@ import type { Repo, User } from "../db/repo";
 import { DAILY_LIMITS, remaining } from "../entitlements/service";
 import type { Config } from "../env";
 import { dict } from "../i18n";
+import { hub } from "../levels/service";
 import { ReviewService, type Screen } from "../review/service";
 import type { Rating } from "../srs/fsrs";
-import { cumulative, levelsView } from "../stats/service";
+import { cumulative } from "../stats/service";
 import type { TgApi } from "../tg/client";
 import { REMIND_TIMES, RETENTIONS, advanceOnboarding, getOrCreate, langFromTelegram, setSetting, startOnboarding } from "../users/service";
 import { learnKeyboard, renderGenPreview, renderLevels, renderOnboarding, renderSettings, renderStats } from "./screens";
@@ -165,15 +166,11 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   });
 
   /* levels */
-  const levels = async (ctx: Ctx) => renderLevels(await levelsView(repo, ctx.user), ctx.user.lang);
+  const levels = async (ctx: Ctx) => renderLevels(await hub(repo, ctx.user), ctx.user.lang);
   c.command("levels", async (ctx) => { if (await ready(ctx)) await send(ctx, await levels(ctx)); });
   c.callbackQuery("levels", async (ctx) => { await toast(ctx); await send(ctx, await levels(ctx)); });
-  c.callbackQuery("lv:skip", async (ctx) => {
-    if (ctx.user.onboardingStep) return toast(ctx);
-    await repo.openSkippedLevels(ctx.user.id, deps.now());
-    await editOrSend(ctx, clickedId(ctx), await levels(ctx));
-    await toast(ctx);
-  });
+  // A button of the screen that listed skipped levels: there are no such levels any more.
+  c.callbackQuery("lv:skip", (ctx) => toast(ctx, dict(ctx.user.lang).staleButton));
 
   /* AI decks */
   c.command("gen", async (ctx) => {

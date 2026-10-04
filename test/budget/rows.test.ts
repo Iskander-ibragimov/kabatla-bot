@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { type Direction, type DirectionSetting, Repo } from "../../src/db/repo";
 import { mergeStreams } from "../../src/levels/order";
 import { ALL_LEVELS, type NewMode, hasLevel, levelBit } from "../../src/levels/scale";
+import { hub, setTopic, toggleLevel, togglePos, topicLines } from "../../src/levels/service";
 import { tick } from "../../src/reminders/service";
 import { newMem } from "../../src/srs/fsrs";
 import { harness } from "../helpers/botHarness";
@@ -10,7 +11,7 @@ import { type CardSeed, type CatalogNote, bulkCards, bulkCatalog, numeralsAt } f
 import { fakeTelegram } from "../helpers/fakeTelegram";
 import { readingDb } from "../helpers/readingDb";
 import { gradedMem } from "../helpers/review";
-import { note, seedLearner, seedLevels } from "../helpers/seed";
+import { note, recountProgress, seedLearner, seedTopics } from "../helpers/seed";
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -95,11 +96,7 @@ async function learner(catalog: CatalogNote[], c: Case) {
   });
   own.slice(0, c.where === "run" ? 10 : 9).forEach((id, i) => directions.forEach((d) => cards.push([id, d, c.where === "start" && i < 5 && d === directions[0] ? dueToday : yesterday, null])));
   await bulkCards(env.DB, user.id, cards);
-  await env.DB.prepare(
-    `INSERT INTO user_progress (user_id, level, topic_no, started)
-     SELECT c.user_id, COALESCE(n.level, 0), COALESCE(n.topic_no, 0), COUNT(DISTINCT c.note_id) FROM cards c JOIN notes n ON n.id = c.note_id
-     WHERE c.user_id = ? AND c.state <> 'new' GROUP BY 2, 3`,
-  ).bind(user.id).run();
+  await recountProgress(env.DB, user.id);
   return { repo, userId: user.id };
 }
 
@@ -244,82 +241,6 @@ describe("D1 rows read by a session with the whole catalog (3 850 notes) loaded"
   }
 });
 
-/** The catalog of the screens that are not switched yet: twenty levels of a hundred words. */
-const HUNDREDS = 20;
-const PER_LEVEL = 100;
-
-/** The catalog, 100 words a level: all 20 levels, or the levels `from`…`to`. Returns the note ids by level number, in the order of the level. */
-async function hundredsCatalog(from = 1, to = HUNDREDS): Promise<Record<number, number[]>> {
-  const levels: Record<number, string[]> = {};
-  for (let l = from; l <= to; l++) levels[l] = Array.from({ length: PER_LEVEL }, (_, i) => `сүз${l}х${i + 1}`);
-  const decks = await seedLevels(env.DB, levels, Object.fromEntries(Object.keys(levels).map((l) => [l, 27 + 3 * Number(l)])));
-  const ids: Record<number, number[]> = {};
-  for (let l = from; l <= to; l++) {
-    ids[l] = (await env.DB.prepare("SELECT id FROM notes WHERE deck_id = ? ORDER BY id").bind(decks[l]).all<{ id: number }>()).results.map((r) => r.id);
-  }
-  expect(Object.values(ids).flat()).toHaveLength((to - from + 1) * PER_LEVEL);
-  return ids;
-}
-
-const ownWords = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => note(`үзем${from + i}`));
-
-type Progress = "in order" | "none" | "scattered" | "stragglers" | "switched";
-
-/**
- * A learner (Telegram id 42) on level `level` with the levels 1…`level` open, ten own words, and a reminder that is due.
- * `progress: "in order"` — the levels below are finished, half of the current one and half of the own words are started,
- * twenty of the started cards are due today. `progress: "none"` — the levels were opened and nothing was started.
- *
- * Three more shapes, for the direction «оба» only, where the cards of a level are not started in the order of its words:
- * `"scattered"` — as "in order", but in the current level and in the own deck every third started word and the ten
- * started last were asked Tatar → Russian only: their reverse cards wait in state 'new', hidden on an earlier day.
- * `"stragglers"` — every word of every open level and every own word is started in both directions, the last word of
- * each deck included, except twelve words spread over the lowest, the middle and the current level and one own word,
- * whose reverse cards were hidden on the days the rest was asked and still wait in state 'new'.
- * `"switched"` — the learner learned everything Tatar → Russian and then switched to «оба»: every word of every open
- * level is started in one direction, and the repetitions since the switch have created the reverse card of every
- * word in state 'new'; the own words are finished in both directions.
- */
-async function hundredsLearner(catalog: Record<number, number[]>, level: number, direction: DirectionSetting, progress: Progress, existing?: { id: number; own: number[] }) {
-  const repo = new Repo(env.DB);
-  const id = existing?.id ?? (await repo.insertUser({ tgId: 42, chatId: 42, lang: "ru", now }));
-  await repo.updateUser(id, { onboardingStep: null, tzOffsetMin: 180, level, direction, newPerDay: 20, nextDailyAt: now - 60 * MIN, nextEveningAt: now + 9 * 60 * MIN });
-  await env.DB.prepare("INSERT INTO user_decks (user_id, deck_id, added_at) SELECT ?1, id, ?2 FROM decks WHERE level_no <= ?3").bind(id, now, level).run();
-  const own = existing?.own ?? (await repo.insertNotes(await repo.customDeck(id, now), ownWords(1, 10)));
-  const below = Array.from({ length: level - 1 }, (_, i) => catalog[i + 1]!).flat();
-  const current = catalog[level]!;
-  /** A card that was graded yesterday; the first twenty of a shape are due today. */
-  const graded = (noteId: number, d: Direction, due: boolean) => repo.insertCardStmt(id, noteId, d, { ...gradedMem(now - DAY), ...(due ? { due: now - MIN } : {}) });
-  /** The reverse card of a word whose other card was graded on an earlier day: never graded itself, hidden on that day. */
-  const waiting = (noteId: number) => repo.insertCardStmt(id, noteId, "ru_tt", newMem(now - 2 * DAY), "2026-09-28");
-  const cards: D1PreparedStatement[] = [];
-  if (progress === "in order") {
-    [...own.slice(0, 5), ...below, ...current.slice(0, PER_LEVEL / 2)].forEach((noteId, i) => directionsOf(direction).forEach((d) => cards.push(graded(noteId, d, i < 20))));
-  } else if (progress === "scattered") {
-    below.forEach((noteId, i) => BOTH.forEach((d) => cards.push(graded(noteId, d, i < 20))));
-    const half = (deck: number[], started: number) => deck.slice(0, started).forEach((noteId, i) => {
-      cards.push(graded(noteId, "tt_ru", false));
-      cards.push(i % 3 === 0 || i >= started - 10 ? waiting(noteId) : graded(noteId, "ru_tt", false));
-    });
-    half(own, 5);
-    half(current, PER_LEVEL / 2);
-  } else if (progress === "stragglers") {
-    // Twelve level words in all: the same places in each of the (up to three) levels, more places when the levels are fewer.
-    const levels = [...new Set([1, Math.ceil(level / 2), level])];
-    const places = [7, 31, 58, 90, 3, 19, 44, 45, 46, 61, 77, 83].slice(0, 12 / levels.length);
-    const left = new Set([own[3]!, ...levels.flatMap((l) => places.map((i) => catalog[l]![i]!))]);
-    [...own, ...below, ...current].forEach((noteId, i) => {
-      cards.push(graded(noteId, "tt_ru", i < 20));
-      cards.push(left.has(noteId) ? waiting(noteId) : graded(noteId, "ru_tt", false));
-    });
-  } else if (progress === "switched") {
-    own.forEach((noteId) => BOTH.forEach((d) => cards.push(graded(noteId, d, false))));
-    [...below, ...current].forEach((noteId, i) => { cards.push(graded(noteId, "tt_ru", i < 20)); cards.push(waiting(noteId)); });
-  }
-  for (let i = 0; i < cards.length; i += 100) await repo.batch(cards.slice(i, i + 100));
-  return id;
-}
-
 async function levelsRows(): Promise<number> {
   const db = readingDb(env.DB);
   const h = harness(db, { now });
@@ -336,38 +257,63 @@ async function reminderRows(): Promise<number> {
   return db.rowsRead;
 }
 
-describe("D1 rows read by /levels and the reminder, which still go by the twenty levels of a hundred words (2 000 notes)", () => {
-  /** /levels and the reminder of the learner in the database: each within its budget. */
+describe("D1 rows read by /levels and by the reminder of one due learner with the whole catalog (3 850 notes) loaded", () => {
+  /** The reminder and /levels of the learner in the database, whose reminder is due: each within its budget. */
   async function expectWithinBudget() {
     expect(await reminderRows()).toBeLessThanOrEqual(BUDGET.reminderPerUser);
     expect(await levelsRows()).toBeLessThanOrEqual(BUDGET.levels);
   }
-  const shapes: [DirectionSetting, Progress][] = [
-    ["tt_ru", "in order"], ["tt_ru", "none"], ["both", "in order"], ["both", "none"],
-    ["both", "scattered"], ["both", "stragglers"], ["both", "switched"],
-  ];
-  for (const level of [1, 5, 20]) {
-    for (const [direction, progress] of shapes) {
-      it(`level ${level}, direction ${direction}, progress ${progress}: /levels and the reminder stay within the budget`, async () => {
-        await hundredsLearner(await hundredsCatalog(), level, direction, progress);
-        await expectWithinBudget();
-      });
-    }
+  const cases: Case[] = [];
+  for (const where of ["start", "middle", "end"] as const) {
+    for (const direction of ["tt_ru", "both"] as const) cases.push({ levels: "all", pos: "all", mode: "guided", where, direction });
+  }
+  // The settings that narrow the new words do not change what these two read.
+  cases.push({ levels: "all", pos: "num", mode: "topic", where: "middle", direction: "both" });
+  cases.push({ levels: "all", pos: "all", mode: "freq", where: "run", direction: "tt_ru" });
+  cases.push({ levels: "A2", pos: "all", mode: "guided", where: "middle", direction: "both" });
+  for (const c of cases) {
+    it(`${title(c)}: the reminder and /levels stay within the budget`, async () => {
+      await seedTopics(env.DB);
+      await learner(await fullCatalog(), c);
+      await expectWithinBudget();
+    });
   }
 
-  it("level 20, direction both, progress switched, own words typed before and after the upper levels were published: the same budget", async () => {
-    // The ids of the own words enclose the notes of the levels 11…20, with a thousand cards in state 'new' among them:
-    // the reminder must not read those cards to learn that the own deck, finished in both directions, has nothing new.
-    const lower = await hundredsCatalog(1, 10);
+  it("all five levels, guided, middle, both: what «Темы» reads and what a tap on a checkbox or on a topic reads is within the budget of a settings screen", async () => {
+    await seedTopics(env.DB);
+    const { userId } = await learner(await fullCatalog(), { levels: "all", pos: "all", mode: "guided", where: "middle", direction: "both" });
+    const db = readingDb(env.DB);
+    const repo = new Repo(db);
+    const user = (await repo.getUser(userId))!;
+    const rowsOf = async (run: () => Promise<unknown>) => { db.rowsRead = 0; await run(); return db.rowsRead; };
+    expect(await rowsOf(() => hub(repo, user))).toBeLessThanOrEqual(BUDGET.levels);
+    expect(await rowsOf(async () => expect((await topicLines(repo, user)).length).toBe(21))).toBeLessThanOrEqual(BUDGET.levels);
+    expect(await rowsOf(async () => expect(await toggleLevel(repo, user, 3)).toBe("ok"))).toBeLessThanOrEqual(BUDGET.levels);
+    expect(await rowsOf(async () => expect(await togglePos(repo, user, 5)).toBe("ok"))).toBeLessThanOrEqual(BUDGET.levels);
+    expect(await rowsOf(async () => expect(await setTopic(repo, user, 7)).toBe("ok"))).toBeLessThanOrEqual(BUDGET.levels);
+  });
+
+  it("all five levels, a learner who went over to both directions with half the catalog started, own words typed before and after the catalog was loaded: the same budget", async () => {
+    // The ids of the own words enclose the notes of the catalog, and a reverse card waits in state 'new' for every
+    // started word, 1 925 of them: neither the reminder nor /levels may read those cards.
+    await seedTopics(env.DB);
     const repo = new Repo(env.DB);
     const id = await repo.insertUser({ tgId: 42, chatId: 42, lang: "ru", now });
     const deck = await repo.customDeck(id, now);
-    const early = await repo.insertNotes(deck, ownWords(1, 5));
-    const upper = await hundredsCatalog(11, 20);
-    const late = await repo.insertNotes(deck, ownWords(6, 10));
-    expect(Math.min(...upper[11]!)).toBeGreaterThan(Math.max(...early));
-    expect(Math.min(...late)).toBeGreaterThan(Math.max(...upper[20]!));
-    await hundredsLearner({ ...lower, ...upper }, 20, "both", "switched", { id, own: [...early, ...late] });
+    const early = await repo.insertNotes(deck, Array.from({ length: 5 }, (_, i) => note(`үзем${i + 1}`)));
+    const catalog = await fullCatalog();
+    const late = await repo.insertNotes(deck, Array.from({ length: 5 }, (_, i) => note(`үзем${i + 6}`)));
+    expect(Math.min(...catalog.map((n) => n.id))).toBeGreaterThan(Math.max(...early));
+    expect(Math.min(...late)).toBeGreaterThan(Math.max(...catalog.map((n) => n.id)));
+    await repo.updateUser(id, { onboardingStep: null, tzOffsetMin: 180, direction: "both", newPerDay: 20, levels: ALL_LEVELS, nextDailyAt: now - 60 * MIN, nextEveningAt: now + 9 * 60 * MIN });
+    const yesterday = gradedMem(now - DAY);
+    const cards: CardSeed[] = [...early, ...late].flatMap((n) => BOTH.map((d): CardSeed => [n, d, yesterday, null]));
+    mergeStreams([catalog], "guided").slice(0, catalog.length / 2).forEach((n, i) => {
+      cards.push([n.id, "tt_ru", i < 20 ? { ...yesterday, due: now - MIN } : yesterday, null]);
+      cards.push([n.id, "ru_tt", newMem(now - 2 * DAY), "2026-09-28"]);
+    });
+    await bulkCards(env.DB, id, cards);
+    await recountProgress(env.DB, id);
     await expectWithinBudget();
   });
 });

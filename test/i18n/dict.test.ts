@@ -40,7 +40,7 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   genTitle: [["сәяхәт", 20]],
   genLeft: [[2]],
   genAdded: [["сәяхәт", 20]],
-  statsText: [[{ ...STATS, level: 4, coverage: 54 }], [{ ...STATS, level: 1, coverage: null }], [{ ...STATS, level: 6, coverage: 61 }], [{ ...STATS, level: 21, coverage: 80 }]],
+  statsText: [[{ ...STATS, levels: "A1, A2", coverage: 54 }], [{ ...STATS, levels: "A1", coverage: null }], [{ ...STATS, levels: "B1, B2, C1", coverage: 61 }]],
   setMode: [[0.85], [0.9], [0.95]],
   setNew: [[10]],
   setRemind: [["09:00"]],
@@ -90,7 +90,7 @@ describe("i18n dictionaries", () => {
 
   it("writes Tatar texts with Tatar letters only", () => {
     // Names that stay in Latin script. Everything else Latin is a look-alike or a leftover.
-    const LATIN_OK = /AI|Anki|Tatoeba|CC BY 2\.0 FR|corpus\.tatar|speech\.tatar|UTC/g;
+    const LATIN_OK = /AI|Anki|Tatoeba|CC BY 2\.0 FR|corpus\.tatar|speech\.tatar|UTC|A1|A2|B1|B2|C1/g;
     // Tags, commands, emoji (with the variation selector) and symbols that isTatarText does not know.
     const NOT_TEXT = /<[^>]+>|\/\w+|\p{Extended_Pictographic}|[️\n·≈%№~+→↑<„“]/gu;
     for (const k of KEYS) {
