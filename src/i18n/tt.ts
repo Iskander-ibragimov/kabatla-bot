@@ -109,7 +109,7 @@ export const tt: Dict = {
   reportSent: "Шикаять җибәрелде, рәхмәт",
   reportAlready: "Сез бу карточка турында инде хәбәр иттегез",
   levelTitle: levelName,
-  levelUp: (from, to, pct) => `${levelName(from)}нең барлык 100 сүзе дә өйрәнелә. ${levelName(to)}не ачам.${covered(pct)}`,
+  levelUp: (from, to, pct, total) => `${total ? `${levelName(from)}нең барлык ${total} сүзе дә өйрәнелә. ` : ""}${levelName(to)}не ачам.${covered(pct)}`,
   levelsDone: (pct) => `Барлык 2 000 сүз дә өйрәнелә! 🎉 Алга таба — график буенча кабатлаулар. Үз сүзләрегезне теләсә кайчан өстәп була.${covered(pct)}`,
   levelsTitle: "📚 <b>Дәрәҗәләр</b>",
   levelsPassed: (list) => `✅ Үтелгән: ${list}`,

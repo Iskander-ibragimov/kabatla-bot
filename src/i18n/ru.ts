@@ -4,6 +4,9 @@ const POS: Record<string, string> = {
   post: "послелог", conj: "союз", part: "частица", intj: "межд.", phr: "фраза",
 };
 
+/** «слово» in the form that goes with a number: 1 слово, 2 слова, 5 слов, 21 слово, 111 слов. */
+const wordsForm = (n: number) => (n % 10 === 1 && n % 100 !== 11 ? "слово" : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "слова" : "слов");
+
 /** Closing sentence of the level messages; left out while the coverage is unknown. */
 const covered = (pct: number | null) => (pct == null ? "" : ` Пройденные слова покрывают ≈${pct}% обычного текста.`);
 
@@ -103,8 +106,9 @@ export const ru = {
   reportSent: "Жалоба отправлена, спасибо",
   reportAlready: "Вы уже сообщали об этой карточке",
   levelTitle: (n: number) => `Уровень ${n}`,
-  /** First line of the card that follows the opening of level `to`; every level has 100 words. */
-  levelUp: (from: number, to: number, pct: number | null) => `Все 100 слов уровня ${from} в работе. Открываю уровень ${to}.${covered(pct)}`,
+  /** First line of the card that follows the opening of level `to`. `total`: the words of level `from`, null when the catalog has no deck of it. */
+  levelUp: (from: number, to: number, pct: number | null, total: number | null) =>
+    `${total ? `Все ${total} ${wordsForm(total)} уровня ${from} в работе. ` : ""}Открываю уровень ${to}.${covered(pct)}`,
   /** Said once, when the words of level 20 have all been shown. */
   levelsDone: (pct: number | null) => `Все 2 000 слов в работе! 🎉 Дальше — повторения по расписанию. Свои слова можно добавлять в любой момент.${covered(pct)}`,
   /** Lines and the button of /levels; `list` and `range` are level numbers like "1–3, 5". */

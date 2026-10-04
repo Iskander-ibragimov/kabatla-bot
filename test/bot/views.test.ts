@@ -311,7 +311,7 @@ describe("views", () => {
     const fits = (text: string) => expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
     const card = (over: Partial<CardView>, lead?: string, lang: "ru" | "tt" = "ru") => renderCard(view(over), counts, iv, true, lang, lead).text;
     const WORD = `${"ышанычлы ".repeat(30)}кеше`;
-    const LEAD = ru.levelUp(19, 20, 79);
+    const LEAD = ru.levelUp(19, 20, 79, 100);
 
     it("an ordinary card is shown whole, and the lead line of a new level stands before it", () => {
       const plain = card({});
@@ -353,7 +353,7 @@ describe("views", () => {
       const word = "ә".repeat(3000);
       for (const direction of ["tt_ru", "ru_tt"] as const) {
         const text = card({ direction, word, transcription: "ә".repeat(3000), pos: "post", translation: "я".repeat(3000), exampleTt: "ә".repeat(3000), exampleRu: "я".repeat(3000), sourceUrl: `https://${"a".repeat(480)}.example/x` },
-          (lang === "ru" ? ru : tt).levelUp(19, 20, 79), lang);
+          (lang === "ru" ? ru : tt).levelUp(19, 20, 79, 100), lang);
         fits(text);
         expect(text).toContain(`<b>${word}</b>`);
         expect(text).not.toContain("<blockquote>");

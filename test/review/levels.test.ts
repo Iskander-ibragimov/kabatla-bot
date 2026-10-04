@@ -28,7 +28,7 @@ describe("levels", () => {
     expect(s.kind === "card" && s.levelUp).toBeNull();
     expect((await repo.getUser(user.id))!.level).toBe(1);
     s = await gradeShown(repo, user, s, 4, now);
-    expect(s.kind === "card" && s.levelUp).toEqual({ from: 1, to: 2, coveragePct: 31 });
+    expect(s.kind === "card" && s.levelUp).toEqual({ from: 1, to: 2, coveragePct: 31, total: 2 });
     expect(s.kind === "card" && s.view.word).toBe("авыл");
     expect(s.kind === "card" && s.counts).toEqual({ n: 2, l: 0, r: 0 });
     const again = await new ReviewService(repo, now).nextScreen((await repo.getUser(user.id))!);
@@ -48,7 +48,7 @@ describe("levels", () => {
       new ReviewService(repo, now).nextScreen(user),
     ]);
     expect(screens.filter((s) => s.kind === "card" && s.levelUp).length).toBe(1);
-    expect(screens.map(levelUpOf).filter(Boolean)).toEqual([{ from: 1, to: 2, coveragePct: 31 }]);
+    expect(screens.map(levelUpOf).filter(Boolean)).toEqual([{ from: 1, to: 2, coveragePct: 31, total: 2 }]);
     expect(screens.map((s) => asCard(s).view.word)).toEqual(["авыл", "авыл"]);
     expect(asCard(screens[0]!).view.cardId).toBe(asCard(screens[1]!).view.cardId);
     expect((await repo.getUser(user.id))!.level).toBe(2);
@@ -72,7 +72,7 @@ describe("levels", () => {
     expect(await subscriptions(user.id)).toBe(1);
     // The next day the limit is free again and the level opens.
     const tomorrow = await new ReviewService(repo, now + DAY).nextScreen((await repo.getUser(user.id))!);
-    expect(levelUpOf(tomorrow)).toEqual({ from: 1, to: 2, coveragePct: 31 });
+    expect(levelUpOf(tomorrow)).toEqual({ from: 1, to: 2, coveragePct: 31, total: 5 });
     expect((await repo.getUser(user.id))!.level).toBe(2);
   });
 
@@ -93,13 +93,13 @@ describe("levels", () => {
       const ids = await seedLevels(env.DB, { 3: ["авыл"], 4: ["су"] }, { 1: 31 });
       let s = await new ReviewService(repo, now).nextScreen(user);
       s = await gradeShown(repo, user, s, 4, now);
-      expect(levelUpOf(s)).toEqual({ from: 1, to: 3, coveragePct: 31 });
+      expect(levelUpOf(s)).toEqual({ from: 1, to: 3, coveragePct: 31, total: 1 });
       expect(asCard(s).view.word).toBe("авыл");
       expect((await repo.getUser(user.id))!.level).toBe(3);
       expect(await repo.userDeckIds(user.id)).toEqual([(await repo.getDeckBySlug("l01"))!.id, ids[3]]);
       // Level 4 is opened only when level 3 is done, and it is the neighbour this time.
       s = await gradeShown(repo, user, s, 4, now);
-      expect(levelUpOf(s)).toEqual({ from: 3, to: 4, coveragePct: null });
+      expect(levelUpOf(s)).toEqual({ from: 3, to: 4, coveragePct: null, total: 1 });
       expect((await repo.getUser(user.id))!.level).toBe(4);
       expect(await subscriptions(user.id)).toBe(3);
     });
@@ -109,7 +109,7 @@ describe("levels", () => {
       await seedLevels(env.DB, { 1: ["су"], 9: ["авыл"] }, { 2: 40 });
       const s = await gradeShown(repo, user, await new ReviewService(repo, now).nextScreen(user), 4, now);
       // Level 1 is below the current one: it is a skipped level, not the next one.
-      expect(levelUpOf(s)).toEqual({ from: 2, to: 9, coveragePct: 40 });
+      expect(levelUpOf(s)).toEqual({ from: 2, to: 9, coveragePct: 40, total: 1 });
       expect(asCard(s).view.word).toBe("авыл");
       expect((await repo.getUser(user.id))!.level).toBe(9);
       expect(await subscriptions(user.id)).toBe(2);
@@ -123,7 +123,7 @@ describe("levels", () => {
         new ReviewService(repo, now).nextScreen(user),
         new ReviewService(repo, now).nextScreen(user),
       ]);
-      expect(screens.map(levelUpOf).filter(Boolean)).toEqual([{ from: 1, to: 3, coveragePct: 31 }]);
+      expect(screens.map(levelUpOf).filter(Boolean)).toEqual([{ from: 1, to: 3, coveragePct: 31, total: 2 }]);
       expect(screens.map((s) => asCard(s).view.word)).toEqual(["авыл", "авыл"]);
       expect((await repo.getUser(user.id))!.level).toBe(3);
       expect(await subscriptions(user.id)).toBe(2);
@@ -148,7 +148,7 @@ describe("levels", () => {
       // When the level is published later, the next screen opens it.
       await seedLevels(env.DB, { 20: ["авыл"] });
       const later = await new ReviewService(repo, now).nextScreen((await repo.getUser(user.id))!);
-      expect(levelUpOf(later)).toEqual({ from: 19, to: 20, coveragePct: 79 });
+      expect(levelUpOf(later)).toEqual({ from: 19, to: 20, coveragePct: 79, total: 1 });
       expect(asCard(later).view.word).toBe("авыл");
     });
 
@@ -157,7 +157,7 @@ describe("levels", () => {
       await seedLevels(env.DB, { 22: ["авыл"] }, { 20: 80 });
       const s = await gradeShown(repo, user, await new ReviewService(repo, now).nextScreen(user), 4, now);
       expect(s.kind).toBe("done");
-      expect(levelUpOf(s)).toEqual({ from: 20, to: null, coveragePct: 80 });
+      expect(levelUpOf(s)).toEqual({ from: 20, to: null, coveragePct: 80, total: 1 });
       expect((await repo.getUser(user.id))!.level).toBe(21);
       expect(await subscriptions(user.id)).toBe(1);
     });
@@ -167,7 +167,7 @@ describe("levels", () => {
       const ids = await seedLevels(env.DB, { 21: ["авыл"] }, { 20: 80 });
       const s = await gradeShown(repo, user, await new ReviewService(repo, now).nextScreen(user), 4, now);
       expect(s.kind).toBe("done");
-      expect(levelUpOf(s)).toEqual({ from: 20, to: null, coveragePct: 80 });
+      expect(levelUpOf(s)).toEqual({ from: 20, to: null, coveragePct: 80, total: 1 });
       expect((await repo.getUser(user.id))!.level).toBe(21);
       expect(await subscriptions(user.id)).toBe(1);
       // The learner is on «level 21» now, the number of that deck: every later screen leaves it closed,
@@ -201,7 +201,7 @@ describe("levels", () => {
       await raw.insertCard(user.id, noteIds[1]!, "tt_ru", gradedMem(now));
       db.calls = 0;
       const opened = await new ReviewService(repo, now).nextScreen(user);
-      expect(levelUpOf(opened)).toEqual({ from: 1, to: 3, coveragePct: 31 });
+      expect(levelUpOf(opened)).toEqual({ from: 1, to: 3, coveragePct: 31, total: 2 });
       expect(db.calls).toBe(plain + 1);
     });
 
@@ -214,8 +214,8 @@ describe("levels", () => {
       const telegramBefore = h.tg.calls.length;
       db.calls = 0;
       await h.press(easyButton(h), h.tg.lastMessageId());
-      expect(h.lastText().startsWith(`${ru.levelUp(1, 3, 31)}\n\n🔵 1 · 🔴 0 · 🟢 0\n<b>авыл</b>`)).toBe(true);
-      expect(ru.levelUp(1, 3, 31)).toContain("Открываю уровень 3.");
+      expect(h.lastText().startsWith(`${ru.levelUp(1, 3, 31, 1)}\n\n🔵 1 · 🔴 0 · 🟢 0\n<b>авыл</b>`)).toBe(true);
+      expect(ru.levelUp(1, 3, 31, 1)).toContain("Открываю уровень 3.");
       expect(db.calls).toBeLessThanOrEqual(8);
       expect(h.tg.calls.slice(telegramBefore).map((c) => c.method)).toEqual(["sendMessage", "deleteMessage", "answerCallbackQuery"]);
     });
@@ -249,7 +249,7 @@ describe("levels", () => {
       expect(asCard(next).view.word).toBe("су");
       expect(levelUpOf(next)).toBeNull();
       next = await gradeShown(repo, user, next, 4, now);
-      expect(levelUpOf(next)).toEqual({ from: 4, to: 5, coveragePct: 61 });
+      expect(levelUpOf(next)).toEqual({ from: 4, to: 5, coveragePct: 61, total: 2 });
       expect(asCard(next).view.word).toBe("юл");
       expect(await openLevels(user.id)).toEqual([4, 5]);
     });
@@ -326,7 +326,7 @@ describe("levels", () => {
       expect(s.levelUp).toBeNull();
       expect((await repo.getUser(user.id))!.level).toBe(20);
       const done = await gradeShown(repo, user, s, 4, now);
-      expect(levelUpOf(done)).toEqual({ from: 20, to: null, coveragePct: 80 });
+      expect(levelUpOf(done)).toEqual({ from: 20, to: null, coveragePct: 80, total: 1 });
       expect((await repo.getUser(user.id))!.level).toBe(21);
     });
 
@@ -365,7 +365,7 @@ describe("levels", () => {
     expect(levelUpOf(s)).toBeNull();
     s = await gradeShown(repo, user, s, 4, now);
     expect(s.kind).toBe("done");
-    expect(levelUpOf(s)).toEqual({ from: 20, to: null, coveragePct: 80 });
+    expect(levelUpOf(s)).toEqual({ from: 20, to: null, coveragePct: 80, total: 2 });
     expect((await repo.getUser(user.id))!.level).toBe(21);
     const s2 = await new ReviewService(repo, now).nextScreen((await repo.getUser(user.id))!);
     expect(s2.kind).toBe("done");
@@ -383,7 +383,7 @@ describe("levels", () => {
     let s = await new ReviewService(repo, now).nextScreen(user);
     s = await gradeShown(repo, user, s, 4, now);
     const opened = await gradeShown(repo, user, s, 4, now);
-    expect(levelUpOf(opened)).toEqual({ from: 1, to: 2, coveragePct: 31 });
+    expect(levelUpOf(opened)).toEqual({ from: 1, to: 2, coveragePct: 31, total: 2 });
     const afterUndo = await new ReviewService(repo, now).undo((await repo.getUser(user.id))!);
     expect(afterUndo.kind === "card" && afterUndo.view.word).toBe("вакыт");
     expect(afterUndo.kind === "card" && afterUndo.levelUp).toBeNull();
@@ -416,7 +416,7 @@ describe("levels", () => {
     }
     expect(seen).toEqual(["авыл", "су", "юл", "китап"]);
     expect(asCard(s).view.word).toBe("көн");
-    expect(asCard(s).levelUp).toEqual({ from: 7, to: 8, coveragePct: 66 });
+    expect(asCard(s).levelUp).toEqual({ from: 7, to: 8, coveragePct: 66, total: 1 });
     expect((await repo.getUser(user.id))!.level).toBe(8);
     expect(await subscriptions(user.id)).toBe(4);
   });
@@ -469,7 +469,7 @@ describe("levels", () => {
       expect(asCard(s).counts.n).toBe(1);
       s = await gradeShown(repo, user, s, 4, now);
       // «вакыт» of level 1 is never shown: the copy in «Мои слова» is the card of that word.
-      expect(levelUpOf(s)).toEqual({ from: 1, to: 2, coveragePct: 31 });
+      expect(levelUpOf(s)).toEqual({ from: 1, to: 2, coveragePct: 31, total: 2 });
       expect(asCard(s).view.word).toBe("авыл");
     });
 
@@ -479,7 +479,7 @@ describe("levels", () => {
       const [own] = await repo.insertNotes(await repo.customDeck(user.id, now), [note("китап")]);
       await repo.insertCard(user.id, own!, "tt_ru", gradedMem(now));
       const s = await new ReviewService(repo, now).nextScreen(user);
-      expect(levelUpOf(s)).toEqual({ from: 1, to: 2, coveragePct: null });
+      expect(levelUpOf(s)).toEqual({ from: 1, to: 2, coveragePct: null, total: 1 });
       expect(asCard(s).view.word).toBe("авыл");
     });
 
@@ -504,7 +504,7 @@ describe("levels", () => {
       expect([asCard(s).view.word, asCard(s).view.direction]).toEqual(["китап", "tt_ru"]);
       s = await gradeShown(repo, user, s, 4, now);
       // «китап» in the other direction is hidden until tomorrow, so level 1 has nothing new today.
-      expect(levelUpOf(s)).toEqual({ from: 1, to: 2, coveragePct: 31 });
+      expect(levelUpOf(s)).toEqual({ from: 1, to: 2, coveragePct: 31, total: 1 });
       expect([asCard(s).view.word, asCard(s).view.direction]).toEqual(["авыл", "tt_ru"]);
       const tomorrow = asCard(await new ReviewService(repo, now + DAY).nextScreen((await repo.getUser(user.id))!));
       expect([tomorrow.view.word, tomorrow.view.direction]).toEqual(["китап", "ru_tt"]);
@@ -559,7 +559,7 @@ describe("levels", () => {
     db.calls = 0;
     await h.press(easyButton(h), h.tg.lastMessageId());
     const telegram = h.tg.calls.slice(telegramBefore).map((c) => c.method);
-    expect(h.lastText().startsWith(ru.levelUp(1, 2, 31))).toBe(true);
+    expect(h.lastText().startsWith(ru.levelUp(1, 2, 31, 2))).toBe(true);
     expect(h.lastText()).toContain("<b>авыл</b>");
     expect(db.calls).toBeLessThanOrEqual(8);
     expect(telegram.length).toBeLessThanOrEqual(3);

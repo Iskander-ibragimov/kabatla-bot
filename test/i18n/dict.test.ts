@@ -51,7 +51,7 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   pushStep: [[4]],
   posName: POS_CODES.map((c): [string] => [c]),
   levelTitle: [[1], [6], [20]],
-  levelUp: [[3, 4, 54], [5, 6, null], [19, 20, 79]],
+  levelUp: [[3, 4, 54, 100], [5, 6, null, 101], [19, 20, 79, 100], [3, 5, 54, null]],
   levelsDone: [[80], [null]],
   levelsPassed: [["1–3, 5"]],
   levelProgress: [[4, 37, 100], [6, 0, 100]],
@@ -154,13 +154,20 @@ describe("i18n dictionaries", () => {
   });
 
   it("announces a new level with the coverage, and the end of the levels once", () => {
-    expect(ru.levelUp(3, 4, 54)).toBe("Все 100 слов уровня 3 в работе. Открываю уровень 4. Пройденные слова покрывают ≈54% обычного текста.");
-    expect(ru.levelUp(3, 4, null)).toBe("Все 100 слов уровня 3 в работе. Открываю уровень 4.");
+    expect(ru.levelUp(3, 4, 54, 100)).toBe("Все 100 слов уровня 3 в работе. Открываю уровень 4. Пройденные слова покрывают ≈54% обычного текста.");
+    expect(ru.levelUp(3, 4, null, 100)).toBe("Все 100 слов уровня 3 в работе. Открываю уровень 4.");
+    // The number of words is the level's own, with the Russian form of «слово» that goes with it.
+    expect([1, 2, 5, 11, 21, 22, 101, 111, 112].map((n) => ru.levelUp(3, 4, null, n).split(" уровня")[0])).toEqual(
+      ["Все 1 слово", "Все 2 слова", "Все 5 слов", "Все 11 слов", "Все 21 слово", "Все 22 слова", "Все 101 слово", "Все 111 слов", "Все 112 слов"]);
+    expect(tt.levelUp(3, 4, null, 101)).toContain("барлык 101 сүзе дә");
+    // Without a deck of the finished level there is no number to name.
+    expect(ru.levelUp(3, 5, 54, null)).toBe("Открываю уровень 5. Пройденные слова покрывают ≈54% обычного текста.");
+    expect(tt.levelUp(3, 5, null, null)).toBe("5 нче дәрәҗәне ачам.");
     expect(ru.levelsDone(null)).toBe("Все 2 000 слов в работе! 🎉 Дальше — повторения по расписанию. Свои слова можно добавлять в любой момент.");
     expect(ru.levelsDone(80)).toBe(`${ru.levelsDone(null)} Пройденные слова покрывают ≈80% обычного текста.`);
-    expect(tt.levelUp(5, 6, 61)).toMatch(/^5 нче дәрәҗә.*6 нчы дәрәҗә.*≈61%/);
-    expect(tt.levelUp(5, 6, null)).not.toContain("%");
-    expect(tt.levelsDone(80)).toBe(`${tt.levelsDone(null)}${tt.levelUp(5, 6, 80).slice(tt.levelUp(5, 6, null).length)}`);
+    expect(tt.levelUp(5, 6, 61, 100)).toMatch(/^5 нче дәрәҗә.*6 нчы дәрәҗә.*≈61%/);
+    expect(tt.levelUp(5, 6, null, 100)).not.toContain("%");
+    expect(tt.levelsDone(80)).toBe(`${tt.levelsDone(null)}${tt.levelUp(5, 6, 80, 100).slice(tt.levelUp(5, 6, null, 100).length)}`);
     expect(tt.levelsDone(80)).toContain("2 000");
   });
 

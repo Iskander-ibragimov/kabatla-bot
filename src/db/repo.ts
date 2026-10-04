@@ -314,8 +314,8 @@ export class Repo {
   /**
    * Opens the level that follows `from`: the next level the catalog has (the smallest `level_no` above `from`, up to
    * `last`), so a gap in the catalog is stepped over. Three statements for one batch: the level change, which returns
-   * the new level; the subscription to the deck of that level, made only when the level changed; and the coverage of
-   * `from` for the announcement.
+   * the new level; the subscription to the deck of that level, made only when the level changed; and the coverage and
+   * the number of words of `from` for the announcement.
    * The level change touches a row only if the user is still on `from`, so only one of several concurrent calls gets
    * the new level back; and only if the deck of `from` is open for the user or does not exist — a current level that
    * was never opened is opened first, see `openCurrentLevelStmt`. While no higher level exists nothing changes, except
@@ -327,7 +327,7 @@ export class Repo {
     return [
       this.db.prepare(`UPDATE users SET level = COALESCE(${next}, ?2 + 1) WHERE id = ?3 AND level = ?1 AND (?1 = ?2 OR ${next} IS NOT NULL) AND NOT ${currentClosed} RETURNING level`).bind(from, last, userId),
       this.db.prepare(`${OPEN_CURRENT_LEVEL} AND changes() = 1`).bind(userId, now),
-      this.db.prepare("SELECT coverage_pct FROM decks WHERE level_no = ?").bind(from),
+      this.db.prepare("SELECT coverage_pct, total FROM decks WHERE level_no = ?").bind(from),
     ];
   }
   /**

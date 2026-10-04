@@ -259,7 +259,7 @@ describe("bot handlers", () => {
     expect(h.lastText()).toContain("<b>китап</b>");
     expect(visibleLength(h.lastText())).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
     await h.press(easyButton(h), h.tg.lastMessageId());
-    expect(h.lastText().startsWith(`${ru.levelUp(1, 2, 31)}\n\n🔵 1 · 🔴 0 · 🟢 0\n<b>авыл</b>`)).toBe(true);
+    expect(h.lastText().startsWith(`${ru.levelUp(1, 2, 31, 1)}\n\n🔵 1 · 🔴 0 · 🟢 0\n<b>авыл</b>`)).toBe(true);
     expect(visibleLength(h.lastText())).toBe(TELEGRAM_TEXT_LIMIT);
     // The learner's queue is not blocked: the card can be graded and the session goes on.
     await h.press(easyButton(h), h.tg.lastMessageId());
@@ -334,7 +334,7 @@ describe("bot handlers", () => {
       within(await update(() => h.text("/learn")));
       within(await easy());
       const opening = await easy();
-      expect(h.lastText().startsWith(ru.levelUp(1, 2, 31))).toBe(true);
+      expect(h.lastText().startsWith(ru.levelUp(1, 2, 31, 2))).toBe(true);
       expect(opening.methods).toEqual(["sendMessage", "deleteMessage", "deleteMessage", "answerCallbackQuery", "sendVoice"]);
       voiceAfterCard(opening, "авыл");
       within(opening);

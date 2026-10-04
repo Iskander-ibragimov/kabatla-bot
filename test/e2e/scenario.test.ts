@@ -110,15 +110,15 @@ describe("first day and next day", () => {
 
     for (let i = 0; i < 100; i++) {
       expect(h.lastText()).toContain(`<b>${words100[i]}</b>`);
-      expect(h.lastText()).not.toContain(tt.levelUp(1, 2, 31));
+      expect(h.lastText()).not.toContain(tt.levelUp(1, 2, 31, 100));
       const easy = (h.lastMarkup().inline_keyboard ?? []).flat().find((b) => b.callback_data === easyButton(h))!;
       expect(easy.text.startsWith(`${tt.easy} `)).toBe(true);
       await press(easy.callback_data);
     }
-    expect(h.lastText()).toContain(tt.levelUp(1, 2, 31));
-    expect(h.lastText().startsWith(`${tt.levelUp(1, 2, 31)}\n\n🔵 1 · 🔴 0 · 🟢 0\n<b>авыл</b>`)).toBe(true);
+    expect(h.lastText()).toContain(tt.levelUp(1, 2, 31, 100));
+    expect(h.lastText().startsWith(`${tt.levelUp(1, 2, 31, 100)}\n\n🔵 1 · 🔴 0 · 🟢 0\n<b>авыл</b>`)).toBe(true);
     expect(h.lastText()).toContain("авыл");
-    expect(tt.levelUp(1, 2, 31)).toContain("≈31%");
+    expect(tt.levelUp(1, 2, 31, 100)).toContain("≈31%");
     expect(maxTelegramCallsPerUpdate).toBeLessThanOrEqual(3);
     expect(maxD1CallsPerUpdate).toBeLessThanOrEqual(8);
 

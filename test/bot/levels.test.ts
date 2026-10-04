@@ -179,7 +179,8 @@ describe("level-up line", () => {
     await h.press(easyButton(h), h.tg.lastMessageId());
     expect(h.lastText().startsWith("🔵 1 · 🔴 0 · 🟢 0\n<b>вакыт</b>")).toBe(true);
     await h.press(easyButton(h), h.tg.lastMessageId());
-    const line = "Все 100 слов уровня 1 в работе. Открываю уровень 2. Пройденные слова покрывают ≈31% обычного текста.";
+    // Level 1 of this test has two words, and the line names that number.
+    const line = "Все 2 слова уровня 1 в работе. Открываю уровень 2. Пройденные слова покрывают ≈31% обычного текста.";
     expect(h.lastText().startsWith(`${line}\n\n🔵 2 · 🔴 0 · 🟢 0\n<b>авыл</b>`)).toBe(true);
     // The line is said once: the next card is plain again.
     await h.press(easyButton(h), h.tg.lastMessageId());
@@ -199,15 +200,20 @@ describe("level-up line", () => {
   });
 
   it("renderLevelUp picks the transition or the congratulation and leaves out unknown coverage", () => {
-    expect(renderLevelUp({ from: 3, to: 4, coveragePct: 54 }, "ru")).toBe("Все 100 слов уровня 3 в работе. Открываю уровень 4. Пройденные слова покрывают ≈54% обычного текста.");
-    expect(renderLevelUp({ from: 3, to: 4, coveragePct: null }, "ru")).toBe("Все 100 слов уровня 3 в работе. Открываю уровень 4.");
-    expect(renderLevelUp({ from: 20, to: null, coveragePct: null }, "ru")).toBe("Все 2 000 слов в работе! 🎉 Дальше — повторения по расписанию. Свои слова можно добавлять в любой момент.");
-    expect(renderLevelUp({ from: 5, to: 6, coveragePct: 61 }, "tt")).toBe(tt.levelUp(5, 6, 61));
-    expect(renderLevelUp({ from: 20, to: null, coveragePct: 80 }, "tt")).toBe(tt.levelsDone(80));
-    expect(tt.levelUp(5, 6, 61)).toContain("5 нче дәрәҗә");
-    expect(tt.levelUp(5, 6, 61)).toContain("6 нчы дәрәҗә");
-    expect(tt.levelUp(5, 6, 61)).toContain("≈61%");
-    expect(tt.levelUp(5, 6, null)).not.toContain("≈");
+    expect(renderLevelUp({ from: 3, to: 4, coveragePct: 54, total: 100 }, "ru")).toBe("Все 100 слов уровня 3 в работе. Открываю уровень 4. Пройденные слова покрывают ≈54% обычного текста.");
+    expect(renderLevelUp({ from: 3, to: 4, coveragePct: null, total: 100 }, "ru")).toBe("Все 100 слов уровня 3 в работе. Открываю уровень 4.");
+    // The number is the level's own: a level that got a 101st word says so.
+    expect(renderLevelUp({ from: 3, to: 4, coveragePct: null, total: 101 }, "ru")).toBe("Все 101 слово уровня 3 в работе. Открываю уровень 4.");
+    expect(renderLevelUp({ from: 3, to: 4, coveragePct: null, total: 101 }, "tt")).toBe(tt.levelUp(3, 4, null, 101));
+    // A level whose deck the catalog does not have (a gap) has no words to speak of.
+    expect(renderLevelUp({ from: 3, to: 5, coveragePct: null, total: null }, "ru")).toBe("Открываю уровень 5.");
+    expect(renderLevelUp({ from: 20, to: null, coveragePct: null, total: 100 }, "ru")).toBe("Все 2 000 слов в работе! 🎉 Дальше — повторения по расписанию. Свои слова можно добавлять в любой момент.");
+    expect(renderLevelUp({ from: 5, to: 6, coveragePct: 61, total: 100 }, "tt")).toBe(tt.levelUp(5, 6, 61, 100));
+    expect(renderLevelUp({ from: 20, to: null, coveragePct: 80, total: 100 }, "tt")).toBe(tt.levelsDone(80));
+    expect(tt.levelUp(5, 6, 61, 100)).toContain("5 нче дәрәҗә");
+    expect(tt.levelUp(5, 6, 61, 100)).toContain("6 нчы дәрәҗә");
+    expect(tt.levelUp(5, 6, 61, 100)).toContain("≈61%");
+    expect(tt.levelUp(5, 6, null, 100)).not.toContain("≈");
   });
 });
 

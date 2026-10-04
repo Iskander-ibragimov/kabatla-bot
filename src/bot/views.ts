@@ -206,7 +206,7 @@ export function renderDone(s: DaySummary, lang: Lang): Rendered {
 /** The line that opens the first card (the `lead` of `renderCard`) or the done screen after a level was opened or the last level was finished. */
 export function renderLevelUp(l: LevelUp, lang: Lang): string {
   const t = dict(lang);
-  return l.to == null ? t.levelsDone(l.coveragePct) : t.levelUp(l.from, l.to, l.coveragePct);
+  return l.to == null ? t.levelsDone(l.coveragePct) : t.levelUp(l.from, l.to, l.coveragePct, l.total);
 }
 
 /** The text of the preview of own words. One card is shown whole, with everything it has; several are a list. */
