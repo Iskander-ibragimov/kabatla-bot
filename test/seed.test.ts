@@ -74,8 +74,8 @@ describe("catalog seed", () => {
       { slug: "a2", kind: "catalog", owner_id: null, title_ru: "A2", title_tt: "A2", level_no: 2, coverage_pct: 36, total: 2 },
     ]);
     expect((await notes()).map((n) => [n.slug, n.word, n.level, n.topic_no, n.seq, n.tseq])).toEqual([
-      ["a1", "китап", 1, 8, 1, 8_000_001], ["a1", "су", 1, 0, 2, 2], ["a1", "юл", 1, 8, 3, 8_000_003],
-      ["a2", "авыл", 2, 0, 1, 1], ["a2", "көн", 2, 12, 2, 12_000_002],
+      ["a1", "китап", 1, 8, 1, 8_000_001], ["a1", "су", 1, 0, 2, 8_000_002], ["a1", "юл", 1, 8, 3, 8_000_003],
+      ["a2", "авыл", 2, 0, 1, 12_000_002], ["a2", "көн", 2, 12, 2, 12_000_001],
     ]);
     expect(await groups()).toEqual([[1, 0, 1], [1, 8, 2], [2, 0, 1], [2, 12, 1]]);
     expect(await version()).toBe("1");
@@ -89,7 +89,7 @@ describe("catalog seed", () => {
     ])]);
     expect(await notes()).toEqual([
       { slug: "a1", id: expect.any(Number), word: "Китап", word_key: "китап", transcription: "кита́п", pos: "n", translation: "книга", example_tt: "Бу — китап.", example_ru: "Это книга.", example_src: "tatoeba:123", audio_file_id: "AUD1", level: 1, topic_no: 8, seq: 1, tseq: 8_000_001 },
-      { slug: "a1", id: expect.any(Number), word: "су", word_key: "су", transcription: null, pos: "n", translation: "су-ru", example_tt: "Бу — су.", example_ru: "Это слово.", example_src: "own", audio_file_id: null, level: 1, topic_no: 0, seq: 2, tseq: 2 },
+      { slug: "a1", id: expect.any(Number), word: "су", word_key: "су", transcription: null, pos: "n", translation: "су-ru", example_tt: "Бу — су.", example_ru: "Это слово.", example_src: "own", audio_file_id: null, level: 1, topic_no: 0, seq: 2, tseq: 8_000_002 },
     ]);
   });
 
@@ -216,7 +216,7 @@ describe("catalog seed", () => {
     // «китап» leaves A1 and stands last in A2, with its topic.
     await load([lvl(1, [row("су"), row("юл", { topic: "food" })], 27), lvl(2, [...A2().rows, row("китап", { topic: "food" })], 36)]);
 
-    expect(await noteOf("китап")).toEqual({ ...before, slug: "a2", level: 2, topic_no: 8, seq: 3, tseq: 8_000_003 });
+    expect(await noteOf("китап")).toEqual({ ...before, slug: "a2", level: 2, topic_no: 8, seq: 3, tseq: 8_000_001 });
     expect(await countRows("notes")).toBe(5);
     expect(await cards()).toEqual(cardsBefore);
     expect(await repo.getCardByNote(userId, before.id as number, "tt_ru")).toMatchObject({ word: "китап", mem: expect.objectContaining({ state: "review", reps: 1, due: T + 5 * 86_400_000 }) });
@@ -224,8 +224,8 @@ describe("catalog seed", () => {
     expect(await progress()).toEqual([[userId, 1, 0, 1], [userId, 2, 8, 1]]);
     expect((await decks()).map((d) => [d.slug, d.total])).toEqual([["a1", 2], ["a2", 3]]);
     expect(await groups()).toEqual([[1, 0, 1], [1, 8, 1], [2, 0, 1], [2, 8, 1], [2, 12, 1]]);
-    // The words that stay in A1 moved up one place.
-    expect((await notes()).filter((n) => n.level === 1).map((n) => [n.word, n.seq, n.tseq])).toEqual([["су", 1, 1], ["юл", 2, 8_000_002]]);
+    // The words that stay in A1 moved up one place; in the guided order the themed word still comes first.
+    expect((await notes()).filter((n) => n.level === 1).map((n) => [n.word, n.seq, n.tseq])).toEqual([["су", 1, 8_000_002], ["юл", 2, 8_000_001]]);
     expect(await version()).toBe("2");
   });
 
@@ -246,7 +246,32 @@ describe("catalog seed", () => {
     const ids = (await notes()).map((n) => n.id);
     const [kitap, su, yul] = A1().rows;
     await load([lvl(1, [yul!, kitap!, su!], 27)]);
-    expect((await notes()).map((n) => [n.id, n.word, n.seq, n.tseq])).toEqual([[ids[0], "китап", 2, 8_000_002], [ids[1], "су", 3, 3], [ids[2], "юл", 1, 8_000_001]]);
+    expect((await notes()).map((n) => [n.id, n.word, n.seq, n.tseq])).toEqual([[ids[0], "китап", 2, 8_000_003], [ids[1], "су", 3, 8_000_002], [ids[2], "юл", 1, 8_000_001]]);
+  });
+
+  it("the guided order of a level alternates a themed word and a basic one; an identical load writes nothing, a new word rewrites only the notes whose place changed", async () => {
+    const rows = [row("мин"), row("син"), row("ул"), row("аш", { topic: "food" }), row("эш", { topic: "work" }), row("су", { topic: "food" })];
+    const guided = async () => (await all<{ word: string; topic_no: number; tseq: number }>("SELECT word, topic_no, tseq FROM notes WHERE level = 1 ORDER BY tseq")).map((n) => [n.word, n.topic_no, n.tseq]);
+    await load([lvl(1, rows)]);
+    // Themed words by topic and then by place in the file, basic words by place in the file, one of each in turn;
+    // a basic word stands in the run of the themed word before it.
+    expect(await guided()).toEqual([
+      ["аш", 8, 8_000_001], ["мин", 0, 8_000_002], ["су", 8, 8_000_003], ["син", 0, 8_000_004], ["эш", 12, 12_000_001], ["ул", 0, 12_000_002],
+    ]);
+    expect((await all<{ seq: number }>("SELECT seq FROM notes WHERE level = 1 ORDER BY id")).map((n) => n.seq)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(await load([lvl(1, rows)])).toMatchObject({ changes: 0, rowsWritten: 0 });
+
+    // One more word of the food topic: «ул» now follows it, in its run; the other notes are where they were.
+    const more = [...rows, row("ипи", { topic: "food" })];
+    const stamp = await all("SELECT id, tseq FROM notes WHERE word NOT IN ('ул') ORDER BY id");
+    const added = await load([lvl(1, more)]);
+    expect(await guided()).toEqual([
+      ["аш", 8, 8_000_001], ["мин", 0, 8_000_002], ["су", 8, 8_000_003], ["син", 0, 8_000_004], ["ипи", 8, 8_000_005], ["ул", 0, 8_000_006], ["эш", 12, 12_000_001],
+    ]);
+    expect(await all("SELECT id, tseq FROM notes WHERE word NOT IN ('ул', 'ипи') ORDER BY id")).toEqual(stamp);
+    // The new note, the moved one, the deck total, the group of the topic, the version and the hash.
+    expect(added.changes).toBe(6);
+    expect(await load([lvl(1, more)])).toMatchObject({ changes: 0, rowsWritten: 0 });
   });
 
   it("never erases the audio a voicing job attached; an audio id of the file only fills an empty one", async () => {

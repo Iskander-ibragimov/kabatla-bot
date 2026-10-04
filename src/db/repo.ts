@@ -82,8 +82,8 @@ export interface Candidates { learning: CardRow[]; review: CardRow[]; newNotes: 
  * were stored for; a position stored for another version is not used.
  */
 export interface NewScope { levels: number[]; posCodes: string[] | null; mode: NewMode; topicNo: number | null; spans: Spans; spansVersion: number }
-/** A new card of a catalog note that has no row yet, with the place of the note in its level. */
-export interface CatalogNew extends NewNote { level: number; topicNo: number; seq: number }
+/** A new card of a catalog note that has no row yet, with the places of the note in its level: `seq` in the order of the level, `tseq` in its guided order. */
+export interface CatalogNew extends NewNote { level: number; topicNo: number; seq: number; tseq: number }
 /**
  * What a stream of one level held: the order values of its first and last note (`tseq` by topic, `seq` in `freq`), and
  * whether it is as long as a stream gets (STREAM_LIMIT notes): then more may lie beyond its last note.
@@ -521,6 +521,13 @@ export class Repo {
       titleRu: r.title_ru as string, titleTt: r.title_tt as string, levelNo: (r.level_no as number) ?? null,
       coveragePct: (r.coverage_pct as number) ?? null, total: r.total as number };
   }
+  /**
+   * Adds notes to a deck (a note with the same word key in the deck keeps its id and takes the new spelling) and
+   * returns their ids in the order given. A note with `level`, `topicNo` and `seq` is stored as a catalog note with
+   * the simple `tseq = topic × TSEQ_BASE + seq`. The real guided order of a level, where basic and themed words
+   * alternate, is defined by the catalog seed (content/csv.ts `catalogToSql`, levels/order.ts `guidedTseq`), not by
+   * this method: it writes the learners' own words and the fixtures of tests.
+   */
   async insertNotes(deckId: number, rows: NoteInput[]): Promise<number[]> {
     if (!rows.length) return [];
     const stmts = rows.map((n) =>
@@ -764,13 +771,16 @@ export class Repo {
    *   the other card was graded) and a card that was shown and not graded. They belong to words the learner has met,
    *   so they are given whatever the scope is; up to NEW_ROWS_LIMIT, in the order of the note ids.
    * - `streams[level]`: for every level of the scope, the first STREAM_LIMIT notes (one: the head of the level) that
-   *   lack a card row in an asked direction, in the order of the mode (`seq` in `freq`, `tseq` otherwise), with one
-   *   card for every such direction in the order of `w.directions`. `seen[level]` tells where that stream began and
-   *   ended, for the read position of the level (levels/order.ts `nextSpans`).
+   *   lack a card row in an asked direction, in the order of the mode — `seq`, the order of the level, in `freq`;
+   *   `tseq`, the guided order of the level (levels/order.ts `guidedTseq`), otherwise — with one card for every such
+   *   direction in the order of `w.directions`. `seen[level]` tells where that stream began and ended, for the read
+   *   position of the level (`nextSpans`).
    *
    * A stream is read from the index of its order, from the read position of the level on, and stops at its last
-   * note; see `streamStmt`. In `topic` with no topic chosen there are no new catalog words: no stream is read, and
-   * `streams` and `seen` are empty. `freq` takes no notice of a topic.
+   * note; see `streamStmt`. With a topic chosen (`topic`, or `guided` with a topic) only the words of that topic are
+   * given, in the guided order; the basic words that stand in the run of a themed topic are not words of it. In
+   * `topic` with no topic chosen there are no new catalog words: no stream is read, and `streams` and `seen` are
+   * empty. `freq` takes no notice of a topic.
    *
    * A stream holds no filter on words hidden for today, and must not get one. A word is hidden by the grade of one of
    * its cards, and that grade creates the other card; so a hidden word has both its cards, is in no stream, and comes
@@ -830,7 +840,7 @@ export class Repo {
     levels.forEach((level, i) => {
       const notes = res[4 + i]!.results;
       streams[level] = notes.flatMap((r) => newCardsOf([r], w.directions, "has_tt", "has_ru")
-        .map((n): CatalogNew => ({ ...n, level: r.level as number, topicNo: r.topic_no as number, seq: r.seq as number })));
+        .map((n): CatalogNew => ({ ...n, level: r.level as number, topicNo: r.topic_no as number, seq: r.seq as number, tseq: r.tseq as number })));
       seen[level] = { first: (notes[0]?.ord as number) ?? null, last: (notes[notes.length - 1]?.ord as number) ?? null, full: notes.length === STREAM_LIMIT };
     });
     return {
@@ -854,20 +864,22 @@ export class Repo {
    *
    * The notes are walked in the index of the order — idx_notes_level_seq in `freq`, idx_notes_level_tseq otherwise —
    * between the bounds that the read position of the level and the chosen topic give: order values above `from` and,
-   * when it is known, up to `to`; in a topic, the order values of that topic. Both bounds are one expression each, so
-   * the index is entered at the nearer one and nothing before it is read. A read position counts only while the
-   * catalog is the one it was stored for; otherwise the whole level (or topic) is walked.
+   * when it is known, up to `to`; for a themed topic (1–20), the range of order values of that topic's run, in
+   * which all its words stand. Both bounds are one expression each, so the index is entered at the nearer one and
+   * nothing before it is read. A read position counts only while the catalog is the one it was stored for;
+   * otherwise the whole level (or run) is walked. The basic words (topic 0) have no range of their own: they are
+   * spread over the runs of the themed topics, and the level is walked for them.
    *
-   * The conditions are asked in the order of what they read, as D1 counts rows. The part of speech comes first: the
-   * row of a note counts as one with its index row. Then whether a card is lacking: one exact look into the index of
+   * The conditions are asked in the order of what they read, as D1 counts rows. The topic and the part of speech
+   * come first: the row of a note counts as one with its index row. Then whether a card is lacking: one exact look into the index of
    * the cards for every asked direction, which reads a row only when that card exists. Whether the user owns the
    * word is asked last, of the few notes that are left. So a note that is passed costs one row, and one more for
-   * each card it has when it is of an asked part of speech.
+   * each card it has when it is of the asked topic and part of speech.
    *
    * What a read costs is therefore the notes between the read position and the note the stream gives. While the
    * head of the level stays, that is the head alone. When the head was started, the next read walks on to the next
-   * note of the scope — far, when the asked parts of speech are few in the level, but never past the end of the
-   * level and only once: the caller stores the position that read finds.
+   * note of the scope — far, when the words of the scope are few in the level, and to the end of the level when
+   * there is none left; but never further, and only once: the caller stores the position that read finds.
    */
   private streamStmt(userId: number, directions: Direction[], s: NewScope, level: number): D1PreparedStatement {
     const b = binder();
@@ -878,21 +890,22 @@ export class Repo {
     const topic = freq ? null : s.topicNo;
     const lo: string[] = [];
     const hi: string[] = [];
-    if (topic != null) { lo.push(b.p(tseqOf(topic, 0))); hi.push(b.p(tseqOf(topic + 1, 0) - 1)); }
+    if (topic != null && topic >= 1) { lo.push(b.p(tseqOf(topic, 0))); hi.push(b.p(tseqOf(topic + 1, 0) - 1)); }
     if (span) {
       const current = `(SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'catalog_version') = ${b.p(s.spansVersion)}`;
       lo.push(`CASE WHEN ${current} THEN ${b.p(span.from)} ELSE 0 END`);
       if (span.to != null) hi.push(`CASE WHEN ${current} THEN ${b.p(span.to)} ELSE ${NO_END} END`);
     }
     const one = (parts: string[], pick: "MAX" | "MIN") => (parts.length > 1 ? `${pick}(${parts.join(", ")})` : parts[0]);
+    const otherTopic = topic != null ? `WHEN n.topic_no IS NOT ${b.p(topic)} THEN 0` : "";
     const otherPos = s.posCodes ? `WHEN n.pos NOT IN (${s.posCodes.map((code) => b.p(code)).join(", ")}) THEN 0` : "";
     const hasAllCards = directions.map((d) => hasRow(user, "n.id", d)).join(" AND ") || "1";
     return this.db.prepare(
-      `SELECT n.id AS note_id, n.level, n.topic_no, n.seq, ${ord} AS ord, ${noteCols(null)},
+      `SELECT n.id AS note_id, n.level, n.topic_no, n.seq, n.tseq, ${ord} AS ord, ${noteCols(null)},
          ${hasRow(user, "n.id", "tt_ru")} AS has_tt, ${hasRow(user, "n.id", "ru_tt")} AS has_ru
        FROM notes n INDEXED BY ${freq ? "idx_notes_level_seq" : "idx_notes_level_tseq"}
        WHERE n.level = ${b.p(level)} AND ${ord} > ${one(lo, "MAX") ?? "0"}${hi.length ? ` AND ${ord} <= ${one(hi, "MIN")}` : ""}
-         AND CASE ${otherPos} WHEN ${hasAllCards} THEN 0 ELSE NOT ${ownsWord(user)} END
+         AND CASE ${otherTopic} ${otherPos} WHEN ${hasAllCards} THEN 0 ELSE NOT ${ownsWord(user)} END
        ORDER BY ${ord} LIMIT ${STREAM_LIMIT}`,
     ).bind(...b.values);
   }

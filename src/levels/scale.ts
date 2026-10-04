@@ -52,5 +52,8 @@ export const NEW_MODES: readonly NewMode[] = ["guided", "topic", "freq"];
 
 export const TSEQ_BASE = 1_000_000;
 
-/** Sort key of a word inside the topic order: topic first, then its place in the topic. */
+/**
+ * A place in the guided order of a level: the anchor topic first, then the position in the run of that anchor
+ * (levels/order.ts `guidedTseq`). With position 0 it is the bound below the run of a topic.
+ */
 export const tseqOf = (topicNo: number, seq: number): number => topicNo * TSEQ_BASE + seq;

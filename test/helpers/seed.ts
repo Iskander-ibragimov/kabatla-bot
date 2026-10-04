@@ -1,4 +1,5 @@
 import { type NoteInput, Repo, type User } from "../../src/db/repo";
+import { guidedTseq } from "../../src/levels/order";
 import { LEVELS, levelBit } from "../../src/levels/scale";
 import { levelSlug, nextOccurrence } from "../../src/users/service";
 
@@ -110,4 +111,18 @@ export async function seedLearner(db: D1Database, opts: { now: number; tgId?: nu
     ...(opts.patch ?? {}),
   });
   return { repo, user: (await repo.getUser(userId))! };
+}
+
+/**
+ * Gives every catalog note the place in the guided order that the catalog seed gives it (levels/order.ts `guidedTseq`):
+ * themed and basic words in turn. `seedCatalog` and `seedLevels` write the simple `topic × 1 000 000 + seq` instead.
+ */
+export async function seedGuidedOrder(db: D1Database): Promise<void> {
+  const { results } = await db.prepare("SELECT id, level, topic_no AS topicNo, seq FROM notes WHERE level IS NOT NULL ORDER BY level, seq")
+    .all<{ id: number; level: number; topicNo: number; seq: number }>();
+  for (const level of new Set(results.map((n) => n.level))) {
+    const rows = results.filter((n) => n.level === level);
+    const tseq = guidedTseq(rows);
+    await db.batch(rows.map((n, i) => db.prepare("UPDATE notes SET tseq = ? WHERE id = ?").bind(tseq[i]!, n.id)));
+  }
 }

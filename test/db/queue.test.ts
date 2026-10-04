@@ -1,12 +1,13 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { type DayWindow, type Direction, type NewScope, type Queue, Repo } from "../../src/db/repo";
-import { STREAM_LIMIT, nextSpans } from "../../src/levels/order";
+import { STREAM_LIMIT, mergeStreams, nextSpans } from "../../src/levels/order";
 import { newMem } from "../../src/srs/fsrs";
 import { dayWindow } from "../../src/users/service";
 import { countingDb } from "../helpers/countingDb";
+import { readingDb } from "../helpers/readingDb";
 import { gradedMem, logStmt } from "../helpers/review";
-import { note, seedCatalog, seedLearner } from "../helpers/seed";
+import { note, seedCatalog, seedGuidedOrder, seedLearner } from "../helpers/seed";
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -56,7 +57,7 @@ describe("repo.queue: the streams of new catalog words", () => {
     expect(stream(q, 2)).toEqual(["б1"]);
     expect(q.seen).toEqual({ 1: { first: 1, last: 1, full: true }, 2: { first: 1, last: 1, full: true } });
     expect(q.streams[1]![0]).toEqual({
-      noteId: ids[0], direction: "tt_ru", level: 1, topicNo: 3, seq: 1,
+      noteId: ids[0], direction: "tt_ru", level: 1, topicNo: 3, seq: 1, tseq: 3_000_001,
       word: "а1", transcription: null, pos: "n", translation: "а1-ru", exampleTt: "а1.", exampleRu: "а1-ru.", exampleSrc: "own", audioFileId: null, sourceUrl: null,
     });
     expect(q.streams[2]![0]).toMatchObject({ noteId: ids[4], level: 2, topicNo: 2, seq: 1 });
@@ -263,6 +264,118 @@ describe("repo.queue: the streams of new catalog words", () => {
       // A span that ends before the chosen topic leaves nothing of it.
       expect(await at(topic, 2_000_003, 2_000_011)).toEqual([]);
     });
+  });
+});
+
+describe("repo.queue: the guided order of the catalog seed, where basic words stand among the themed ones", () => {
+  /**
+   * Level 1 in the guided order: а (topic 2), к1, в (2), к2, б (topic 5), к3 — the к are basic words (topic 0).
+   * Level 2: г (2), л1, д (5), л2.
+   */
+  async function seeded(direction: "tt_ru" | "both" = "tt_ru") {
+    const core = { topic: 0, pos: "pron" };
+    await seedCatalog(env.DB, [
+      { level: 1, word: "к1", ...core }, { level: 1, word: "а", topic: 2 }, { level: 1, word: "к2", ...core },
+      { level: 1, word: "б", topic: 5 }, { level: 1, word: "в", topic: 2 }, { level: 1, word: "к3", ...core },
+      { level: 2, word: "г", topic: 2 }, { level: 2, word: "л1", ...core }, { level: 2, word: "д", topic: 5 }, { level: 2, word: "л2", ...core },
+    ]);
+    await seedGuidedOrder(env.DB);
+    return seedLearner(env.DB, { now: T, patch: { direction } });
+  }
+  /** The words the session gives one after another: the heads of the levels are merged, the first is started. */
+  async function merged(repo: Repo, userId: number, w: DayWindow, s: NewScope, n = 12): Promise<string[]> {
+    const out: string[] = [];
+    let spans = s.spans;
+    for (let i = 0; i < n; i++) {
+      const q = await repo.queue(userId, w, { ...s, spans });
+      const next = mergeStreams(Object.values(q.streams).map((x) => x ?? []), s.mode)[0];
+      if (!next) break;
+      out.push(next.word);
+      for (const d of w.directions) await repo.insertCard(userId, next.noteId, d, gradedMem(T - DAY));
+      spans = nextSpans(spans, q.seen).spans;
+    }
+    return out;
+  }
+
+  it("guided: a level gives themed and basic words in turn, and `CatalogNew` carries the place in that order", async () => {
+    const { repo, user } = await seeded();
+    const s = scope({ levels: [1, 2], mode: "guided" });
+    const q = await repo.queue(user.id, win(), s);
+    expect(q.streams[1]).toMatchObject([{ word: "а", topicNo: 2, seq: 2, tseq: 2_000_001 }]);
+    expect(q.streams[2]).toMatchObject([{ word: "г", topicNo: 2, seq: 1, tseq: 2_000_001 }]);
+    expect(q.seen).toEqual({ 1: { first: 2_000_001, last: 2_000_001, full: true }, 2: { first: 2_000_001, last: 2_000_001, full: true } });
+    expect(await inTurn(repo, user.id, win(), s, 1)).toEqual(["а", "к1", "в", "к2", "б", "к3"]);
+    expect(await inTurn(repo, user.id, win(), s, 2)).toEqual(["г", "л1", "д", "л2"]);
+  });
+
+  it("guided across two levels: the run of a topic in level 1 with its basic words, the same run in level 2, then the next topic", async () => {
+    const { repo, user } = await seeded();
+    expect(await merged(repo, user.id, win(), scope({ levels: [1, 2], mode: "guided" }))).toEqual(["а", "к1", "в", "к2", "г", "л1", "б", "к3", "д", "л2"]);
+  });
+
+  it("freq across two levels: the lower level whole, in the order of its file", async () => {
+    const { repo, user } = await seeded();
+    expect(await merged(repo, user.id, win(), scope({ levels: [1, 2], mode: "freq" }))).toEqual(["к1", "а", "к2", "б", "в", "к3", "г", "л1", "д", "л2"]);
+  });
+
+  it("a chosen topic gives the words of that topic only, not the basic words that stand in its run", async () => {
+    const learners = { topic: await seeded(), guided: await seedLearner(env.DB, { now: T, tgId: 2 }) };
+    for (const mode of ["topic", "guided"] as const) {
+      const { repo, user } = learners[mode];
+      const s = scope({ levels: [1, 2], mode, topicNo: 2 });
+      const q = await repo.queue(user.id, win(), s);
+      expect(q.streams[1]).toMatchObject([{ word: "а", topicNo: 2, tseq: 2_000_001 }]);
+      expect(await merged(repo, user.id, win(), s)).toEqual(["а", "в", "г"]);
+      // The topic is finished in both levels, though basic words of its runs are left.
+      const done = await repo.queue(user.id, win(), s);
+      expect(done.streams).toEqual({ 1: [], 2: [] });
+      expect(await merged(repo, user.id, win(), scope({ levels: [1, 2], mode, topicNo: 5 }))).toEqual(["б", "д"]);
+    }
+  });
+
+  it("the topic of the basic words: they are spread over the level and come in its guided order; no themed word is given", async () => {
+    const { repo, user } = await seeded();
+    const s = scope({ levels: [1, 2], mode: "topic", topicNo: 0 });
+    const q = await repo.queue(user.id, win(), s);
+    expect(q.streams[1]).toMatchObject([{ word: "к1", topicNo: 0, seq: 1, tseq: 2_000_002 }]);
+    expect(q.seen[1]).toEqual({ first: 2_000_002, last: 2_000_002, full: true });
+    expect(await inTurn(repo, user.id, win(), s, 1)).toEqual(["к1", "к2", "к3"]);
+    // Across levels they follow the runs they stand in: those of topic 2 in both levels, then those of topic 5.
+    expect(await merged(repo, user.id, win(), s)).toEqual(["л1", "л2"]);
+    const other = await seedLearner(env.DB, { now: T, tgId: 2 });
+    expect(await merged(repo, other.user.id, win(), s)).toEqual(["к1", "к2", "л1", "к3", "л2"]);
+    // With a read position past the first run, the basic words of the later runs are still found.
+    const late = await seedLearner(env.DB, { now: T, tgId: 3 });
+    const from = await repo.queue(late.user.id, win(), { ...s, spans: { 1: { from: 2_000_004, to: null } } });
+    expect(stream(from, 1)).toEqual(["к3"]);
+  });
+
+  it("a chosen themed topic is entered at its run: the words of the topics before it and after it are not read", async () => {
+    // Topic 1 has 60 words, topic 3 has two, topic 9 has 60 more.
+    await seedCatalog(env.DB, [...rows(1, "а", 60, () => ({ topic: 1 })), ...rows(1, "б", 2, () => ({ topic: 3 })), ...rows(1, "в", 60, () => ({ topic: 9 }))]);
+    await seedGuidedOrder(env.DB);
+    const { user } = await seedLearner(env.DB, { now: T });
+    const db = readingDb(env.DB);
+    const repo = new Repo(db);
+    const read = async (s: NewScope) => { db.rowsRead = 0; const q = await repo.queue(user.id, win(), s); return { words: stream(q, 1), rows: db.rowsRead }; };
+    const none = await read(scope({ mode: "topic", topicNo: null }));
+    const first = await read(scope({ mode: "topic", topicNo: 3 }));
+    expect(first.words).toEqual(["б1"]);
+    expect(first.rows - none.rows).toBeLessThanOrEqual(5);
+    // Both words of the topic started: the read ends with the run of the topic and gives nothing.
+    for (const word of ["б1", "б2"]) {
+      const { id } = (await env.DB.prepare("SELECT id FROM notes WHERE word = ?").bind(word).first<{ id: number }>())!;
+      await repo.insertCard(user.id, id, "tt_ru", gradedMem(T - DAY));
+    }
+    const done = await read(scope({ mode: "topic", topicNo: 3 }));
+    expect(done.words).toEqual([]);
+    expect(done.rows - none.rows).toBeLessThanOrEqual(8);
+  });
+
+  it("a part of speech together with the guided order: only the basic words here are pronouns", async () => {
+    const { repo, user } = await seeded("both");
+    const s = scope({ levels: [1, 2], mode: "guided", posCodes: ["pron"] });
+    expect(await merged(repo, user.id, win(BOTH), s)).toEqual(["к1", "к2", "л1", "к3", "л2"]);
   });
 });
 

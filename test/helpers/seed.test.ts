@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Repo } from "../../src/db/repo";
-import { WORDS, seedCatalog, seedLearner, seedLevels, seedUser } from "./seed";
+import { WORDS, seedCatalog, seedGuidedOrder, seedLearner, seedLevels, seedUser } from "./seed";
 
 const T = Date.UTC(2026, 8, 30, 6);
 
@@ -92,5 +92,16 @@ describe("seedCatalog and the new columns", () => {
     expect(await repo.userDeckIds(user.id)).toEqual([]);
     expect((await env.DB.prepare("SELECT slug FROM decks").all()).results).toEqual([{ slug: "a1" }]);
     expect((await seedLearner(env.DB, { now: T, tgId: 7 })).user).toMatchObject({ tgId: 7, levels: 1, direction: "tt_ru" });
+  });
+
+  it("seedGuidedOrder gives the catalog notes the places of the catalog seed: themed and basic words in turn, level by level", async () => {
+    await seedCatalog(env.DB, [
+      { level: 1, word: "мин" }, { level: 1, word: "аш", topic: 8 }, { level: 1, word: "син" }, { level: 1, word: "эш", topic: 12 },
+      { level: 2, word: "ул" }, { level: 2, word: "су", topic: 8 },
+    ]);
+    const tseq = async () => (await env.DB.prepare("SELECT word, tseq FROM notes ORDER BY level, tseq").all<{ word: string; tseq: number }>()).results.map((n) => [n.word, n.tseq]);
+    expect(await tseq()).toEqual([["мин", 1], ["син", 3], ["аш", 8_000_002], ["эш", 12_000_004], ["ул", 1], ["су", 8_000_002]]);
+    await seedGuidedOrder(env.DB);
+    expect(await tseq()).toEqual([["аш", 8_000_001], ["мин", 8_000_002], ["эш", 12_000_001], ["син", 12_000_002], ["су", 8_000_001], ["ул", 8_000_002]]);
   });
 });

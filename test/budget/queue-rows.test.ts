@@ -1,8 +1,8 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { type DayWindow, type Direction, type DirectionSetting, type NewScope, type Queue, Repo } from "../../src/db/repo";
-import { CURSOR_STEP, type Spans, mergeStreams, nextSpans } from "../../src/levels/order";
-import { LEVELS, type NewMode, tseqOf } from "../../src/levels/scale";
+import { CURSOR_STEP, type Spans, guidedTseq, mergeStreams, nextSpans } from "../../src/levels/order";
+import { LEVELS, type NewMode } from "../../src/levels/scale";
 import { type Mem, newMem } from "../../src/srs/fsrs";
 import { dayWindow } from "../../src/users/service";
 import { readingDb } from "../helpers/readingDb";
@@ -18,11 +18,13 @@ const POS = ["n", "v", "adj", "adv", "pron", "num", "post", "part", "conj", "int
 const ALL_LEVELS = LEVELS.map((l) => l.no as number);
 const BOTH: Direction[] = ["tt_ru", "ru_tt"];
 
-interface CatalogNote { id: number; level: number; topicNo: number; seq: number; pos: string }
+interface CatalogNote { id: number; level: number; topicNo: number; seq: number; tseq: number; pos: string }
 
 /**
  * The whole catalog, 3 850 notes in the five levels at their sizes, loaded with one statement a level. In every level
  * the topics 0…20 and the eleven part-of-speech codes follow one another note by note, so every topic holds every code.
+ * The guided order is the one the catalog seed gives (`guidedTseq`): the basic words (topic 0, one note in 21) stand
+ * among the themed ones at the beginning of the level.
  * `numerals`: how many of the notes are numerals. `even`: one in 11, like every other code. `rare`: one in 55 (70 in
  * the catalog), a small part of speech. `sparse`: three a level, at a tenth, a half and nine tenths of it, far apart.
  */
@@ -34,14 +36,15 @@ async function fullCatalog(numerals: Numerals): Promise<CatalogNote[]> {
   const repo = new Repo(env.DB);
   for (const lv of LEVELS) {
     const deckId = await repo.insertDeck({ slug: lv.slug, kind: "catalog", titleRu: lv.code, titleTt: lv.code, levelNo: lv.no, coveragePct: null, ownerId: null });
-    const rows = Array.from({ length: lv.size }, (_, i) => ({ w: `сүз${lv.no}х${i + 1}`, p: posAt(i, lv.size), t: i % TOPICS, s: i + 1, q: tseqOf(i % TOPICS, i + 1) }));
+    const tseq = guidedTseq(Array.from({ length: lv.size }, (_, i) => ({ topicNo: i % TOPICS, seq: i + 1 })));
+    const rows = Array.from({ length: lv.size }, (_, i) => ({ w: `сүз${lv.no}х${i + 1}`, p: posAt(i, lv.size), t: i % TOPICS, s: i + 1, q: tseq[i]! }));
     await env.DB.prepare(
       `INSERT INTO notes (deck_id, word, word_key, pos, translation, example_tt, example_ru, example_src, level, topic_no, seq, tseq)
        SELECT ?1, j.value ->> 'w', j.value ->> 'w', j.value ->> 'p', (j.value ->> 'w') || '-ru', (j.value ->> 'w') || '.', (j.value ->> 'w') || '-ru.', 'own',
               ?2, j.value ->> 't', j.value ->> 's', j.value ->> 'q' FROM json_each(?3) j ORDER BY j.key`,
     ).bind(deckId, lv.no, JSON.stringify(rows)).run();
   }
-  const { results } = await env.DB.prepare("SELECT id, level, topic_no AS topicNo, seq, pos FROM notes WHERE level IS NOT NULL ORDER BY level, seq").all<CatalogNote>();
+  const { results } = await env.DB.prepare("SELECT id, level, topic_no AS topicNo, seq, tseq, pos FROM notes WHERE level IS NOT NULL ORDER BY level, seq").all<CatalogNote>();
   expect(results.map((n) => n.level).filter((l) => l === 1)).toHaveLength(500);
   expect(results).toHaveLength(3850);
   return results;
@@ -49,11 +52,11 @@ async function fullCatalog(numerals: Numerals): Promise<CatalogNote[]> {
 
 type Where = "start" | "middle" | "end";
 type PosScope = "all" | "num";
-interface Case { where: Where; mode: NewMode; pos: PosScope; direction: DirectionSetting; startedIn?: NewMode; numerals?: Numerals }
+interface Case { where: Where; mode: NewMode; pos: PosScope; direction: DirectionSetting; startedIn?: NewMode; numerals?: Numerals; topicNo?: number }
 
 const inPos = (c: Case) => (n: CatalogNote) => c.pos === "all" || n.pos === "num";
 const directionsOf = (d: DirectionSetting): Direction[] => (d === "both" ? BOTH : [d]);
-const ordOf = (mode: NewMode) => (n: CatalogNote) => (mode === "freq" ? n.seq : tseqOf(n.topicNo, n.seq));
+const ordOf = (mode: NewMode) => (n: CatalogNote) => (mode === "freq" ? n.seq : n.tseq);
 
 type CardSeed = [noteId: number, direction: Direction, mem: Mem, buriedDay: string | null];
 /** Cards written straight into the table, two thousand to a statement. */
@@ -84,7 +87,9 @@ async function learner(catalog: CatalogNote[], c: Case) {
   await env.DB.prepare("INSERT INTO user_decks (user_id, deck_id, added_at) SELECT ?1, id, ?2 FROM decks WHERE kind = 'catalog'").bind(user.id, now).run();
   const directions = directionsOf(c.direction);
   const order = mergeStreams([catalog], c.mode);
-  const left = new Set(order.filter(inPos(c)).slice(-2).map((n) => n.id));
+  // The scope of a chosen topic: the topic of the case, or any themed topic when the case leaves the choice open.
+  const inTopic = (n: CatalogNote) => c.mode !== "topic" || (c.topicNo == null ? n.topicNo >= 1 : n.topicNo === c.topicNo);
+  const left = new Set(order.filter((n) => inPos(c)(n) && inTopic(n)).slice(-2).map((n) => n.id));
   const started = c.where === "start" ? [] : c.where === "middle" ? mergeStreams([catalog], c.startedIn ?? c.mode).slice(0, 1900) : catalog.filter((n) => !left.has(n.id));
   const cards: CardSeed[] = [];
   const yesterday = gradedMem(now - DAY);
@@ -98,8 +103,8 @@ async function learner(catalog: CatalogNote[], c: Case) {
   if (c.where !== "start") own.slice(0, 5).forEach((id) => directions.forEach((d) => cards.push([id, d, yesterday, null])));
   await insertCards(user.id, cards);
   const startedIds = new Set(started.map((n) => n.id));
-  // `topic`: the topic in work — the topic of the next word in the topic order; the fifth for a learner at the start.
-  const topicNo = c.mode !== "topic" ? null : c.where === "start" ? 5 : order.find((n) => !startedIds.has(n.id) && inPos(c)(n))!.topicNo;
+  // `topic`: the topic of the case, or the topic in work — that of the next themed word; the fifth for a learner at the start.
+  const topicNo = c.mode !== "topic" ? null : c.topicNo ?? (c.where === "start" ? 5 : order.find((n) => !startedIds.has(n.id) && inPos(c)(n) && inTopic(n))!.topicNo);
   const todo = order.filter((n) => !startedIds.has(n.id) && inPos(c)(n) && (topicNo === null || n.topicNo === topicNo));
   const w: DayWindow = { ...dayWindow(180, now), directions };
   const scope: NewScope = { levels: ALL_LEVELS, posCodes: c.pos === "all" ? null : ["num"], mode: c.mode, topicNo, spans: {}, spansVersion: 0 };
@@ -121,7 +126,8 @@ const BUDGET = { stored: 1500, first: 20_000 } as const;
  * - `stored`: with the positions the first read found;
  * - `walk`: right after the word that is next was started, before the new position is stored — the level of that
  *   word is walked on to its next word, however far that is; the position this read finds is stored when the
- *   session would store it (`nextSpans` says `save`);
+ *   session would store it (`nextSpans` says `save`). For a learner at the end of the scope this goes on to the last
+ *   word, and the largest of these reads is taken: the last one walks a level to its end;
  * - `lagging`: with positions that lag as far as they may: a position is stored only when it moved by CURSOR_STEP,
  *   so in every level the words are started up to the last one that lies within CURSOR_STEP of the position.
  * Every read must give, as the first of the merged heads, the word that is next in the order of the mode.
@@ -153,10 +159,18 @@ async function reads(catalog: CatalogNote[], c: Case) {
   expect(stored.q.streams).toEqual(first.q.streams);
   expect(stored.q.seen).toEqual(first.q.seen);
 
-  await start(todo.slice(0, 1));
-  const walk = await read(spans, version);
-  const moved = nextSpans(spans, walk.q.seen);
-  if (moved.save) spans = moved.spans;
+  let walk = 0;
+  const step = async () => {
+    await start(todo.slice(0, 1));
+    const r = await read(spans, version);
+    walk = Math.max(walk, r.rows);
+    const moved = nextSpans(spans, r.q.seen);
+    if (moved.save) spans = moved.spans;
+  };
+  await step();
+  // At the end of the scope the last words are started one by one: the read after the last word of a level walks
+  // that level to its end and finds nothing.
+  if (c.where === "end") while (todo.length) await step();
 
   const behind = ALL_LEVELS.flatMap((level) => {
     const s = spans[level];
@@ -166,12 +180,12 @@ async function reads(catalog: CatalogNote[], c: Case) {
   await start(behind);
   const lagging = await read(spans, version);
   expect(nextSpans(spans, lagging.q.seen).save).toBe(false);
-  return { first: first.rows, stored: stored.rows, walk: walk.rows, lagging: lagging.rows };
+  return { first: first.rows, stored: stored.rows, walk, lagging: lagging.rows };
 }
 
 const NUMERALS = { even: "numerals only", rare: "numerals only and rare", sparse: "numerals only, three a level far apart" } as const;
 const title = (c: Case) =>
-  `${c.where}, ${c.mode}${c.startedIn ? ` after ${c.startedIn}` : ""}, ${c.pos === "all" ? "all parts of speech" : NUMERALS[c.numerals ?? "even"]}, ${c.direction}`;
+  `${c.where}, ${c.mode}${c.topicNo === 0 ? " of the basic words" : ""}${c.startedIn ? ` after ${c.startedIn}` : ""}, ${c.pos === "all" ? "all parts of speech" : NUMERALS[c.numerals ?? "even"]}, ${c.direction}`;
 
 describe("D1 rows read by repo.queue with the whole catalog (3 850 notes) and all five levels in the scope", () => {
   const cases: Case[] = [];
@@ -198,6 +212,13 @@ describe("D1 rows read by repo.queue with the whole catalog (3 850 notes) and al
     }
     cases.push({ where: "middle", mode: "freq", startedIn: "guided", pos: "num", direction: "both", numerals });
   }
+  // The topic of the basic words: they stand among the themed words of the beginning of a level, and a level whose
+  // basic words are all started is walked to its end once.
+  for (const where of ["start", "middle", "end"] as const) {
+    for (const direction of ["tt_ru", "both"] as const) cases.push({ where, mode: "topic", topicNo: 0, pos: "all", direction });
+  }
+  cases.push({ where: "middle", mode: "topic", topicNo: 0, startedIn: "freq", pos: "all", direction: "both" });
+  cases.push({ where: "middle", mode: "topic", topicNo: 0, pos: "num", direction: "both" });
   for (const c of cases) {
     it(`${title(c)}: the first read, the reads with stored positions and the walk of one level stay within the budget`, async () => {
       const r = await reads(await fullCatalog(c.numerals ?? "even"), c);

@@ -1,14 +1,70 @@
 import { describe, expect, it } from "vitest";
-import { CURSOR_STEP, STREAM_LIMIT, emptyReason, mergeStreams, nextSpans, readSpans, scopeKey, writeSpans, type EmptyFacts } from "../../src/levels/order";
-import { ALL_POS } from "../../src/levels/scale";
+import { CURSOR_STEP, STREAM_LIMIT, emptyReason, guidedTseq, mergeStreams, nextSpans, readSpans, scopeKey, writeSpans, type EmptyFacts } from "../../src/levels/order";
+import { ALL_POS, tseqOf } from "../../src/levels/scale";
 
-const o = (level: number, topicNo: number, seq: number) => ({ level, topicNo, seq });
+/** A word of a level whose place in the guided order is `position` in the run of `anchor`. */
+const o = (level: number, anchor: number, position: number, seq = position) => ({ level, seq, tseq: tseqOf(anchor, position) });
+
+describe("guidedTseq", () => {
+  const row = (topicNo: number, seq: number) => ({ topicNo, seq });
+  /** The rows in the order of the values given for them. */
+  const inOrder = (rows: { topicNo: number; seq: number }[], tseq: number[]) =>
+    rows.map((r, i) => ({ ...r, tseq: tseq[i]! })).sort((a, b) => a.tseq - b.tseq).map((r) => `${r.topicNo}:${r.seq}`);
+
+  it("alternates a themed word and a basic one, the themed first; a basic word is anchored at the topic of the themed word before it", () => {
+    const rows = [row(0, 1), row(1, 2), row(0, 3), row(2, 4), row(1, 5), row(0, 6)];
+    const tseq = guidedTseq(rows);
+    expect(inOrder(rows, tseq)).toEqual(["1:2", "0:1", "1:5", "0:3", "2:4", "0:6"]);
+    // In input order: the basic rows at 1, 1 and 2; positions count inside the run of an anchor.
+    expect(tseq).toEqual([1_000_002, 1_000_001, 1_000_004, 2_000_001, 1_000_003, 2_000_002]);
+  });
+  it("a level of basic words only is anchored at 0, in the order of the level", () => {
+    expect(guidedTseq([row(0, 3), row(0, 1), row(0, 2)])).toEqual([3, 1, 2]);
+    expect(guidedTseq([])).toEqual([]);
+  });
+  it("more basic words than themed ones: the rest of them follows the last themed word and is anchored at its topic", () => {
+    const rows = [row(0, 1), row(0, 2), row(0, 3), row(0, 4), row(3, 5), row(7, 6)];
+    const tseq = guidedTseq(rows);
+    expect(inOrder(rows, tseq)).toEqual(["3:5", "0:1", "7:6", "0:2", "0:3", "0:4"]);
+    expect(tseq).toEqual([3_000_002, 7_000_002, 7_000_003, 7_000_004, 3_000_001, 7_000_001]);
+  });
+  it("more themed words than basic ones: the rest of them follows by topic and then by place in the level", () => {
+    const rows = [row(2, 1), row(1, 2), row(0, 3), row(2, 4), row(1, 5)];
+    const tseq = guidedTseq(rows);
+    expect(inOrder(rows, tseq)).toEqual(["1:2", "0:3", "1:5", "2:1", "2:4"]);
+    expect(tseq).toEqual([2_000_001, 1_000_001, 1_000_002, 2_000_002, 1_000_003]);
+  });
+  it("the order the rows are given in does not matter", () => {
+    const rows = [row(0, 1), row(1, 2), row(0, 3), row(2, 4), row(1, 5), row(0, 6)];
+    const shuffled = [4, 0, 5, 2, 1, 3].map((i) => rows[i]!);
+    const tseq = guidedTseq(shuffled);
+    expect(shuffled.map((r, i) => [rows.indexOf(r), tseq[i]]).sort((a, b) => a[0]! - b[0]!).map((x) => x[1])).toEqual(guidedTseq(rows));
+  });
+  it("the words of one anchor are one range of values, and no two words share a value", () => {
+    const rows = Array.from({ length: 60 }, (_, i) => row(i % 4 === 0 ? 0 : 1 + (i % 5), i + 1));
+    const tseq = guidedTseq(rows);
+    expect(new Set(tseq).size).toBe(60);
+    const sorted = [...tseq].sort((a, b) => a - b);
+    for (const [i, v] of sorted.entries()) {
+      const before = sorted[i - 1];
+      // The next value is the next position of the same anchor, or position 1 of a later anchor.
+      if (before !== undefined) expect(v === before + 1 || (v % 1_000_000 === 1 && Math.floor(v / 1_000_000) > Math.floor(before / 1_000_000))).toBe(true);
+    }
+  });
+});
 
 describe("mergeStreams", () => {
   const streams = [[o(1, 2, 5), o(1, 3, 1)], [o(2, 2, 1)]];
-  it("guided orders by topic, level, seq", () => {
+  it("guided and topic order by anchor, level, place in the guided order of the level", () => {
     expect(mergeStreams(streams, "guided")).toEqual([o(1, 2, 5), o(2, 2, 1), o(1, 3, 1)]);
     expect(mergeStreams(streams, "topic")).toEqual([o(1, 2, 5), o(2, 2, 1), o(1, 3, 1)]);
+  });
+  it("guided keeps the basic words of an anchor with it: the whole run of a level comes before the same anchor of the next level", () => {
+    // Level 1: a themed word of topic 1 (seq 40) and the basic word after it (seq 2); level 2: a themed word of topic 1.
+    const one = [o(1, 1, 1, 40), o(1, 1, 2, 2), o(1, 2, 1, 7)];
+    const two = [o(2, 1, 1, 3)];
+    expect(mergeStreams([two, one], "guided")).toEqual([o(1, 1, 1, 40), o(1, 1, 2, 2), o(2, 1, 1, 3), o(1, 2, 1, 7)]);
+    expect(mergeStreams([two, one], "freq")).toEqual([o(1, 1, 2, 2), o(1, 2, 1, 7), o(1, 1, 1, 40), o(2, 1, 1, 3)]);
   });
   it("freq orders by level, seq", () => {
     expect(mergeStreams(streams, "freq")).toEqual([o(1, 3, 1), o(1, 2, 5), o(2, 2, 1)]);

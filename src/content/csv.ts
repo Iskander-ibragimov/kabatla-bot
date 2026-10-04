@@ -1,5 +1,5 @@
 import { wordKey } from "../db/repo";
-import { tseqOf } from "../levels/scale";
+import { guidedTseq } from "../levels/order";
 
 /** RFC 4180 CSV parser (quotes, doubled quotes, commas and newlines inside quotes). */
 export function parseCsv(text: string): Record<string, string>[] {
@@ -76,6 +76,9 @@ const STARTED =
  *  - a note is found by its word key in the whole catalog (`level IS NOT NULL`), whatever level it stands in. A row
  *    that moved to another level file or topic moves its note — deck, `level`, `topic_no`, `seq`, `tseq` — and the
  *    note keeps its id, and with it the learners' cards and their schedule;
+ *  - `seq` is the place of the row in its level file; `tseq` is its place in the guided order of the level, where
+ *    themed and basic words alternate (`guidedTseq`). A row added to or moved in a file shifts the places after it,
+ *    and each note whose `seq` or `tseq` changed is rewritten — one row write each, and none when nothing moved;
  *  - nothing is deleted: a note that left the files stays where it was. Cards, the review log, users and the learners'
  *    own notes (`level IS NULL`) are never written;
  *  - `audio_file_id` of a row only fills an empty one: a row never erases or replaces the voice a note already has,
@@ -131,6 +134,9 @@ export function catalogToSql(levels: SeedLevel[], topics: SeedTopic[], renames: 
   const seen = new Map<string, string>();
   for (const l of levels) {
     const deck = `(SELECT id FROM decks WHERE slug = ${sqlText(l.slug)})`;
+    // The place of every row in the guided order of its level (levels/order.ts `guidedTseq`). A row with an unknown
+    // topic is counted as a basic word here and stops the load below.
+    const tseq = guidedTseq(l.rows.map((row, i) => ({ topicNo: topicNo.get(row.topic ?? "") ?? 0, seq: i + 1 })));
     l.rows.forEach((row, i) => {
       // The line of the level file: the header is line 1. A file with a wrong header or an empty cell must stop the
       // load here, before an UPDATE blanks the field of a card that people are learning.
@@ -151,7 +157,7 @@ export function catalogToSql(levels: SeedLevel[], topics: SeedTopic[], renames: 
       const values: [string, string][] = [
         ["deck_id", deck], ["word", sqlText(word)], ["transcription", sqlTextOrNull(row.transcription!.trim())],
         ...NOTE_COLUMNS.slice(2).map((c): [string, string] => [c, sqlText(row[c]!)]),
-        ["level", String(Math.trunc(l.level))], ["topic_no", String(topic)], ["seq", String(seq)], ["tseq", String(tseqOf(topic, seq))],
+        ["level", String(Math.trunc(l.level))], ["topic_no", String(topic)], ["seq", String(seq)], ["tseq", String(tseq[i]!)],
       ];
       const audio = sqlTextOrNull(row.audio_file_id!.trim());
       // An audio id of the file is taken only by a note that has no voice yet.

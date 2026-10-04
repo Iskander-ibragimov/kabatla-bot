@@ -1,12 +1,51 @@
-import { ALL_POS, LEVELS, hasLevel, type LevelNo, type NewMode } from "./scale";
+import { ALL_POS, LEVELS, TSEQ_BASE, hasLevel, type LevelNo, type NewMode, tseqOf } from "./scale";
 
-export interface Ordered { level: number; topicNo: number; seq: number }
+/**
+ * The guided order of ONE level, as the `tseq` of each of its rows (in input order): `ORDER BY tseq` is that order.
+ *
+ * A themed word (topic 1–20) and a basic one (topic 0, «Основа») alternate, the themed first, until one of the two
+ * lists ends; then the rest of the other follows. Themed words are taken by topic number and then by their place in
+ * the level (`seq`), basic words by their place in the level. So a beginner meets the pronouns and particles a few
+ * at a time among the words of the topics, not all of them before the first greeting.
+ *
+ * `tseq = anchor × TSEQ_BASE + position`. The anchor of a themed word is its topic; the anchor of a basic word is the
+ * topic of the themed word just before it (0 when the level has no themed word). `position` counts 1, 2, 3… through
+ * the words of one anchor. So the words of an anchor are one unbroken range of `tseq`, and the themed words of a
+ * topic lie inside the range of that topic.
+ */
+export function guidedTseq(rows: { topicNo: number; seq: number }[]): number[] {
+  const at = rows.map((r, i) => ({ ...r, i }));
+  const themed = at.filter((r) => r.topicNo >= 1).sort((a, b) => a.topicNo - b.topicNo || a.seq - b.seq);
+  const basic = at.filter((r) => !(r.topicNo >= 1)).sort((a, b) => a.seq - b.seq);
+  const tseq = new Array<number>(rows.length);
+  let anchor = 0;
+  let position = 0;
+  const put = (i: number, a: number) => {
+    if (a !== anchor) { anchor = a; position = 0; }
+    tseq[i] = tseqOf(anchor, ++position);
+  };
+  for (let k = 0; k < Math.max(themed.length, basic.length); k++) {
+    const t = themed[k];
+    if (t) put(t.i, t.topicNo);
+    const b = basic[k];
+    if (b) put(b.i, anchor);
+  }
+  return tseq;
+}
 
-/** Merges per-level streams (each already in its own order) into the order of `mode`. */
+/** The anchor of a place in the guided order: the topic whose run the word stands in; see `guidedTseq`. */
+export const anchorOf = (tseq: number): number => Math.floor(tseq / TSEQ_BASE);
+
+/** A word with its level and its two places in it: `seq` in the order of the level, `tseq` in the guided order. */
+export interface Ordered { level: number; seq: number; tseq: number }
+
+/**
+ * Merges per-level streams (each already in its own order) into the order of `mode`. `guided`, `topic`: by anchor,
+ * then the lower level first, then the guided order of the level. `freq`: the lower level first, then its own order.
+ */
 export function mergeStreams<T extends Ordered>(streams: T[][], mode: NewMode): T[] {
-  const byTopic = mode !== "freq";
   return streams.flat().sort((a, b) =>
-    (byTopic ? a.topicNo - b.topicNo : 0) || a.level - b.level || a.seq - b.seq);
+    mode === "freq" ? a.level - b.level || a.seq - b.seq : anchorOf(a.tseq) - anchorOf(b.tseq) || a.level - b.level || a.tseq - b.tseq);
 }
 
 export type EmptyReason =
