@@ -23,13 +23,18 @@ interface CatalogNote { id: number; level: number; topicNo: number; seq: number;
 /**
  * The whole catalog, 3 850 notes in the five levels at their sizes, loaded with one statement a level. In every level
  * the topics 0…20 and the eleven part-of-speech codes follow one another note by note, so every topic holds every code.
- * `rareNumerals`: a numeral is one note in 55 instead of one in 11 (70 in the catalog): a small part of speech.
+ * `numerals`: how many of the notes are numerals. `even`: one in 11, like every other code. `rare`: one in 55 (70 in
+ * the catalog), a small part of speech. `sparse`: three a level, at a tenth, a half and nine tenths of it, far apart.
  */
-async function fullCatalog(rareNumerals = false): Promise<CatalogNote[]> {
+type Numerals = "even" | "rare" | "sparse";
+async function fullCatalog(numerals: Numerals): Promise<CatalogNote[]> {
+  const posAt = (i: number, size: number) =>
+    numerals === "even" ? POS[i % POS.length]!
+      : (numerals === "rare" ? i % 55 === 5 : [0.1, 0.5, 0.9].some((part) => i === Math.floor(size * part))) ? "num" : POS[i % 5]!;
   const repo = new Repo(env.DB);
   for (const lv of LEVELS) {
     const deckId = await repo.insertDeck({ slug: lv.slug, kind: "catalog", titleRu: lv.code, titleTt: lv.code, levelNo: lv.no, coveragePct: null, ownerId: null });
-    const rows = Array.from({ length: lv.size }, (_, i) => ({ w: `сүз${lv.no}х${i + 1}`, p: rareNumerals ? (i % 55 === 5 ? "num" : POS[i % 5]!) : POS[i % POS.length]!, t: i % TOPICS, s: i + 1, q: tseqOf(i % TOPICS, i + 1) }));
+    const rows = Array.from({ length: lv.size }, (_, i) => ({ w: `сүз${lv.no}х${i + 1}`, p: posAt(i, lv.size), t: i % TOPICS, s: i + 1, q: tseqOf(i % TOPICS, i + 1) }));
     await env.DB.prepare(
       `INSERT INTO notes (deck_id, word, word_key, pos, translation, example_tt, example_ru, example_src, level, topic_no, seq, tseq)
        SELECT ?1, j.value ->> 'w', j.value ->> 'w', j.value ->> 'p', (j.value ->> 'w') || '-ru', (j.value ->> 'w') || '.', (j.value ->> 'w') || '-ru.', 'own',
@@ -44,7 +49,7 @@ async function fullCatalog(rareNumerals = false): Promise<CatalogNote[]> {
 
 type Where = "start" | "middle" | "end";
 type PosScope = "all" | "num";
-interface Case { where: Where; mode: NewMode; pos: PosScope; direction: DirectionSetting; startedIn?: NewMode; rareNumerals?: boolean }
+interface Case { where: Where; mode: NewMode; pos: PosScope; direction: DirectionSetting; startedIn?: NewMode; numerals?: Numerals }
 
 const inPos = (c: Case) => (n: CatalogNote) => c.pos === "all" || n.pos === "num";
 const directionsOf = (d: DirectionSetting): Direction[] => (d === "both" ? BOTH : [d]);
@@ -101,55 +106,72 @@ async function learner(catalog: CatalogNote[], c: Case) {
   return { userId: user.id, w, scope, todo };
 }
 
-/** The new catalog words a read gave, as note ids in the order of the mode. */
+/** The new catalog words a read gave, as note ids in the order of the mode: the heads of the levels. */
 const given = (q: Queue, mode: NewMode) => [...new Set(mergeStreams(Object.values(q.streams).map((s) => s ?? []), mode).map((x) => x.noteId))];
 
 /**
- * `stored`: the plan's target for one read of the queue once the read positions are stored. `first`: the spec's limit
- * for the read that finds them. `storedRare`: a scope whose words are rare in the levels does not meet the target —
- * a stream walks every note from the read position to its third note, one row each, and with one numeral in 55 that
- * is some hundred notes a level; measured up to 1 768. The binding limit is the 2 500 rows of a whole grade; this
- * figure leaves the rest of a grade 500 of them.
+ * `stored`: the plan's target for one read of the queue, whatever the read positions stored are worth: fresh, after
+ * the walk of one level, or lagging. `first`: the spec's limit for the read that finds the positions.
  */
-const BUDGET = { stored: 1500, storedRare: 2000, first: 20_000 } as const;
+const BUDGET = { stored: 1500, first: 20_000 } as const;
 
 /**
- * Three reads of one learner, the rows of each: the first with no read positions; the next with the positions the
- * first one found; and one with those same positions after the learner went on as far as a position may lag behind
- * (it is saved only when it moved by CURSOR_STEP): in every level the words up to CURSOR_STEP - 1 order values past
- * the position are started. Every read must give the words that are next in the order of the mode.
+ * Four reads of one learner, the rows of each:
+ * - `first`: with no read positions;
+ * - `stored`: with the positions the first read found;
+ * - `walk`: right after the word that is next was started, before the new position is stored — the level of that
+ *   word is walked on to its next word, however far that is; the position this read finds is stored when the
+ *   session would store it (`nextSpans` says `save`);
+ * - `lagging`: with positions that lag as far as they may: a position is stored only when it moved by CURSOR_STEP,
+ *   so in every level the words are started up to the last one that lies within CURSOR_STEP of the position.
+ * Every read must give, as the first of the merged heads, the word that is next in the order of the mode.
  */
 async function reads(catalog: CatalogNote[], c: Case) {
   const l = await learner(catalog, c);
   const db = readingDb(env.DB);
   const repo = new Repo(db);
+  const ord = ordOf(c.mode);
+  const yesterday = gradedMem(now - DAY);
+  let todo = l.todo;
+  const start = async (notes: CatalogNote[]) => {
+    await insertCards(l.userId, notes.flatMap((n) => l.w.directions.map((d): CardSeed => [n.id, d, yesterday, null])));
+    const gone = new Set(notes.map((n) => n.id));
+    todo = todo.filter((n) => !gone.has(n.id));
+  };
   const read = async (spans: Spans, version: number) => {
     db.rowsRead = 0;
     const q = await repo.queue(l.userId, l.w, { ...l.scope, spans, spansVersion: version });
     expect(db.calls).toBe(1);
     db.calls = 0;
+    expect(given(q, c.mode).slice(0, 1)).toEqual(todo.slice(0, 1).map((n) => n.id));
     return { q, rows: db.rowsRead };
   };
-  const expectNext = (q: Queue, todo: CatalogNote[]) => expect(given(q, c.mode).slice(0, 3)).toEqual(todo.slice(0, 3).map((n) => n.id));
   const first = await read({}, -1);
-  expectNext(first.q, l.todo);
-  const { spans } = nextSpans({}, first.q.seen);
-  const stored = await read(spans, first.q.catalogVersion);
+  const version = first.q.catalogVersion;
+  let { spans } = nextSpans({}, first.q.seen);
+  const stored = await read(spans, version);
   expect(stored.q.streams).toEqual(first.q.streams);
   expect(stored.q.seen).toEqual(first.q.seen);
 
-  const ord = ordOf(c.mode);
-  const ahead = l.todo.filter((n) => { const s = spans[n.level]; return s != null && ord(n) > s.from && ord(n) < s.from + CURSOR_STEP; });
-  const yesterday = gradedMem(now - DAY);
-  await insertCards(l.userId, ahead.flatMap((n) => l.w.directions.map((d): CardSeed => [n.id, d, yesterday, null])));
-  const gone = new Set(ahead.map((n) => n.id));
-  const lagging = await read(spans, first.q.catalogVersion);
-  expectNext(lagging.q, l.todo.filter((n) => !gone.has(n.id)));
-  return { first: first.rows, stored: stored.rows, lagging: lagging.rows };
+  await start(todo.slice(0, 1));
+  const walk = await read(spans, version);
+  const moved = nextSpans(spans, walk.q.seen);
+  if (moved.save) spans = moved.spans;
+
+  const behind = ALL_LEVELS.flatMap((level) => {
+    const s = spans[level];
+    const near = todo.filter((n) => n.level === level && s != null && ord(n) > s.from && ord(n) <= s.from + CURSOR_STEP);
+    return near.slice(0, -1);
+  });
+  await start(behind);
+  const lagging = await read(spans, version);
+  expect(nextSpans(spans, lagging.q.seen).save).toBe(false);
+  return { first: first.rows, stored: stored.rows, walk: walk.rows, lagging: lagging.rows };
 }
 
+const NUMERALS = { even: "numerals only", rare: "numerals only and rare", sparse: "numerals only, three a level far apart" } as const;
 const title = (c: Case) =>
-  `${c.where}, ${c.mode}${c.startedIn ? ` after ${c.startedIn}` : ""}, ${c.pos === "all" ? "all parts of speech" : c.rareNumerals ? "numerals only and rare" : "numerals only"}, ${c.direction}`;
+  `${c.where}, ${c.mode}${c.startedIn ? ` after ${c.startedIn}` : ""}, ${c.pos === "all" ? "all parts of speech" : NUMERALS[c.numerals ?? "even"]}, ${c.direction}`;
 
 describe("D1 rows read by repo.queue with the whole catalog (3 850 notes) and all five levels in the scope", () => {
   const cases: Case[] = [];
@@ -167,18 +189,22 @@ describe("D1 rows read by repo.queue with the whole catalog (3 850 notes) and al
       cases.push({ where: "middle", mode: "freq", startedIn: "guided", pos, direction });
     }
   }
-  // A rare part of speech: the stream of a level walks far to its third note.
-  for (const mode of ["guided", "freq"] as const) {
-    for (const where of ["start", "middle"] as const) cases.push({ where, mode, pos: "num", direction: "tt_ru", rareNumerals: true });
+  // A rare part of speech (one note in 55), and one whose few words lie far apart: the walk to the next word is long.
+  for (const numerals of ["rare", "sparse"] as const) {
+    for (const where of ["start", "middle"] as const) {
+      for (const mode of ["guided", "freq"] as const) {
+        for (const direction of ["tt_ru", "both"] as const) cases.push({ where, mode, pos: "num", direction, numerals });
+      }
+    }
+    cases.push({ where: "middle", mode: "freq", startedIn: "guided", pos: "num", direction: "both", numerals });
   }
-  cases.push({ where: "middle", mode: "freq", startedIn: "guided", pos: "num", direction: "both", rareNumerals: true });
   for (const c of cases) {
-    it(`${title(c)}: the first read and the reads with stored positions stay within the budget`, async () => {
-      const r = await reads(await fullCatalog(c.rareNumerals), c);
-      const stored = c.rareNumerals ? BUDGET.storedRare : BUDGET.stored;
+    it(`${title(c)}: the first read, the reads with stored positions and the walk of one level stay within the budget`, async () => {
+      const r = await reads(await fullCatalog(c.numerals ?? "even"), c);
       expect(r.first).toBeLessThanOrEqual(BUDGET.first);
-      expect(r.stored).toBeLessThanOrEqual(stored);
-      expect(r.lagging).toBeLessThanOrEqual(stored);
+      expect(r.stored).toBeLessThanOrEqual(BUDGET.stored);
+      expect(r.walk).toBeLessThanOrEqual(BUDGET.stored);
+      expect(r.lagging).toBeLessThanOrEqual(BUDGET.stored);
     });
   }
 });

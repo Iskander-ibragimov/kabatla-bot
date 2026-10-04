@@ -64,30 +64,37 @@ describe("spans storage", () => {
 });
 
 describe("nextSpans", () => {
-  const seen = (first: number | null, last: number | null, full = false) => ({ 1: { first, last, full } });
+  /** What a stream of one level held; with STREAM_LIMIT = 1 a stream holds its head (`full`) or nothing. */
+  const head = (ord: number) => ({ 1: { first: ord, last: ord, full: true } });
+  const nothing = { 1: { first: null, last: null, full: false } };
   it("constants", () => {
     expect(CURSOR_STEP).toBe(25);
-    expect(STREAM_LIMIT).toBe(3);
+    expect(STREAM_LIMIT).toBe(1);
   });
-  it("saves at a move of 25 but not 24", () => {
-    const prev = { 1: { from: 100, to: 500 } };
-    expect(nextSpans(prev, seen(125 + 1, 500))).toEqual({ spans: { 1: { from: 125, to: 500 } }, save: true });
-    expect(nextSpans(prev, seen(124 + 1, 500))).toEqual({ spans: { 1: { from: 124, to: 500 } }, save: false });
-  });
-  it("saves when to becomes known or changes", () => {
+  it("a head: the span starts just before it and its end is unknown; saved at a move of 25 but not of 24", () => {
     const prev = { 1: { from: 100, to: null } };
-    expect(nextSpans(prev, seen(101, 300)).save).toBe(true);
-    expect(nextSpans(prev, seen(101, null, true))).toEqual({ spans: { 1: { from: 100, to: null } }, save: false });
+    expect(nextSpans(prev, head(125 + 1))).toEqual({ spans: { 1: { from: 125, to: null } }, save: true });
+    expect(nextSpans(prev, head(124 + 1))).toEqual({ spans: { 1: { from: 124, to: null } }, save: false });
+    expect(nextSpans(prev, head(101))).toEqual({ spans: { 1: { from: 100, to: null } }, save: false });
   });
-  it("nothing left collapses the span onto from", () => {
-    expect(nextSpans({ 1: { from: 40, to: null } }, seen(null, null))).toEqual({ spans: { 1: { from: 40, to: 40 } }, save: true });
+  it("no note: the level is finished for the scope — the span collapses onto from and is saved", () => {
+    expect(nextSpans({ 1: { from: 40, to: null } }, nothing)).toEqual({ spans: { 1: { from: 40, to: 40 } }, save: true });
+    // Read again, the finished level changes nothing and asks for no save.
+    expect(nextSpans({ 1: { from: 40, to: 40 } }, nothing)).toEqual({ spans: { 1: { from: 40, to: 40 } }, save: false });
   });
-  it("treats a missing previous span as from 0", () => {
-    expect(nextSpans({}, seen(null, null))).toEqual({ spans: { 1: { from: 0, to: 0 } }, save: true });
-    expect(nextSpans({}, seen(3, 9))).toEqual({ spans: { 1: { from: 2, to: 9 } }, save: true });
+  it("a head in a level whose stored span had an end: the end is unknown again, and that is saved", () => {
+    expect(nextSpans({ 1: { from: 100, to: 100 } }, head(101))).toEqual({ spans: { 1: { from: 100, to: null } }, save: true });
+  });
+  it("treats a missing previous span as from 0, and saves it", () => {
+    expect(nextSpans({}, nothing)).toEqual({ spans: { 1: { from: 0, to: 0 } }, save: true });
+    expect(nextSpans({}, head(3))).toEqual({ spans: { 1: { from: 2, to: null } }, save: true });
   });
   it("keeps levels it did not see", () => {
-    const r = nextSpans({ 2: { from: 5, to: null } }, seen(1, 2));
+    const r = nextSpans({ 2: { from: 5, to: null } }, head(1));
     expect(r.spans[2]).toEqual({ from: 5, to: null });
+  });
+  it("the rule for a stream longer than one note still holds: notes but fewer than the limit end the span at the last of them", () => {
+    expect(nextSpans({ 1: { from: 100, to: null } }, { 1: { first: 101, last: 300, full: false } })).toEqual({ spans: { 1: { from: 100, to: 300 } }, save: true });
+    expect(nextSpans({}, { 1: { first: 3, last: 9, full: false } })).toEqual({ spans: { 1: { from: 2, to: 9 } }, save: true });
   });
 });

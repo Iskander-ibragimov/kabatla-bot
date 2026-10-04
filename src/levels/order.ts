@@ -73,8 +73,12 @@ export function writeSpans(key: string, version: number, spans: Spans): string {
 
 /** A span is saved only when it moved this far (fewer writes), or when `to` changed. */
 export const CURSOR_STEP = 25;
-/** New-word candidates read per level per queue read. */
-export const STREAM_LIMIT = 3;
+/**
+ * New-word candidates read per level per queue read. One is enough: the session merges the heads of the level streams
+ * and gives one card. A level whose head is where it was costs a row or two; only the level whose head was just
+ * started is walked on to its next candidate, once, however far that is, and the position found is stored.
+ */
+export const STREAM_LIMIT = 1;
 
 export function nextSpans(
   prev: Spans,

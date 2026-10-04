@@ -84,7 +84,10 @@ export interface Candidates { learning: CardRow[]; review: CardRow[]; newNotes: 
 export interface NewScope { levels: number[]; posCodes: string[] | null; mode: NewMode; topicNo: number | null; spans: Spans; spansVersion: number }
 /** A new card of a catalog note that has no row yet, with the place of the note in its level. */
 export interface CatalogNew extends NewNote { level: number; topicNo: number; seq: number }
-/** What a stream of one level held: the order values of its first and last note (`tseq` by topic, `seq` in `freq`), and whether it is as long as a stream gets. */
+/**
+ * What a stream of one level held: the order values of its first and last note (`tseq` by topic, `seq` in `freq`), and
+ * whether it is as long as a stream gets (STREAM_LIMIT notes): then more may lie beyond its last note.
+ */
 export interface StreamSeen { first: number | null; last: number | null; full: boolean }
 /** Everything the session queue needs; see `Repo.queue`. */
 export interface Queue {
@@ -760,10 +763,10 @@ export class Repo {
    * - `newRows`: the cards of catalog notes that exist in state 'new' — the reverse card of a word (it was created when
    *   the other card was graded) and a card that was shown and not graded. They belong to words the learner has met,
    *   so they are given whatever the scope is; up to NEW_ROWS_LIMIT, in the order of the note ids.
-   * - `streams[level]`: for every level of the scope, the first STREAM_LIMIT notes that lack a card row in an asked
-   *   direction, in the order of the mode (`seq` in `freq`, `tseq` otherwise), with one card for every such
-   *   direction in the order of `w.directions`. `seen[level]` tells where that stream began and ended, for the read
-   *   position of the level (levels/order.ts `nextSpans`).
+   * - `streams[level]`: for every level of the scope, the first STREAM_LIMIT notes (one: the head of the level) that
+   *   lack a card row in an asked direction, in the order of the mode (`seq` in `freq`, `tseq` otherwise), with one
+   *   card for every such direction in the order of `w.directions`. `seen[level]` tells where that stream began and
+   *   ended, for the read position of the level (levels/order.ts `nextSpans`).
    *
    * A stream is read from the index of its order, from the read position of the level on, and stops at its last
    * note; see `streamStmt`. In `topic` with no topic chosen there are no new catalog words: no stream is read, and
@@ -773,7 +776,7 @@ export class Repo {
    * its cards, and that grade creates the other card; so a hidden word has both its cards, is in no stream, and comes
    * back through `newRows` on a later day — a note that lacks a card is never hidden. A filter here could only
    * shorten a stream by words that are hidden for a day, and a stream shorter than STREAM_LIMIT says that nothing
-   * lies beyond its last note: the level would look finished from there on.
+   * lies beyond it: the level would look finished, and its read position would say so until the scope changes.
    *
    * `counts`: how many cards there are to repeat (the lists are cut at `w.limitEach`, the counts are not) and how many
    * new cards were graded today, those graded «Легко» counted apart. `hasCards`: the user has a card at all.
@@ -861,10 +864,10 @@ export class Repo {
    * word is asked last, of the few notes that are left. So a note that is passed costs one row, and one more for
    * each card it has when it is of an asked part of speech.
    *
-   * What a read costs is therefore the notes between the read position and the last note of the stream. That is a
-   * handful when the scope is dense. It grows when the asked parts of speech are few in a level and far apart, up
-   * to the whole level when the stream ends at its far end: only an index that holds the part of speech would
-   * bound that.
+   * What a read costs is therefore the notes between the read position and the note the stream gives. While the
+   * head of the level stays, that is the head alone. When the head was started, the next read walks on to the next
+   * note of the scope — far, when the asked parts of speech are few in the level, but never past the end of the
+   * level and only once: the caller stores the position that read finds.
    */
   private streamStmt(userId: number, directions: Direction[], s: NewScope, level: number): D1PreparedStatement {
     const b = binder();
