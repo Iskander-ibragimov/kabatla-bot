@@ -1,0 +1,24 @@
+total 2396
+drwxr-xr-x 2 runner runner   4096 Oct  4 15:08 .
+drwxr-xr-x 3 runner runner   4096 Oct  4 15:08 ..
+-rw-r--r-- 1 runner runner      0 Oct  4 15:08 listing.txt
+-rw-r--r-- 1 runner runner    510 Oct  4 15:08 s_A1.info.txt
+-rw-r--r-- 1 runner runner  41166 Oct  4 15:08 s_A1.layout.txt
+-rw-r--r-- 1 runner runner 277033 Oct  4 15:08 s_A1.pdf
+-rw-r--r-- 1 runner runner  34140 Oct  4 15:08 s_A1.txt
+-rw-r--r-- 1 runner runner    510 Oct  4 15:08 s_A2.info.txt
+-rw-r--r-- 1 runner runner  49323 Oct  4 15:08 s_A2.layout.txt
+-rw-r--r-- 1 runner runner 338666 Oct  4 15:08 s_A2.pdf
+-rw-r--r-- 1 runner runner  41230 Oct  4 15:08 s_A2.txt
+-rw-r--r-- 1 runner runner    506 Oct  4 15:08 s_B1.info.txt
+-rw-r--r-- 1 runner runner  75508 Oct  4 15:08 s_B1.layout.txt
+-rw-r--r-- 1 runner runner 524927 Oct  4 15:08 s_B1.pdf
+-rw-r--r-- 1 runner runner  57797 Oct  4 15:08 s_B1.txt
+-rw-r--r-- 1 runner runner    510 Oct  4 15:08 s_B2.info.txt
+-rw-r--r-- 1 runner runner  47565 Oct  4 15:08 s_B2.layout.txt
+-rw-r--r-- 1 runner runner 337775 Oct  4 15:08 s_B2.pdf
+-rw-r--r-- 1 runner runner  37286 Oct  4 15:08 s_B2.txt
+-rw-r--r-- 1 runner runner    510 Oct  4 15:08 s_C1.info.txt
+-rw-r--r-- 1 runner runner  70229 Oct  4 15:08 s_C1.layout.txt
+-rw-r--r-- 1 runner runner 381745 Oct  4 15:08 s_C1.pdf
+-rw-r--r-- 1 runner runner  66016 Oct  4 15:08 s_C1.txt

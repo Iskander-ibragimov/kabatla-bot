@@ -1,0 +1,19 @@
+Author:          idenmukh
+Creator:         Microsoft® Word 2019
+Producer:        Microsoft® Word 2019
+CreationDate:    Thu Feb 27 10:38:23 2025 UTC
+ModDate:         Thu Feb 27 10:38:23 2025 UTC
+Custom Metadata: no
+Metadata Stream: yes
+Tagged:          yes
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           32
+Encrypted:       no
+Page size:       612 x 792 pts (letter)
+Page rot:        0
+File size:       338666 bytes
+Optimized:       no
+PDF version:     1.7
