@@ -1,11 +1,11 @@
 import type { User } from "../db/repo";
-import { dict } from "../i18n";
-import { levelCode } from "../levels/scale";
-import { type Hub, coverageOf } from "../levels/service";
+import { type Dict, dict } from "../i18n";
+import { ALL_POS, NEW_MODES, type NewMode, POS_GROUPS, levelCode } from "../levels/scale";
+import type { Hub, LevelLine, TopicLine } from "../levels/service";
 import type { Lang } from "../srs/fsrs";
 import type { Cumulative } from "../stats/service";
 import type { OnboardingScreen } from "../users/service";
-import { REMIND_TIMES } from "../users/service";
+import { REMIND_TIMES, TZ_OFFSETS } from "../users/service";
 import type { Button, Keyboard, PreviewItem, Rendered } from "./views";
 import { esc, fitMessage, previewLines } from "./views";
 
@@ -32,19 +32,90 @@ export function renderOnboarding(s: OnboardingScreen, lang: Lang): Rendered {
   }
 }
 
+const checkbox = (on: boolean) => (on ? "☑" : "☐");
+/** A button of a list where one option is in use: that one carries the mark. */
+const option = (on: boolean, text: string, data: string) => btn(on ? `✅ ${text}` : text, data);
+const capitalized = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** The buttons in rows of `n`. */
+const inRows = (buttons: Button[], n: number): Keyboard => Array.from({ length: Math.ceil(buttons.length / n) }, (_, i) => buttons.slice(i * n, i * n + n));
+const topicTitle = (topic: TopicLine, lang: Lang) => (lang === "ru" ? topic.titleRu : topic.titleTt);
+
 /**
- * A stand-in until the levels screen proper is built: the numbers of the hub in the texts the bot has. A line for
- * every checked level that has cards, with the words started of it; the own decks; the coverage of the levels started whole.
+ * A level with its checkbox: «☑ A1 · 137 из 400», or «☐ A2 · скоро» for a level without cards. `whole` adds what the
+ * hub says besides: «(будет 500)» while the level holds fewer cards than its size, and the coverage when the level has one.
  */
-export function renderLevels(h: Hub, lang: Lang): Rendered {
+function levelLine(l: LevelLine, t: Dict, whole: boolean): string {
+  const head = `${checkbox(l.checked)} ${l.code}`;
+  if (l.total === 0) return `${head} · ${t.levelSoon}`;
+  // A counter above the cards of its level is the level started whole.
+  let line = `${head} · ${t.outOf(Math.min(l.started, l.total), l.total)}`;
+  if (whole && l.total < l.size) line += ` ${t.levelWillBe(l.size)}`;
+  if (whole && l.coveragePct != null) line += ` · ${t.levelCoverage(l.coveragePct)}`;
+  return line;
+}
+
+/**
+ * /levels: the five levels, the order of new words with the topic they come from, the parts of speech when not all
+ * are checked, the own decks; a button for each list. «Темы» is not offered in «По частоте», which takes no notice
+ * of a topic.
+ */
+export function renderHub(h: Hub, lang: Lang): Rendered {
   const t = dict(lang);
-  const lines = [t.levelsTitle];
-  for (const l of h.levels) if (l.checked && l.total > 0) lines.push(t.levelProgress(l.no, l.started, l.total));
+  const lines = [t.levelsTitle, ...h.levels.map((l) => levelLine(l, t, true)), ""];
+  const topic = h.topic ? `«${esc(topicTitle(h.topic, lang))}»: ${t.outOf(h.topic.started, h.topic.total)}` : null;
+  // After the name of the order, the topic the new words come from: none in «По частоте», none to name when the guided order has no word left.
+  const from = h.mode === "freq" ? null : h.mode === "topic" ? topic ?? t.hubNoTopic : topic && t.hubTopicNow(topic);
+  lines.push(`🧭 ${t.modeName(h.mode)}${from ? ` · ${from}` : ""}`);
+  if ((h.posGroups & ALL_POS) !== ALL_POS) lines.push(t.hubPos(POS_GROUPS.filter((g) => h.posGroups & (1 << g.bit)).map((g) => t.posGroupName(g.key)).join(", ")));
   // The title of an AI deck already starts with 🤖.
   for (const d of h.own) lines.push(`${d.kind === "custom" ? "📝 " : ""}${esc(lang === "ru" ? d.titleRu : d.titleTt)} · ${d.total}`);
-  const coverage = coverageOf(h.levels);
-  if (coverage != null) lines.push(t.levelsCoverage(coverage));
-  return { text: lines.join("\n"), keyboard: [] };
+  const second = [btn(t.hubModeBtn, "hub:mode")];
+  if (h.mode !== "freq") second.push(btn(t.hubTopicsBtn, "hub:tp"));
+  return { text: lines.join("\n"), keyboard: [[btn(t.hubLevelsBtn, "hub:lv"), btn(t.hubPosBtn, "hub:pos")], second] };
+}
+
+/** «Уровни»: a checkbox for every level of the scale; a tap flips it. */
+export function renderLevelChecks(lines: LevelLine[], lang: Lang): Rendered {
+  const t = dict(lang);
+  return { text: `${t.levelsTitle}\n${t.levelChecksHint}`, keyboard: [...lines.map((l) => [btn(levelLine(l, t, false), `lv:t:${l.no}`)]), [btn(t.doneBtn, "hub")]] };
+}
+
+/** «Части речи»: a checkbox for every group of the mask `mask`; a tap flips it. */
+export function renderPosChecks(mask: number, lang: Lang): Rendered {
+  const t = dict(lang);
+  const boxes = POS_GROUPS.map((g) => btn(`${checkbox((mask & (1 << g.bit)) !== 0)} ${capitalized(t.posGroupName(g.key))}`, `ps:t:${g.bit}`));
+  return { text: `${t.posTitle}\n${t.posChecksHint}`, keyboard: [...inRows(boxes, 2), [btn(t.doneBtn, "hub")]] };
+}
+
+/** «Порядок слов»: what each of the three orders does, and a button for each; the one in use is marked. */
+export function renderModes(mode: NewMode, lang: Lang): Rendered {
+  const t = dict(lang);
+  return {
+    text: [t.modesTitle, ...NEW_MODES.map((m) => `<b>${t.modeName(m)}</b> — ${t.modeAbout(m)}`)].join("\n\n"),
+    keyboard: [...NEW_MODES.map((m) => [option(m === mode, t.modeName(m), `md:${m}`)]), [btn(t.doneBtn, "hub")]],
+  };
+}
+
+/**
+ * «Темы»: a button for every topic of `lines` with the words started of those it has; the chosen one is marked, and
+ * «Не выбирать» is while there is none. The text of a button is not HTML, so a title stands in it as it is.
+ */
+export function renderTopics(lines: TopicLine[], chosen: number | null, lang: Lang): Rendered {
+  const t = dict(lang);
+  return {
+    text: t.topicsText,
+    keyboard: [
+      ...lines.map((l) => [option(l.no === chosen, `${topicTitle(l, lang)} · ${t.outOf(l.started, l.total)}`, `tp:${l.no}`)]),
+      [option(chosen == null, t.noTopicBtn, "tp:none"), btn(t.doneBtn, "hub")],
+    ],
+  };
+}
+
+/** «Часовой пояс»: the zones UTC+2 … UTC+12, each with the time it is there at `now`; the zone `current` is marked. */
+export function renderTimeZones(now: number, current: number, lang: Lang): Rendered {
+  const t = dict(lang);
+  const zones = TZ_OFFSETS.map((offset) => option(offset === current, `${new Date(now + offset * 60_000).toISOString().slice(11, 16)} · ${tzLabel(offset)}`, `tz:${offset}`));
+  return { text: t.tzText, keyboard: [...inRows(zones, 2), [btn(t.doneBtn, "set:back")]] };
 }
 
 export function renderSettings(u: User): Rendered {
@@ -53,7 +124,8 @@ export function renderSettings(u: User): Rendered {
     text: t.settingsTitle,
     keyboard: [
       [btn(t.setLang, "set:lang")], [btn(t.setMode(u.retention), "set:ret")], [btn(t.setNew(u.newPerDay), "set:new")],
-      [btn(t.setRemind(u.remindAt), "set:rem")], [btn(t.setDir(u.direction), "set:dir")], [btn(t.setAuto(u.autoplay), "set:auto")],
+      [btn(t.setRemind(u.remindAt), "set:rem")], [btn(t.setTz(tzLabel(u.tzOffsetMin)), "set:tz")], [btn(t.setDir(u.direction), "set:dir")],
+      [btn(t.setAuto(u.autoplay), "set:auto")], [btn(t.setHub, "set:hub")],
     ],
   };
 }

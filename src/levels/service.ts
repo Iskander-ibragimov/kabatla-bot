@@ -111,6 +111,14 @@ export async function toggleLevel(repo: Repo, user: Pick<User, "id">, no: number
   return r.changed ? "ok" : r.hasCards ? "last" : "soon";
 }
 
+/**
+ * Checks a level and never unchecks it: what a button that adds a level does, however many times it is pressed.
+ * Returns the set of levels checked after it; the level is not in it when the catalog has no card of it.
+ */
+export async function addLevel(repo: Repo, user: Pick<User, "id">, no: number): Promise<number> {
+  return repo.checkLevel(user.id, no);
+}
+
 /** Checks or unchecks the part-of-speech group at bit index `bit`. `last`: it is the only group checked, and nothing is written. */
 export async function togglePos(repo: Repo, user: Pick<User, "id">, bit: number): Promise<"ok" | "last"> {
   if (!POS_GROUPS.some((g) => g.bit === bit)) throw new RangeError(`no part-of-speech group at bit ${bit}`);

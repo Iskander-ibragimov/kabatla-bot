@@ -8,6 +8,8 @@ type Key = keyof Dict;
 type FnKey = { [K in Key]: Dict[K] extends string ? never : K }[Key];
 
 const POS_CODES = ["n", "v", "adj", "adv", "pron", "num", "post", "conj", "part", "intj", "phr"];
+const POS_GROUPS = ["n", "v", "adj", "adv", "pron", "num", "func", "phr"];
+const MODES = ["guided", "topic", "freq"];
 
 const STATS = { streak: 5, learned: 37, known: 20, learning: 14, fresh: 429, memory: 812, total: 950, r30: 400, retention: "92%", forecast: "3 · 5 · 0 · 12 · 7 · 1 · 4" };
 
@@ -19,9 +21,9 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   memory: [[2]],
   reviewNo: [[4]],
   doneToday: [[24, 3]],
-  doneTotals: [[37, 20, 14, 429]],
   doneNextLearning: [["8 минут"]],
   streak: [[5]],
+  fixLevelBtn: [["A2"], ["C1"]],
   addAll: [[3]],
   foundN: [[3]],
   placementQ: [[1, "китап"]],
@@ -44,21 +46,21 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   setMode: [[0.85], [0.9], [0.95]],
   setNew: [[10]],
   setRemind: [["09:00"]],
+  setTz: [["UTC+3"], ["UTC+5:30"]],
   setDir: [["tt_ru"], ["ru_tt"], ["both"]],
   setAuto: [[true], [false]],
   pushDaily: [[12, 3]],
   pushEvening: [[5]],
   pushStep: [[4]],
   posName: POS_CODES.map((c): [string] => [c]),
-  levelTitle: [[1], [6], [20]],
-  levelUp: [[3, 4, 54, 100], [5, 6, null, 101], [19, 20, 79, 100], [3, 5, 54, null]],
-  levelsDone: [[80], [null]],
-  levelsPassed: [["1–3, 5"]],
-  levelsSkipped: [["1–3, 5"]],
-  levelProgress: [[4, 37, 100], [6, 0, 100]],
-  levelsAhead: [[16]],
-  levelsCoverage: [[54]],
-  openSkippedBtn: [["1–6"]],
+  outOf: [[137, 400], [0, 3]],
+  levelWillBe: [[500]],
+  levelCoverage: [[45]],
+  modeName: MODES.map((m): [string] => [m]),
+  modeAbout: MODES.map((m): [string] => [m]),
+  hubTopicNow: [["«Гаилә һәм якыннар»: 12/40"]],
+  hubPos: [["исемнәр, фигыльләр"]],
+  posGroupName: POS_GROUPS.map((g): [string] => [g]),
 };
 
 /** Every text a key can produce: the string itself, or the function applied to each sample. */
@@ -148,42 +150,61 @@ describe("i18n dictionaries", () => {
     expect(tt.welcome).toContain("<b>Кабатла</b>");
   });
 
-  it("builds Tatar ordinals", () => {
-    expect([1, 6, 9, 10, 16, 19, 20].map((n) => tt.levelTitle(n))).toEqual(
-      ["1 нче дәрәҗә", "6 нчы дәрәҗә", "9 нчы дәрәҗә", "10 нчы дәрәҗә", "16 нчы дәрәҗә", "19 нчы дәрәҗә", "20 нче дәрәҗә"]);
-    expect(ru.levelTitle(3)).toBe("Уровень 3");
-  });
-
-  it("announces a new level with the coverage, and the end of the levels once", () => {
-    expect(ru.levelUp(3, 4, 54, 100)).toBe("Все 100 слов уровня 3 в работе. Открываю уровень 4. Пройденные слова покрывают ≈54% обычного текста.");
-    expect(ru.levelUp(3, 4, null, 100)).toBe("Все 100 слов уровня 3 в работе. Открываю уровень 4.");
-    // The number of words is the level's own, with the Russian form of «слово» that goes with it.
-    expect([1, 2, 5, 11, 21, 22, 101, 111, 112].map((n) => ru.levelUp(3, 4, null, n).split(" уровня")[0])).toEqual(
-      ["Все 1 слово", "Все 2 слова", "Все 5 слов", "Все 11 слов", "Все 21 слово", "Все 22 слова", "Все 101 слово", "Все 111 слов", "Все 112 слов"]);
-    expect(tt.levelUp(3, 4, null, 101)).toContain("барлык 101 сүзе дә");
-    // Without a deck of the finished level there is no number to name.
-    expect(ru.levelUp(3, 5, 54, null)).toBe("Открываю уровень 5. Пройденные слова покрывают ≈54% обычного текста.");
-    expect(tt.levelUp(3, 5, null, null)).toBe("5 нче дәрәҗәне ачам.");
-    expect(ru.levelsDone(null)).toBe("Все 2 000 слов в работе! 🎉 Дальше — повторения по расписанию. Свои слова можно добавлять в любой момент.");
-    expect(ru.levelsDone(80)).toBe(`${ru.levelsDone(null)} Пройденные слова покрывают ≈80% обычного текста.`);
-    expect(tt.levelUp(5, 6, 61, 100)).toMatch(/^5 нче дәрәҗә.*6 нчы дәрәҗә.*≈61%/);
-    expect(tt.levelUp(5, 6, null, 100)).not.toContain("%");
-    expect(tt.levelsDone(80)).toBe(`${tt.levelsDone(null)}${tt.levelUp(5, 6, 80, 100).slice(tt.levelUp(5, 6, null, 100).length)}`);
-    expect(tt.levelsDone(80)).toContain("2 000");
-  });
-
-  it("names the levels screen and its button", () => {
+  it("names the levels screen and its button, and has no text of the levels by hundreds", () => {
     expect([ru.decksBtn, tt.decksBtn]).toEqual(["📚 Уровни", "📚 Дәрәҗәләр"]);
     expect([ru.levelsTitle, tt.levelsTitle]).toEqual(["📚 <b>Уровни</b>", "📚 <b>Дәрәҗәләр</b>"]);
-    expect(ru.levelProgress(4, 37, 100)).toBe("▶️ Уровень 4 · 37 из 100");
-    expect(tt.levelProgress(6, 37, 100)).toBe("▶️ 6 нчы дәрәҗә · 37/100");
-    expect(ru.openSkippedBtn("1–6")).toBe("Открыть пропущенные (1–6)");
     for (const d of [ru, tt]) expect(Object.keys(d).filter((k) => /^deck|Decks$/.test(k) && k !== "decksBtn")).toEqual([]);
+    const gone = ["levelUp", "levelsDone", "levelsPassed", "levelsSkipped", "levelProgress", "levelsAhead", "openSkippedBtn", "doneTotals", "levelTitle", "levelsCoverage"];
+    expect(KEYS.filter((k) => gone.includes(k))).toEqual([]);
+    const all = KEYS.flatMap((k) => [...texts(ru, k), ...texts(tt, k)]).join("\n");
+    expect(all).not.toMatch(/2 000|20 уровн|20 дәрәҗә/);
+  });
+
+  it("the parts of a level line of /levels", () => {
+    expect([ru.outOf(137, 400), ru.levelWillBe(500), ru.levelCoverage(45), ru.levelSoon]).toEqual(["137 из 400", "(будет 500)", "≈45 % текста", "скоро"]);
+    expect([tt.outOf(137, 400), tt.levelWillBe(500), tt.levelCoverage(45), tt.levelSoon]).toEqual(["137/400", "(500 булачак)", "текстның ≈45 %", "тиздән"]);
+  });
+
+  it("names the three orders of new words and says what each does", () => {
+    expect(MODES.map((m) => `${ru.modeName(m)} — ${ru.modeAbout(m)}`)).toEqual([
+      "Бот ведёт по темам — темы идут по порядку, основные слова подмешиваются; можно перескочить на другую тему",
+      "Сам выбираю тему — слова только из выбранной темы",
+      "По частоте — от самых нужных к редким, вперемешку",
+    ]);
+    expect(MODES.map((m) => tt.modeName(m))).toEqual(["Бот темалар буенча алып бара", "Теманы үзем сайлыйм", "Ешлык буенча"]);
+    for (const d of [ru, tt]) {
+      expect(d.modeName("zzz")).toBe("zzz");
+      expect(d.modeAbout("constructor")).toBe("");
+    }
+  });
+
+  it("names the groups of parts of speech in the plural", () => {
+    expect(POS_GROUPS.map((g) => ru.posGroupName(g))).toEqual(["существительные", "глаголы", "прилагательные", "наречия", "местоимения", "числительные", "служебные слова", "фразы"]);
+    expect(POS_GROUPS.map((g) => tt.posGroupName(g))).toEqual(["исемнәр", "фигыльләр", "сыйфатлар", "рәвешләр", "алмашлыклар", "саннар", "ярдәмлек сүзләр", "гыйбарәләр"]);
+    for (const d of [ru, tt]) for (const key of ["zzz", "toString", "__proto__"]) expect(d.posGroupName(key)).toBe(key);
+  });
+
+  it("the toasts of the checkboxes", () => {
+    expect([ru.needLevel, ru.levelEmpty, ru.needPos]).toEqual(["Нужен хотя бы один уровень", "В этом уровне пока нет слов", "Нужна хотя бы одна часть речи"]);
+    expect([tt.needLevel, tt.levelEmpty, tt.needPos]).toEqual(["Кимендә бер дәрәҗә кирәк", "Бу дәрәҗәдә әлегә сүзләр юк", "Кимендә бер сүз төркеме кирәк"]);
+    // A toast is at most 200 characters.
+    for (const d of [ru, tt]) for (const k of ["needLevel", "levelEmpty", "needPos", "staleButton", "chooseAbove"] as const) expect(d[k].length).toBeLessThanOrEqual(200);
+  });
+
+  it("says why no new word came and names the button that mends it", () => {
+    expect([ru.emptyTopic, ru.emptyPos, ru.emptyLevels, ru.emptyAllDone]).toEqual([
+      "Новых слов по вашим настройкам нет: тема закончилась.",
+      "Новых слов по вашим настройкам нет: в отмеченных частях речи слова кончились.",
+      "Новых слов по вашим настройкам нет: отмеченные уровни пройдены.",
+      "Все слова каталога в работе 🎉",
+    ]);
+    expect([ru.fixTopicBtn, ru.fixPosBtn, ru.fixLevelBtn("A2")]).toEqual(["Выбрать тему", "Включить все части речи", "Добавить уровень A2"]);
+    expect([tt.fixTopicBtn, tt.fixPosBtn, tt.fixLevelBtn("A2")]).toEqual(["Тема сайлау", "Барлык сүз төркемнәрен кабызу", "A2 дәрәҗәсен өстәү"]);
   });
 
   it("the empty state points to /levels and to own words, not to adding a deck", () => {
-    expect(ru.nothingToLearn).toBe("Пока учить нечего. Откройте уровень в /levels или напишите боту своё слово.");
-    expect(tt.nothingToLearn).toBe("Әлегә өйрәнерлек сүзләр юк. /levels командасы белән дәрәҗә ачыгыз яки ботка үз сүзегезне языгыз.");
+    expect(ru.nothingToLearn).toBe("Пока учить нечего. Отметьте уровень в /levels или напишите боту своё слово.");
+    expect(tt.nothingToLearn).toBe("Әлегә өйрәнерлек сүзләр юк. /levels командасы белән дәрәҗә билгеләгез яки ботка үз сүзегезне языгыз.");
     for (const d of [ru, tt]) {
       expect(d.nothingToLearn).toContain("/levels");
       expect(d.nothingToLearn).not.toMatch(/колод|тупланма/i);
@@ -198,7 +219,9 @@ describe("i18n dictionaries", () => {
     for (const d of [ru, tt]) for (const code of ["constructor", "toString", "__proto__", "hasOwnProperty"]) expect(d.posName(code)).toBe(code);
   });
 
-  it("names the language and the direction in settings", () => {
+  it("names the language, the load and the direction in settings", () => {
+    expect([ru.setMode(0.9), tt.setMode(0.9)]).toEqual(["🎯 Нагрузка: Оптимальная · 90%", "🎯 Йөкләнеш: Оптималь · 90%"]);
+    expect([ru.setTz("UTC+3"), tt.setTz("UTC+3")]).toEqual(["🕒 Часовой пояс: UTC+3", "🕒 Сәгать поясы: UTC+3"]);
     expect(ru.setLang).toBe("🌐 Язык: Русский");
     expect(tt.setLang).toBe("🌐 Тел: Татарча");
     expect((["tt_ru", "ru_tt", "both"] as const).map((d) => ru.setDir(d))).toEqual(
@@ -214,6 +237,9 @@ describe("i18n dictionaries", () => {
       expect(d.helpAdd).toContain("<code>рәхмәт</code>");
     }
     expect(ru.help).toContain("озвучка");
+    expect(ru.help).toContain("темы — по спецификациям уровней проекта „Мин татарча беләм!“ (КФУ)");
+    expect(tt.help).toContain("темалар — „Мин татарча беләм!“ проекты дәрәҗәләренең спецификацияләре буенча (КФУ)");
+    expect(ru.help).toContain("/levels — уровни, темы, порядок слов");
   });
 
   it("describes the bot and its commands in both languages", () => {
@@ -224,5 +250,7 @@ describe("i18n dictionaries", () => {
       expect(d.botAbout.length).toBeLessThanOrEqual(512);
     }
     expect(ru.botAbout).toContain("татарские слова");
+    expect(ru.botAbout).toBe("Учу татарские слова по методу интервальных повторений, как Anki: слова по уровням A1–C1 и темам, свои слова со ссылками, AI-колоды и одно напоминание в день.");
+    expect(tt.botAbout).toContain("A1–C1 дәрәҗәләре һәм темалар буенча сүзләр");
   });
 });

@@ -5,7 +5,8 @@ import type { Dict } from "./ru";
  * Only the letters ә ө ү җ ң һ (U+04D9, U+04E9, U+04AF, U+0497, U+04A3, U+04BB and capitals) besides the Russian
  * alphabet; test/i18n/dict.test.ts rejects look-alikes. Numbers never take a suffix here («кайтканчы 8 минут бар»,
  * «Вакыты: 09:00», «37/100»), so no text depends on how a number is read aloud; the one exception is the ordinal of a
- * level («4 нче дәрәҗә»), where case endings go on the word «дәрәҗә».
+ * level («4 нче дәрәҗә»), where case endings go on the word «дәрәҗә». The levels of the scale are named by their
+ * codes, A1…C1, as in Russian; a case ending goes on the word «дәрәҗә» after the code («A2 дәрәҗәсен өстәү»).
  */
 const POS: Record<string, string> = {
   n: "исем", v: "фигыль", adj: "сыйфат", adv: "рәвеш", pron: "алмашлык", num: "сан",
@@ -16,7 +17,18 @@ const POS: Record<string, string> = {
 const BACK_ORDINALS = [6, 9, 10, 16, 19];
 const levelName = (n: number) => `${n} ${BACK_ORDINALS.includes(n) ? "нчы" : "нче"} дәрәҗә`;
 
-const covered = (pct: number | null) => (pct == null ? "" : ` Үтелгән сүзләр гадәти текстның ≈${pct}% өлешен тәшкил итә.`);
+/** The eight groups of parts of speech of the settings, by the key of the group (levels/scale.ts), in the plural. */
+const POS_GROUPS: Record<string, string> = {
+  n: "исемнәр", v: "фигыльләр", adj: "сыйфатлар", adv: "рәвешләр", pron: "алмашлыклар", num: "саннар", func: "ярдәмлек сүзләр", phr: "гыйбарәләр",
+};
+
+/** The three orders of new words by their code (levels/scale.ts): the name, and what the order does. */
+const MODES: Record<string, [name: string, about: string]> = {
+  guided: ["Бот темалар буенча алып бара", "темалар тәртип буенча бара, төп сүзләр алар арасына кушыла; башка темага күчеп була"],
+  topic: ["Теманы үзем сайлыйм", "сүзләр сайланган темадан гына"],
+  freq: ["Ешлык буенча", "иң кирәкле сүзләрдән сирәкләренә таба, катнаш"],
+};
+const byCode = <T>(map: Record<string, T>, code: string): T | undefined => (Object.hasOwn(map, code) ? map[code] : undefined);
 
 export const tt: Dict = {
   again: "Яңадан",
@@ -38,9 +50,15 @@ export const tt: Dict = {
   decimal: ",",
   doneTitle: "✅ <b>Хәзергә бетте!</b>",
   doneToday: (reviews, learned) => `Бүген: ${reviews} кабатлау · +${learned} өйрәнелде`,
-  doneTotals: (l, k, g, n) => `Барлыгы: 🏆 ${l} · 🌳 ${k} · 🌿 ${g} · 🌱 ${n}`,
   doneNextLearning: (after) => `Ныгытудагы карточкалар кайтканчы ${after} бар. Искә төшерермен.`,
   streak: (d) => `🔥 Рәттән ${d} көн`,
+  emptyTopic: "Көйләүләрегез буенча яңа сүзләр юк: тема бетте.",
+  emptyPos: "Көйләүләрегез буенча яңа сүзләр юк: билгеләнгән сүз төркемнәрендә сүзләр бетте.",
+  emptyLevels: "Көйләүләрегез буенча яңа сүзләр юк: билгеләнгән дәрәҗәләр үтелде.",
+  emptyAllDone: "Каталогтагы барлык сүзләр дә өйрәнелә 🎉",
+  fixTopicBtn: "Тема сайлау",
+  fixPosBtn: "Барлык сүз төркемнәрен кабызу",
+  fixLevelBtn: (code) => `${code} дәрәҗәсен өстәү`,
   addWords: "➕ Сүз өстәү",
   decksBtn: "📚 Дәрәҗәләр",
   add: "✅ Өстәү",
@@ -64,7 +82,7 @@ export const tt: Dict = {
   staleButton: "Бу төймә искергән инде",
   nothingToUndo: "Кире аласы бәя юк",
   undone: "Бәя кире алынды",
-  nothingToLearn: "Әлегә өйрәнерлек сүзләр юк. /levels командасы белән дәрәҗә ачыгыз яки ботка үз сүзегезне языгыз.",
+  nothingToLearn: "Әлегә өйрәнерлек сүзләр юк. /levels командасы белән дәрәҗә билгеләгез яки ботка үз сүзегезне языгыз.",
   learnBtn: "▶ Өйрәнү",
   searching: "🔎 Сүзләрне эзлим…",
   askWords: (host) => `🔗 ${host} сылтамасын истә калдырдым. Андагы сүзләрне җибәрегез — сылтаманы һәрберсенә беркетермен.\n<i>10 минут көтәм.</i>`,
@@ -90,12 +108,15 @@ export const tt: Dict = {
     `📊 <b>Алгарыш</b> · бөтен вакыт эчендә\n\n🎓 Дәрәҗәләр: ${s.levels}${s.coverage == null ? "" : ` · текстта таныш сүзләр: ≈${s.coverage}%`}\n🏆 Өйрәндем: ${s.learned}\n🌳 Беләм: ${s.known}\n🌿 Өйрәнәм: ${s.learning}\n🌱 Алда яңа сүзләр: ${s.fresh}\n\n🧠 Хәтер суммасы: ${s.memory} көн\n<i>башланган барлык сүзләр хәтердә барлыгы ничә көн саклана</i>\n🔥 Рәттән ${s.streak} көн\n🔁 Барлык кабатлаулар: ${s.total} · 30 көндә: ${s.r30}\n🎯 30 көндә истә калу: ${s.retention}\n\n🗓 7 көнгә фараз: ${s.forecast}`,
   settingsTitle: "⚙️ <b>Көйләүләр</b>\nҮзгәртү өчен төймәгә басыгыз.",
   setLang: "🌐 Тел: Татарча",
-  setMode: (r) => `🎯 Режим: ${r === 0.85 ? "Җиңел" : r === 0.95 ? "Көчәйтелгән" : "Оптималь"} · ${Math.round(r * 100)}%`,
+  setMode: (r) => `🎯 Йөкләнеш: ${r === 0.85 ? "Җиңел" : r === 0.95 ? "Көчәйтелгән" : "Оптималь"} · ${Math.round(r * 100)}%`,
   setNew: (n) => `🆕 Көненә яңа сүзләр: ${n}`,
   setRemind: (t) => `⏰ Искә төшерү: ${t}`,
+  setTz: (tz) => `🕒 Сәгать поясы: ${tz}`,
   setDir: (d) => `↔️ Юнәлеш: ${d === "both" ? "икесе дә" : d === "ru_tt" ? "русча → татарча" : "татарча → русча"}`,
   setAuto: (on) => `🔊 Автомат тавыш: ${on ? "кабызылган" : "сүндерелгән"}`,
-  help: "<b>Командалар</b>\n/learn — кабатлау\n/levels — дәрәҗәләр\n/gen тема — AI-тупланма\n/stats — алгарыш\n/settings — көйләүләр\n/undo — бәяне кире алу\n\nҮз сүзегезне өстәү өчен, аны чатка языгыз. Исемлек итеп тә була — 20 юлга кадәр. Шул ук хәбәрдәге сылтама карточкага беркетелә.\n\n<i>Чыганаклар: сүзләрнең ешлыгы — corpus.tatar язма корпусы; мисалларның бер өлеше — Tatoeba (CC BY 2.0 FR); тавыш — speech.tatar сөйләм синтезы сервисы.</i>",
+  setHub: "📚 Дәрәҗәләр, темалар, сүзләр тәртибе",
+  tzText: "🕒 <b>Сәгать поясы</b>\nХәзерге вакытыгыз күрсәтелгән юлны сайлагыз.",
+  help: "<b>Командалар</b>\n/learn — кабатлау\n/levels — дәрәҗәләр, темалар, сүзләр тәртибе\n/gen тема — AI-тупланма\n/stats — алгарыш\n/settings — көйләүләр\n/undo — бәяне кире алу\n\nҮз сүзегезне өстәү өчен, аны чатка языгыз. Исемлек итеп тә була — 20 юлга кадәр. Шул ук хәбәрдәге сылтама карточкага беркетелә.\n\n<i>Чыганаклар: сүзләрнең ешлыгы — corpus.tatar язма корпусы; темалар — „Мин татарча беләм!“ проекты дәрәҗәләренең спецификацияләре буенча (КФУ); мисалларның бер өлеше — Tatoeba (CC BY 2.0 FR); тавыш — speech.tatar сөйләм синтезы сервисы.</i>",
   helpAdd: "Сүзне яки гыйбарәне чатка языгыз, мәсәлән <code>рәхмәт</code>. Берьюлы берничә юл язарга була, чыганакка сылтаманы шул ук хәбәргә өстәгез.",
   maintenance: "⏳ Техник тәнәфес: бушлай серверның көнлек лимиты бетте. Яңадан эшли башлау вакыты: 03:00 (Мәскәү вакыты). Алгарыш сакланган.",
   unknownCommand: "Мондый команданы белмим. /help",
@@ -108,23 +129,38 @@ export const tt: Dict = {
   posName: (code) => Object.hasOwn(POS, code) ? POS[code]! : code,
   reportSent: "Шикаять җибәрелде, рәхмәт",
   reportAlready: "Сез бу карточка турында инде хәбәр иттегез",
-  levelTitle: levelName,
-  levelUp: (from, to, pct, total) => `${total ? `${levelName(from)}нең барлык ${total} сүзе дә өйрәнелә. ` : ""}${levelName(to)}не ачам.${covered(pct)}`,
-  levelsDone: (pct) => `Барлык 2 000 сүз дә өйрәнелә! 🎉 Алга таба — график буенча кабатлаулар. Үз сүзләрегезне теләсә кайчан өстәп була.${covered(pct)}`,
   levelsTitle: "📚 <b>Дәрәҗәләр</b>",
-  levelsPassed: (list) => `✅ Үтелгән: ${list}`,
-  levelsSkipped: (list) => `⏭ Калдырылган: ${list}`,
-  levelProgress: (n, seen, total) => `▶️ ${levelName(n)} · ${seen}/${total}`,
-  levelsAhead: (n) => `🔒 Алда: ${n}`,
-  levelsCoverage: (pct) => `📖 Текстта таныш сүзләр: ≈${pct}%`,
-  openSkippedBtn: (range) => `Калдырылган дәрәҗәләрне ачу (${range})`,
+  outOf: (n, total) => `${n}/${total}`,
+  levelWillBe: (size) => `(${size} булачак)`,
+  levelCoverage: (pct) => `текстның ≈${pct} %`,
+  levelSoon: "тиздән",
+  modeName: (mode) => byCode(MODES, mode)?.[0] ?? mode,
+  modeAbout: (mode) => byCode(MODES, mode)?.[1] ?? "",
+  hubTopicNow: (topic) => `хәзер ${topic}`,
+  hubNoTopic: "тема сайланмаган",
+  hubPos: (list) => `🧩 Сүз төркемнәре: ${list}`,
+  posGroupName: (key) => byCode(POS_GROUPS, key) ?? key,
+  hubLevelsBtn: "Дәрәҗәләр",
+  hubPosBtn: "Сүз төркемнәре",
+  hubModeBtn: "Сүзләр тәртибе",
+  hubTopicsBtn: "Темалар",
+  doneBtn: "Әзер",
+  levelChecksHint: "Яңа сүзләр билгеләнгән дәрәҗәләрдән алына. Башланган сүзләр һәрхәлдә кабатлана.",
+  posTitle: "🧩 <b>Сүз төркемнәре</b>",
+  posChecksHint: "Яңа сүзләр билгеләнгән сүз төркемнәреннән генә алына. Башланган сүзләр һәрхәлдә кабатлана.",
+  modesTitle: "🧭 <b>Яңа сүзләр тәртибе</b>",
+  topicsText: "🗂 <b>Темалар</b>\nТемага басыгыз — яңа сүзләр шул темадан биреләчәк. Саннар: темадагы сүзләрнең ничәсе башланган.",
+  noTopicBtn: "Сайламау",
+  needLevel: "Кимендә бер дәрәҗә кирәк",
+  levelEmpty: "Бу дәрәҗәдә әлегә сүзләр юк",
+  needPos: "Кимендә бер сүз төркеме кирәк",
   cmdStart: "Башлау",
   cmdLearn: "Сүзләрне кабатлау",
-  cmdLevels: "Дәрәҗәләр",
+  cmdLevels: "Дәрәҗәләр, темалар, сүзләр тәртибе",
   cmdGen: "Тема буенча AI-тупланма",
   cmdStats: "Алгарыш",
   cmdSettings: "Көйләүләр",
   cmdUndo: "Бәяне кире алу",
   cmdHelp: "Ярдәм",
-  botAbout: "Татар сүзләрен аралыклы кабатлау ысулы белән өйрәтәм, Anki кушымтасындагы кебек: иң еш очрый торган 2 000 сүз 20 дәрәҗәдә, сылтамалы үз сүзләрегез, AI-тупланмалар һәм көненә бер искә төшерү.",
+  botAbout: "Татар сүзләрен аралыклы кабатлау ысулы белән өйрәтәм, Anki кушымтасындагы кебек: A1–C1 дәрәҗәләре һәм темалар буенча сүзләр, сылтамалы үз сүзләрегез, AI-тупланмалар һәм көненә бер искә төшерү.",
 };

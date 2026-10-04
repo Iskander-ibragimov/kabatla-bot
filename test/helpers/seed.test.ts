@@ -110,7 +110,7 @@ describe("seedCatalog and the new columns", () => {
   it("seedTopics fills the topics table with «Основа» and the twenty topics, by number", async () => {
     await seedTopics(env.DB);
     expect(TOPICS.map((t) => t.no)).toEqual(Array.from({ length: 21 }, (_, i) => i));
-    expect(await new Repo(env.DB).topicsList()).toEqual(TOPICS);
+    expect((await new Repo(env.DB).levelsData(1, false)).topics).toEqual(TOPICS);
   });
 
   it("recountProgress sets the counters of started words to what the cards and the own words say: a word once, own words under (0, 0), a card never graded not at all, a catalog word the learner owns a copy of as started", async () => {

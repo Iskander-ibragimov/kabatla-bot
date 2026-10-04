@@ -58,11 +58,13 @@ export async function getOrCreate(repo: Repo, tgId: number, chatId: number, tgLa
   return { user: (await repo.getUserByTg(tgId))!, created: true };
 }
 
-export type SettingKey = "lang" | "retention" | "newPerDay" | "remindAt" | "direction" | "autoplay";
+export type SettingKey = "lang" | "retention" | "newPerDay" | "remindAt" | "direction" | "autoplay" | "tzOffsetMin";
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
 export const RETENTIONS = [0.85, 0.9, 0.95] as const;
 export const NEW_PER_DAY = [5, 10, 20] as const;
 export const REMIND_TIMES = ["08:00", "09:00", "12:00", "19:00", "21:00"] as const;
+/** The time zones the settings offer, as minutes east of UTC: UTC+2 … UTC+12 by the hour. */
+export const TZ_OFFSETS: readonly number[] = Array.from({ length: 11 }, (_, i) => 120 + i * 60);
 
 export async function setSetting(repo: Repo, userId: number, key: SettingKey, value: unknown, now = Date.now()): Promise<void> {
   const bad = () => { throw new Error(`invalid ${key}: ${String(value)}`); };
@@ -73,11 +75,17 @@ export async function setSetting(repo: Repo, userId: number, key: SettingKey, va
     case "remindAt": if (typeof value !== "string" || !HHMM.test(value)) bad(); break;
     case "direction": if (!["tt_ru", "ru_tt", "both"].includes(value as string)) bad(); break;
     case "autoplay": if (typeof value !== "boolean") bad(); break;
+    case "tzOffsetMin": if (!TZ_OFFSETS.includes(value as number)) bad(); break;
   }
   const patch = { [key]: value } as Partial<User>;
-  if (key === "remindAt") {
+  // The reminders are kept as moments: a new hour or a new clock moves the next one.
+  if (key === "remindAt" || key === "tzOffsetMin") {
     const u = await repo.getUser(userId);
-    if (u) patch.nextDailyAt = nextOccurrence(u.tzOffsetMin, value as string, now);
+    if (u) {
+      const after = { ...u, ...patch };
+      patch.nextDailyAt = nextOccurrence(after.tzOffsetMin, after.remindAt, now);
+      if (key === "tzOffsetMin") patch.nextEveningAt = nextOccurrence(after.tzOffsetMin, EVENING_AT, now);
+    }
   }
   await repo.updateUser(userId, patch);
 }

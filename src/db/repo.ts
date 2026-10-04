@@ -136,6 +136,9 @@ const topicRows = (rows: Record<string, unknown>[]): TopicRow[] =>
   rows.map((r) => ({ no: r.no as number, slug: r.slug as string, titleRu: r.title_ru as string, titleTt: r.title_tt as string }));
 /** `mask` with the bits of `bits` flipped, as SQL: SQLite has no operator for it. */
 const flipped = (mask: string, bits: string) => `((${mask} | ${bits}) - (${mask} & ${bits}))`;
+/** As SQL: true when `level` is a level of the scale and the catalog has a card of it. */
+const levelHasCards = (level: string) =>
+  `EXISTS (SELECT 1 FROM decks d WHERE d.level_no = ${level} AND d.level_no BETWEEN 1 AND ${LEVELS.length} AND d.kind = 'catalog' AND d.total > 0)`;
 const todayOf = (rows: Record<string, unknown>[]) => ({ reviewsToday: rows[0]!.reviews as number, learnedToday: rows[0]!.learned as number });
 /**
  * Spaces, . , ! ? … : ; « » " ' ( ) - – — and the typographic quotes “ ” „ ‘ ’ at either end of a word or phrase.
@@ -195,16 +198,27 @@ export class Repo {
    */
   async toggleLevel(userId: number, no: number): Promise<{ changed: boolean; hasCards: boolean }> {
     const levels = flipped("users.levels", "?2");
-    const hasCards = (level: string) => `EXISTS (SELECT 1 FROM decks d WHERE d.level_no = ${level} AND d.level_no BETWEEN 1 AND ${LEVELS.length} AND d.kind = 'catalog' AND d.total > 0)`;
     const [write, read] = await this.db.batch<{ has_cards: number }>([
       this.db.prepare(
         `UPDATE users SET levels = ${levels},
            topic_no = CASE WHEN EXISTS (SELECT 1 FROM catalog_groups g WHERE g.topic_no = users.topic_no AND g.total > 0 AND (${levels} >> (g.level - 1)) & 1) THEN topic_no END
-         WHERE id = ?1 AND (${levels} & ${ALL_LEVELS}) != 0 AND ${hasCards("?3")}`,
+         WHERE id = ?1 AND (${levels} & ${ALL_LEVELS}) != 0 AND ${levelHasCards("?3")}`,
       ).bind(userId, levelBit(no), no),
-      this.db.prepare(`SELECT ${hasCards("?1")} AS has_cards`).bind(no),
+      this.db.prepare(`SELECT ${levelHasCards("?1")} AS has_cards`).bind(no),
     ]);
     return { changed: (write!.meta.changes ?? 0) > 0, hasCards: read!.results[0]!.has_cards === 1 };
+  }
+  /**
+   * Checks level `no` for the user and never unchecks it: one UPDATE that adds the level to the stored set, so a
+   * second tap on a button that adds a level, or two taps that arrive together, leave it checked. Nothing is written
+   * when the catalog has no card of the level. Returns the set of levels stored after the statement. One D1 call.
+   */
+  async checkLevel(userId: number, no: number): Promise<number> {
+    const [, read] = await this.db.batch<{ levels: number }>([
+      this.db.prepare(`UPDATE users SET levels = levels | ?2 WHERE id = ?1 AND ${levelHasCards("?3")}`).bind(userId, levelBit(no), no),
+      this.db.prepare("SELECT levels FROM users WHERE id = ?").bind(userId),
+    ]);
+    return read!.results[0]!.levels;
   }
   /**
    * Checks or unchecks the part-of-speech group at bit index `bit`, in one UPDATE that looks at the stored set and
@@ -295,17 +309,10 @@ export class Repo {
   private topicsStmt(): D1PreparedStatement {
     return this.db.prepare("SELECT no, slug, title_ru, title_tt FROM topics ORDER BY no");
   }
-  /** The levels of the scale the catalog has a deck of, by number, with the cards in each and its coverage. */
-  async levelDecks(): Promise<LevelDeck[]> {
-    return levelDecksOf((await this.levelDecksStmt().all<Record<string, unknown>>()).results);
-  }
-  /** The topics of the catalog, by number. */
-  async topicsList(): Promise<TopicRow[]> {
-    return topicRows((await this.topicsStmt().all<Record<string, unknown>>()).results);
-  }
   /**
-   * What the screens of the levels are built from, in one D1 call: what `levelDecks`, `catalogTotals`, `progress`
-   * and `topicsList` give, and, with `own`, the decks the user owns (`ownDecks`); without it that list is empty and
+   * What the screens of the levels are built from, in one D1 call: the levels of the scale the catalog has a deck of,
+   * by number, with the cards in each and its coverage; what `catalogTotals` and `progress` give; the topics of the
+   * catalog, by number; and, with `own`, the decks the user owns (`ownDecks`); without it that list is empty and
    * is not read. Counters only: no note and no card is read, whatever the size of the catalog.
    */
   async levelsData(userId: number, own: boolean): Promise<LevelsData> {

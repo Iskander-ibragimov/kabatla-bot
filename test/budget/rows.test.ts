@@ -326,6 +326,33 @@ describe("D1 rows read by /levels and by the reminder of one due learner with th
     expect(await rowsOf(async () => expect(await setTopic(repo, user, 7)).toBe("ok"))).toBeLessThanOrEqual(BUDGET.levels);
   });
 
+  it("all five levels, guided, middle, both: every screen of /levels and of the settings at the bot, and every tap on one, is within the budget of a settings screen", async () => {
+    await seedTopics(env.DB);
+    await learner(await fullCatalog(), { levels: "all", pos: "all", mode: "guided", where: "middle", direction: "both" });
+    const db = readingDb(env.DB);
+    const h = harness(db, { now });
+    const rows: [string, number][] = [];
+    const run = async (name: string, update: () => Promise<unknown>) => { db.rowsRead = 0; await update(); rows.push([name, db.rowsRead]); };
+    await run("/levels", () => h.text("/levels"));
+    for (const data of ["hub:lv", "lv:t:3", "lv:t:3", "hub:pos", "ps:t:5", "ps:t:5", "hub:mode", "md:topic", "md:guided", "hub:tp", "tp:7", "tp:none", "hub"]) await run(data, () => h.press(data));
+    await run("/settings", () => h.text("/settings"));
+    for (const data of ["set:tz", "tz:300", "set:tz", "set:back", "set:hub"]) await run(data, () => h.press(data, h.tg.lastMessageId()));
+    expect(h.tg.of("answerCallbackQuery").map((c) => c.payload.text).filter(Boolean)).toEqual([]);
+    for (const [name, read] of rows) expect(read, name).toBeLessThanOrEqual(BUDGET.levels);
+  });
+
+  it.each(["tt_ru", "both"] as const)("A2 alone, numerals only, guided, middle, %s: a button of the done screen that widens the settings changes them and reads the queue for the first time under them", async (direction) => {
+    await seedTopics(env.DB);
+    const { repo, userId } = await learner(await fullCatalog(), { levels: "A2", pos: "num", mode: "guided", where: "middle", direction });
+    const db = readingDb(env.DB);
+    const h = harness(db, { now });
+    const rowsOf = async (data: string) => { db.rowsRead = 0; await h.press(data); return db.rowsRead; };
+    expect(await rowsOf("fix:pos")).toBeLessThanOrEqual(BUDGET.first);
+    expect(await rowsOf("fix:lv:1")).toBeLessThanOrEqual(BUDGET.first);
+    expect(await repo.getUser(userId)).toMatchObject({ posGroups: 255, levels: 0b11 });
+    expect(h.tg.of("sendMessage")).toHaveLength(2);
+  });
+
   it("all five levels, a learner who went over to both directions with half the catalog started, own words typed before and after the catalog was loaded: the same budget", async () => {
     // The ids of the own words enclose the notes of the catalog, and a reverse card waits in state 'new' for every
     // started word, 1 925 of them: neither the reminder nor /levels may read those cards.

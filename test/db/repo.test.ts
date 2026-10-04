@@ -67,7 +67,7 @@ describe("repo", () => {
     await repo.updateUser(user.id, { level: 21 });
     expect(await repo.userDeckIds(user.id)).not.toContain(ids[21]);
     // /levels goes by the scale A1…C1 (1–5): neither deck is a level of it.
-    expect(await repo.levelDecks()).toEqual([]);
+    expect((await repo.levelsData(user.id, false)).decks).toEqual([]);
     expect(await repo.startLevel(21)).toEqual({ deckId: (await repo.getDeckBySlug("l20"))!.id, levelNo: 20 });
     expect((await repo.findCatalogNotes(["авыл"])).size).toBe(0);
   });

@@ -90,7 +90,7 @@ describe("views", () => {
   });
 
   it("done screen shows the day, the next learning card and the streak; the totals for all time are not on it", () => {
-    const { text, keyboard } = renderDone({ reviewsToday: 24, learnedToday: 3, nextLearningInMs: 480_000, streak: 5 }, "ru");
+    const { text, keyboard } = renderDone({ reviewsToday: 24, learnedToday: 3, nextLearningInMs: 480_000, streak: 5 }, "ru", null);
     expect(text.startsWith("✅")).toBe(true);
     expect(text).toContain("Сегодня: 24 повт. · +3 выучено");
     expect(text).not.toContain("Всего:");
@@ -98,6 +98,43 @@ describe("views", () => {
     expect(text).toContain("через 8 мин");
     expect(text).toContain("🔥 Серия: 5 дн.");
     expect(keyboard.flat().map((b) => [b.text, b.callback_data])).toEqual([["➕ Добавить слова", "help:add"], ["📚 Уровни", "levels"]]);
+  });
+
+  describe("done screen when no new word came although the day allows more", () => {
+    const summary = { reviewsToday: 24, learnedToday: 3, nextLearningInMs: 480_000, streak: 5 };
+    const plain = renderDone(summary, "ru", null);
+    const done = (empty: Parameters<typeof renderDone>[2], lang: "ru" | "tt" = "ru") => {
+      const r = renderDone(summary, lang, empty);
+      return { last: r.text.split("\n").slice(-2), rows: r.keyboard.map((row) => row.map((b) => [b.text, b.callback_data])), text: r.text };
+    };
+    const BELOW = [["➕ Добавить слова", "help:add"], ["📚 Уровни", "levels"]];
+
+    it("says why in its last line, after an empty one, and puts the button that mends it above the other two", () => {
+      expect(done({ kind: "pickTopic" })).toEqual({
+        text: `${plain.text}\n\nНовых слов по вашим настройкам нет: тема закончилась.`,
+        last: ["", "Новых слов по вашим настройкам нет: тема закончилась."], rows: [[["Выбрать тему", "fix:topic"]], BELOW],
+      });
+      expect(done({ kind: "allPos" })).toMatchObject({
+        last: ["", "Новых слов по вашим настройкам нет: в отмеченных частях речи слова кончились."], rows: [[["Включить все части речи", "fix:pos"]], BELOW],
+      });
+      expect(done({ kind: "addLevel", level: 2 })).toMatchObject({
+        last: ["", "Новых слов по вашим настройкам нет: отмеченные уровни пройдены."], rows: [[["Добавить уровень A2", "fix:lv:2"]], BELOW],
+      });
+      expect(done({ kind: "addLevel", level: 5 }).rows[0]).toEqual([["Добавить уровень C1", "fix:lv:5"]]);
+    });
+
+    it("says that every word of the catalog is in work, with no button to add", () => {
+      expect(done({ kind: "allDone" })).toMatchObject({ last: ["", "Все слова каталога в работе 🎉"], rows: [BELOW] });
+    });
+
+    it("is in Tatar for a tt user", () => {
+      expect(done({ kind: "pickTopic" }, "tt")).toMatchObject({ last: ["", "Көйләүләрегез буенча яңа сүзләр юк: тема бетте."], rows: [[["Тема сайлау", "fix:topic"]], [["➕ Сүз өстәү", "help:add"], ["📚 Дәрәҗәләр", "levels"]]] });
+      expect(done({ kind: "allPos" }, "tt")).toMatchObject({ last: ["", "Көйләүләрегез буенча яңа сүзләр юк: билгеләнгән сүз төркемнәрендә сүзләр бетте."] });
+      expect(done({ kind: "allPos" }, "tt").rows[0]).toEqual([["Барлык сүз төркемнәрен кабызу", "fix:pos"]]);
+      expect(done({ kind: "addLevel", level: 3 }, "tt")).toMatchObject({ last: ["", "Көйләүләрегез буенча яңа сүзләр юк: билгеләнгән дәрәҗәләр үтелде."] });
+      expect(done({ kind: "addLevel", level: 3 }, "tt").rows[0]).toEqual([["B1 дәрәҗәсен өстәү", "fix:lv:3"]]);
+      expect(done({ kind: "allDone" }, "tt").last).toEqual(["", "Каталогтагы барлык сүзләр дә өйрәнелә 🎉"]);
+    });
   });
 
   const draft = (over: Partial<PreviewItem> = {}): PreviewItem =>
@@ -312,9 +349,10 @@ describe("views", () => {
     const fits = (text: string) => expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
     const card = (over: Partial<CardView>, lead?: string, lang: "ru" | "tt" = "ru") => renderCard(view(over), counts, iv, true, lang, lead).text;
     const WORD = `${"ышанычлы ".repeat(30)}кеше`;
-    const LEAD = ru.levelUp(19, 20, 79, 100);
+    // A line that stands before a card: its text is of no matter here, its length is.
+    const LEAD = "Бот обновился: уровни A1–C1, темы и порядок слов — в /levels";
 
-    it("an ordinary card is shown whole, and the lead line of a new level stands before it", () => {
+    it("an ordinary card is shown whole, and the lead line stands before it", () => {
       const plain = card({});
       expect(plain).not.toContain("…");
       expect(card({}, LEAD)).toBe(`${LEAD}\n\n${plain}`);
@@ -354,7 +392,7 @@ describe("views", () => {
       const word = "ә".repeat(3000);
       for (const direction of ["tt_ru", "ru_tt"] as const) {
         const text = card({ direction, word, transcription: "ә".repeat(3000), pos: "post", translation: "я".repeat(3000), exampleTt: "ә".repeat(3000), exampleRu: "я".repeat(3000), sourceUrl: `https://${"a".repeat(480)}.example/x` },
-          (lang === "ru" ? ru : tt).levelUp(19, 20, 79, 100), lang);
+          LEAD, lang);
         fits(text);
         expect(text).toContain(`<b>${word}</b>`);
         expect(text).not.toContain("<blockquote>");
@@ -436,7 +474,7 @@ describe("views", () => {
     expect(card.keyboard.slice(0, 2).flat().map((b) => b.text)).toEqual(["Яңадан <10мин", "Авыр 1көн", "Яхшы 2көн", "Җиңел 4көн"]);
     expect(card.keyboard[2]!.map((b) => b.text)).toEqual(["🔊", "↩️ Кире алу", "⚑"]);
     expect(card.text).toContain("🌿 Өйрәнәм · хәтердә ~2 көн · кабатлау №4");
-    const done = renderDone({ reviewsToday: 24, learnedToday: 3, nextLearningInMs: 480_000, streak: 5 }, "tt");
+    const done = renderDone({ reviewsToday: 24, learnedToday: 3, nextLearningInMs: 480_000, streak: 5 }, "tt", null);
     expect(done.text).toContain("Бүген: 24 кабатлау · +3 өйрәнелде");
     expect(done.text).not.toContain("Барлыгы:");
     expect(done.text).toContain("8 минут");
@@ -450,10 +488,16 @@ describe("views", () => {
   });
 
   it("settings and the language choice name both languages in their own words", () => {
-    const user = { lang: "ru", retention: 0.9, newPerDay: 10, remindAt: "09:00", direction: "tt_ru", autoplay: false } as User;
+    const user = { lang: "ru", retention: 0.9, newPerDay: 10, remindAt: "09:00", tzOffsetMin: 180, direction: "tt_ru", autoplay: false } as User;
     const labels = (u: User) => renderSettings(u).keyboard.flat().map((b) => b.text);
-    expect(labels(user)).toEqual(["🌐 Язык: Русский", "🎯 Режим: Оптимальный · 90%", "🆕 Новых в день: 10", "⏰ Напоминание: 09:00", "↔️ Направление: татарский → русский", "🔊 Автоозвучка: выкл"]);
-    expect(labels({ ...user, lang: "tt", direction: "ru_tt" })).toEqual(["🌐 Тел: Татарча", "🎯 Режим: Оптималь · 90%", "🆕 Көненә яңа сүзләр: 10", "⏰ Искә төшерү: 09:00", "↔️ Юнәлеш: русча → татарча", "🔊 Автомат тавыш: сүндерелгән"]);
+    expect(labels(user)).toEqual([
+      "🌐 Язык: Русский", "🎯 Нагрузка: Оптимальная · 90%", "🆕 Новых в день: 10", "⏰ Напоминание: 09:00", "🕒 Часовой пояс: UTC+3",
+      "↔️ Направление: татарский → русский", "🔊 Автоозвучка: выкл", "📚 Уровни, темы, порядок слов",
+    ]);
+    expect(labels({ ...user, lang: "tt", direction: "ru_tt" })).toEqual([
+      "🌐 Тел: Татарча", "🎯 Йөкләнеш: Оптималь · 90%", "🆕 Көненә яңа сүзләр: 10", "⏰ Искә төшерү: 09:00", "🕒 Сәгать поясы: UTC+3",
+      "↔️ Юнәлеш: русча → татарча", "🔊 Автомат тавыш: сүндерелгән", "📚 Дәрәҗәләр, темалар, сүзләр тәртибе",
+    ]);
     expect(renderSettings({ ...user, lang: "tt" }).text).toContain("Көйләүләр");
     for (const lang of ["ru", "tt"] as const) {
       expect(renderOnboarding({ kind: "lang" }, lang).keyboard.flat().map((b) => [b.text, b.callback_data])).toEqual([["Русский", "ob:ru"], ["Татарча", "ob:tt"]]);

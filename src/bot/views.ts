@@ -1,6 +1,7 @@
 import type { InlineKeyboardButton } from "grammy/types";
 import { type Lang, type Mem, type Rating, memoryDays, stage } from "../srs/fsrs";
 import { dict } from "../i18n";
+import { levelCode } from "../levels/scale";
 import { esc } from "../tg/html";
 
 export type Button = InlineKeyboardButton.CallbackButton;
@@ -8,8 +9,8 @@ export type Keyboard = Button[][];
 export interface Rendered { text: string; keyboard: Keyboard }
 
 import type { CardDraft, Duplicate } from "../content/service";
-import type { CardView, Counts, DaySummary, Feedback } from "../review/service";
-export type { CardView, Counts, DaySummary, Feedback };
+import type { CardView, Counts, DaySummary, EmptyReason, Feedback } from "../review/service";
+export type { CardView, Counts, DaySummary, EmptyReason, Feedback };
 /** What a preview shows of a card that is not saved yet. */
 export type PreviewItem = Pick<CardDraft, "word" | "transcription" | "pos" | "translation" | "exampleTt" | "exampleRu" | "sourceUrl" | "ai">;
 
@@ -194,13 +195,26 @@ export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, str
   return { text, keyboard };
 }
 
-export function renderDone(s: DaySummary, lang: Lang): Rendered {
+/**
+ * The screen that ends a session. `empty`: why no new word came although the day allows more; it is said in the last
+ * line, with the button that mends it above the other two, when there is something to mend.
+ */
+export function renderDone(s: DaySummary, lang: Lang, empty: EmptyReason | null): Rendered {
   const t = dict(lang);
   const lines: string[] = [];
   lines.push(t.doneTitle, t.doneToday(s.reviewsToday, s.learnedToday));
   if (s.nextLearningInMs != null) lines.push("", t.doneNextLearning(formatLong(s.nextLearningInMs, lang)));
   if (s.streak > 0) lines.push(t.streak(s.streak));
-  return { text: lines.join("\n"), keyboard: [[btn(t.addWords, "help:add"), btn(t.decksBtn, "levels")]] };
+  const keyboard: Keyboard = [[btn(t.addWords, "help:add"), btn(t.decksBtn, "levels")]];
+  if (empty) {
+    const [why, fix] = empty.kind === "pickTopic" ? [t.emptyTopic, btn(t.fixTopicBtn, "fix:topic")]
+      : empty.kind === "allPos" ? [t.emptyPos, btn(t.fixPosBtn, "fix:pos")]
+      : empty.kind === "addLevel" ? [t.emptyLevels, btn(t.fixLevelBtn(levelCode(empty.level)), `fix:lv:${empty.level}`)]
+      : [t.emptyAllDone, null];
+    lines.push("", why);
+    if (fix) keyboard.unshift([fix]);
+  }
+  return { text: lines.join("\n"), keyboard };
 }
 
 /** The text of the preview of own words. One card is shown whole, with everything it has; several are a list. */

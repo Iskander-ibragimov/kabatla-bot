@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Repo, type User } from "../../src/db/repo";
 import { ALL_POS } from "../../src/levels/scale";
-import { addAllPos, coverageOf, hub, setMode, setTopic, toggleLevel, togglePos, topicLines, unstartedIn } from "../../src/levels/service";
+import { addAllPos, addLevel, coverageOf, hub, setMode, setTopic, toggleLevel, togglePos, topicLines, unstartedIn } from "../../src/levels/service";
 import { cumulative } from "../../src/stats/service";
 import { countingDb } from "../helpers/countingDb";
 import { gradedMem } from "../helpers/review";
@@ -238,6 +238,31 @@ describe("toggleLevel", () => {
   });
 });
 
+describe("addLevel", () => {
+  it("checks a level that has cards and never unchecks it, one D1 call; it gives the levels checked after it and leaves the rest of the row alone", async () => {
+    await catalog();
+    const { repo, user } = await seedLearner(env.DB, { now: T, patch: { topicNo: 2, newMode: "topic" } });
+    const db = countingDb(env.DB);
+    expect(await addLevel(new Repo(db), user, 2)).toBe(0b11);
+    expect(db.calls).toBe(1);
+    expect(await fresh(repo, user)).toEqual({ ...user, levels: 0b11 });
+    // A second press, and two that arrive together, leave it checked.
+    expect(await addLevel(repo, user, 2)).toBe(0b11);
+    expect(await Promise.all([addLevel(repo, user, 2), addLevel(repo, user, 2)])).toEqual([0b11, 0b11]);
+    expect(await fresh(repo, user)).toEqual({ ...user, levels: 0b11 });
+  });
+
+  it("checks nothing for a level without cards or a number off the scale: the levels stay as they are", async () => {
+    await catalog();
+    await new Repo(env.DB).insertDeck({ slug: "b1", kind: "catalog", titleRu: "B1", titleTt: "B1", levelNo: 3, coveragePct: null, ownerId: null });
+    const { repo, user } = await seedLearner(env.DB, { now: T });
+    const off = await repo.insertDeck({ slug: "l07", kind: "catalog", titleRu: "Уровень 7", titleTt: "7 нче дәрәҗә", levelNo: 7, coveragePct: null, ownerId: null });
+    await repo.insertNotes(off, [note("җиде")]);
+    for (const no of [3, 4, 5, 0, 6, 7, -1]) expect(await addLevel(repo, user, no), `level ${no}`).toBe(0b1);
+    expect(await fresh(repo, user)).toEqual(user);
+  });
+});
+
 describe("togglePos", () => {
   it("flips one part-of-speech group in one D1 call; the last group stays, and two toggles at once both apply", async () => {
     const { repo, user } = await seedLearner(env.DB, { now: T });
@@ -298,15 +323,15 @@ describe("setMode and setTopic", () => {
 });
 
 describe("the catalog as the repo reads it for these screens", () => {
-  it("levelDecks: the decks of the levels A1…C1 with their cards and coverage; topicsList: the topics by number", async () => {
+  it("levelsData: the decks of the levels A1…C1 with their cards and coverage, and the topics by number", async () => {
     await catalog();
     const repo = new Repo(env.DB);
     // Neither an own deck nor a catalog deck numbered off the scale is a level.
     const { user } = await seedLearner(env.DB, { now: T });
     await repo.insertNotes(await repo.customDeck(user.id, T), [note("үзем")]);
     await repo.insertDeck({ slug: "l07", kind: "catalog", titleRu: "Уровень 7", titleTt: "7 нче дәрәҗә", levelNo: 7, coveragePct: 60, ownerId: null });
-    expect(await repo.levelDecks()).toEqual([{ level: 1, total: 48, coveragePct: 45 }, { level: 2, total: 6, coveragePct: null }]);
-    const topics = await repo.topicsList();
+    const { decks, topics } = await repo.levelsData(user.id, false);
+    expect(decks).toEqual([{ level: 1, total: 48, coveragePct: 45 }, { level: 2, total: 6, coveragePct: null }]);
     expect(topics).toHaveLength(21);
     expect(topics.slice(0, 3)).toEqual([
       { no: 0, slug: "core", titleRu: "Основа", titleTt: "Нигез сүзләр" },

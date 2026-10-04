@@ -109,13 +109,13 @@ describe("first day and next day", () => {
 
     for (let i = 0; i < 100; i++) {
       expect(h.lastText()).toContain(`<b>${words100[i]}</b>`);
-      expect(h.lastText()).not.toContain(tt.levelUp(1, 2, 31, 100));
       const easy = (h.lastMarkup().inline_keyboard ?? []).flat().find((b) => b.callback_data === easyButton(h))!;
       expect(easy.text.startsWith(`${tt.easy} `)).toBe(true);
       await press(easy.callback_data);
     }
-    // Every word of the checked level is in work: the session ends, in Tatar, and the bot opens nothing by itself.
-    expect(h.lastText()).toBe([tt.doneTitle, tt.doneToday(100, 0), tt.streak(1)].join("\n"));
+    // Every word of the checked level is in work: the session ends, in Tatar; the bot opens nothing by itself and offers the next level.
+    expect(h.lastText()).toBe([tt.doneTitle, tt.doneToday(100, 0), tt.streak(1), "", tt.emptyLevels].join("\n"));
+    expect((h.lastMarkup().inline_keyboard ?? [])[0]!.map((b) => [b.text, b.callback_data])).toEqual([["A2 дәрәҗәсен өстәү", "fix:lv:2"]]);
     expect(h.lastText()).not.toContain("авыл");
     expect(maxTelegramCallsPerUpdate).toBeLessThanOrEqual(3);
     expect(maxD1CallsPerUpdate).toBeLessThanOrEqual(8);
