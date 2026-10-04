@@ -227,6 +227,40 @@ describe("cutLevels", () => {
     expect(level[1]!.transcription).toBe("сәгъә́т");
   });
 
+  describe("phrase cards drop the sentence-final sign from the computed transcription", () => {
+    const phr = (word: string, over: Partial<WordlistRow> = {}) => {
+      const rows = Array.from({ length: 100 }, (_, i) => wl(made(i)));
+      rows[0] = wl(word, { pos: "phr", ...over });
+      return cutLevels(rows, new Map()).levels[0]![0]!.transcription;
+    };
+
+    it.each([
+      ["Хәлләр ничек?", "хәллә́р ни́чек"],
+      ["Рәхмәт!", "рәхмә́т"],
+      ["Мин белмим.", "мин бе́лмим"],
+      ["Минем исемем …", "мине́м исеме́м"],
+      ["Ярар...", "йара́р"],
+      ["Алло — әйе … әйе?!", "алло́ — әйе́ … әйе́"],
+      ["Әйе, рәхмәт!", "әйе́, рәхмә́т"],
+    ])("%s", (word, expected) => {
+      expect(phr(word)).toBe(expected);
+    });
+
+    it("leaves a phrase without a final sign alone", () => {
+      expect(phr("Мин белмим")).toBe(transcribe("Мин белмим"));
+    });
+
+    it("leaves non-phrase rows unchanged", () => {
+      const rows = Array.from({ length: 100 }, (_, i) => wl(made(i)));
+      rows[0] = wl("Рәхмәт!", { pos: "part" });
+      expect(cutLevels(rows, new Map()).levels[0]![0]!.transcription).toBe(transcribe("Рәхмәт!"));
+    });
+
+    it("uses a manual override verbatim", () => {
+      expect(phr("Рәхмәт!", { transcription: "рәхмә́т!" })).toBe("рәхмә́т!");
+    });
+  });
+
   it("keeps the audio already attached to a word", () => {
     const rows = Array.from({ length: 100 }, (_, i) => wl(made(i)));
     rows[5] = wl(" Китап ");

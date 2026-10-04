@@ -219,16 +219,25 @@ export function checkWordlist(rows: WordlistRow[]): string[] {
   return errors;
 }
 
+/** Sentence-final signs (and the spaces around them) are not part of the transcription notation. */
+const FINAL_SIGNS = /[\s.!?…]+$/u;
+
+/** The transcription computed by rule; a phrase card loses its sentence-final punctuation. */
+function computedTranscription(word: string, pos: string): string {
+  const t = transcribe(word);
+  return pos === "phr" ? t.replace(FINAL_SIGNS, "") : t;
+}
+
 /**
  * Cuts the wordlist into levels of 100 in file order; `rest` is the number of rows after the last full level.
- * The transcription comes from the wordlist column or, when that is empty, from the rules; `audio` (word key → file id)
+ * The transcription comes from the wordlist column or, when that is empty, from the rules (a phrase card without its final sign); `audio` (word key → file id)
  * carries over the audio already attached to a word.
  */
 export function cutLevels(wordlist: WordlistRow[], audio: ReadonlyMap<string, string>): { levels: Row[][]; rest: number } {
   const rows = wordlist.map((r): Row => {
     const word = r.word.trim();
     return {
-      word, transcription: r.transcription.trim() || transcribe(word), pos: r.pos.trim(), translation: r.translation.trim(),
+      word, transcription: r.transcription.trim() || computedTranscription(word, r.pos.trim()), pos: r.pos.trim(), translation: r.translation.trim(),
       example_tt: r.example_tt.trim(), example_ru: r.example_ru.trim(), example_src: r.example_src.trim(), audio_file_id: audio.get(wordKey(word)) ?? "",
     };
   });
