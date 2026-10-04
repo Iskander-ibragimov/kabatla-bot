@@ -162,6 +162,31 @@ describe("levels", () => {
       expect(await subscriptions(user.id)).toBe(1);
     });
 
+    it("a deck numbered 21 is never opened: not after level 20, not for a learner who is done, not by the button for skipped levels", async () => {
+      const { repo, user } = await seedUser(env.DB, { now, level: 20, words: 1 });
+      const ids = await seedLevels(env.DB, { 21: ["авыл"] }, { 20: 80 });
+      const s = await gradeShown(repo, user, await new ReviewService(repo, now).nextScreen(user), 4, now);
+      expect(s.kind).toBe("done");
+      expect(levelUpOf(s)).toEqual({ from: 20, to: null, coveragePct: 80 });
+      expect((await repo.getUser(user.id))!.level).toBe(21);
+      expect(await subscriptions(user.id)).toBe(1);
+      // The learner is on «level 21» now, the number of that deck: every later screen leaves it closed,
+      // also for a copy of the user that is still on level 20.
+      for (const u of [(await repo.getUser(user.id))!, user]) {
+        const again = await new ReviewService(repo, now + DAY).nextScreen(u);
+        expect(again.kind).toBe("done");
+        expect(levelUpOf(again)).toBeNull();
+      }
+      await repo.batch([repo.openCurrentLevelStmt(user.id, now)]);
+      expect(await repo.openSkippedLevels(user.id, now)).toBe(0);
+      expect(await subscriptions(user.id)).toBe(1);
+      expect(await repo.userDeckIds(user.id)).not.toContain(ids[21]);
+      // It is not a level for /levels, for the start of a new learner or for the lookup of ready cards either.
+      expect((await repo.levelsOverview(user.id)).map((l) => l.levelNo)).toEqual([20]);
+      expect(await repo.startLevel(21)).toEqual({ deckId: (await repo.getDeckBySlug("l20"))!.id, levelNo: 20 });
+      expect((await repo.findCatalogNotes(["авыл"])).size).toBe(0);
+    });
+
     it("opening a level over a gap costs exactly one D1 call more than a plain next card", async () => {
       const { user, noteIds } = await seedUser(env.DB, { now, level: 1, words: 2 });
       await seedLevels(env.DB, { 3: ["авыл"] }, { 1: 31 });

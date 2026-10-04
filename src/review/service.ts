@@ -1,4 +1,4 @@
-import type { CardRow, Direction, NewNote, Repo, User } from "../db/repo";
+import { type CardRow, type Direction, LAST_LEVEL, type NewNote, type Repo, type User } from "../db/repo";
 import { type Mem, type Rating, formatInterval, grade as fsrsGrade, memoryDays, newMem, preview, stage } from "../srs/fsrs";
 import { dayWindow, localDay } from "../users/service";
 import { pick } from "./pick";
@@ -25,8 +25,7 @@ export type Screen =
   | { kind: "noundo" }
   | { kind: "nothing" };
 
-/** The catalog has levels 1…LAST_LEVEL; `users.level` one above it means every level is done. */
-export const LAST_LEVEL = 20;
+export { LAST_LEVEL };
 
 /** At most this many new words per day may be graded Easy on first sight; after that no new words are offered. */
 export const EASY_NEW_CAP = 200;

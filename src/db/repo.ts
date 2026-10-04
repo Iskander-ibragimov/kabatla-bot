@@ -74,6 +74,9 @@ export interface ReviewLogRow {
   reviewedAt: number; wasNew: boolean; learnedNow: boolean; streakBefore: number; lastStudyDayBefore: string | null; undone: boolean;
 }
 
+/** The catalog has levels 1…LAST_LEVEL; `users.level` one above it means every level is done. A deck with a higher number is not a level. */
+export const LAST_LEVEL = 20;
+
 const snake = (k: string) => k.replace(/[A-Z]/g, (c) => "_" + c.toLowerCase());
 const camel = (k: string) => k.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
 const BOOL_USER = new Set(["autoplay", "active"]);
@@ -130,9 +133,9 @@ export const deckHasNew = (user: string, deck: string, a: Asked) =>
  */
 export const newInTail = (user: string, deck: string, a: Asked, limit: number) =>
   `(SELECT COUNT(*) FROM (SELECT x.id FROM notes x WHERE x.deck_id = ${deck}.id ORDER BY x.id DESC LIMIT ${Math.trunc(limit)}) t WHERE ${hasNewCard(user, "t.id", a)})`;
-/** Subscribes user ?1 to the deck of the level the user is on now, at time ?2; nothing when the catalog has no such deck. */
+/** Subscribes user ?1 to the deck of the level the user is on now, at time ?2; nothing when the catalog has no such deck or the user is past the last level. */
 const OPEN_CURRENT_LEVEL =
-  "INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) SELECT u.id, d.id, ?2 FROM users u JOIN decks d ON d.level_no = u.level WHERE u.id = ?1";
+  `INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) SELECT u.id, d.id, ?2 FROM users u JOIN decks d ON d.level_no = u.level AND d.level_no <= ${LAST_LEVEL} WHERE u.id = ?1`;
 /** A card `c` with its note `n`; the viewer of the note is the user the card belongs to. */
 const CARD_COLS = `c.id, c.note_id, c.direction, c.state, c.step, c.stability, c.difficulty, c.due, c.last_review, c.scheduled_days, c.reps, c.lapses, c.buried_day, ${noteCols("c.user_id")}`;
 
@@ -275,12 +278,12 @@ export class Repo {
                 WHEN EXISTS (SELECT 1 FROM ${edgeNote("?1", "dk", "ASC")} f WHERE NOT ${started("?1", "f.id")}) THEN NULL
                 ELSE (SELECT COUNT(*) FROM notes n WHERE n.deck_id = dk.id AND (${started("?1", "n.id")} OR ${ownedCopy("?1")})) END AS seen
          FROM decks dk LEFT JOIN user_decks ud ON ud.deck_id = dk.id AND ud.user_id = ?1
-         WHERE dk.level_no IS NOT NULL ORDER BY dk.level_no`,
+         WHERE dk.level_no <= ${LAST_LEVEL} ORDER BY dk.level_no`,
       ).bind(userId),
       this.db.prepare(
         `SELECT n.deck_id, COUNT(DISTINCT n.id) AS owned FROM decks od JOIN notes o ON o.deck_id = od.id
            JOIN notes n ON n.word_key = o.word_key JOIN decks dk ON dk.id = n.deck_id
-         WHERE od.owner_id = ?1 AND dk.kind = 'catalog' AND dk.level_no IS NOT NULL GROUP BY n.deck_id`,
+         WHERE od.owner_id = ?1 AND dk.kind = 'catalog' AND dk.level_no <= ${LAST_LEVEL} GROUP BY n.deck_id`,
       ).bind(userId),
     ]);
     const ownedIn = new Map(owned!.results.map((r) => [r.deck_id as number, r.owned as number]));
@@ -295,7 +298,7 @@ export class Repo {
    */
   async startLevel(placed: number): Promise<{ deckId: number; levelNo: number } | null> {
     const r = await this.db.prepare(
-      `SELECT id, level_no FROM decks WHERE level_no IS NOT NULL
+      `SELECT id, level_no FROM decks WHERE level_no <= ${LAST_LEVEL}
        ORDER BY (level_no <= ?1) DESC, CASE WHEN level_no <= ?1 THEN -level_no ELSE level_no END LIMIT 1`,
     ).bind(placed).first<{ id: number; level_no: number }>();
     return r ? { deckId: r.id, levelNo: r.level_no } : null;
@@ -304,7 +307,7 @@ export class Repo {
   async openSkippedLevels(userId: number, now: number): Promise<number> {
     const r = await this.db.prepare(
       `INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at)
-       SELECT u.id, d.id, ?2 FROM users u JOIN decks d ON d.level_no < u.level WHERE u.id = ?1`,
+       SELECT u.id, d.id, ?2 FROM users u JOIN decks d ON d.level_no < u.level AND d.level_no <= ${LAST_LEVEL} WHERE u.id = ?1`,
     ).bind(userId, now).run();
     return r.meta.changes ?? 0;
   }
@@ -320,7 +323,7 @@ export class Repo {
    */
   openLevelStmts(userId: number, from: number, last: number, now: number): D1PreparedStatement[] {
     const next = "(SELECT MIN(level_no) FROM decks WHERE level_no > ?1 AND level_no <= ?2)";
-    const currentClosed = "EXISTS (SELECT 1 FROM decks d WHERE d.level_no = ?1 AND NOT EXISTS (SELECT 1 FROM user_decks ud WHERE ud.user_id = ?3 AND ud.deck_id = d.id))";
+    const currentClosed = "EXISTS (SELECT 1 FROM decks d WHERE d.level_no = ?1 AND d.level_no <= ?2 AND NOT EXISTS (SELECT 1 FROM user_decks ud WHERE ud.user_id = ?3 AND ud.deck_id = d.id))";
     return [
       this.db.prepare(`UPDATE users SET level = COALESCE(${next}, ?2 + 1) WHERE id = ?3 AND level = ?1 AND (?1 = ?2 OR ${next} IS NOT NULL) AND NOT ${currentClosed} RETURNING level`).bind(from, last, userId),
       this.db.prepare(`${OPEN_CURRENT_LEVEL} AND changes() = 1`).bind(userId, now),
@@ -399,7 +402,7 @@ export class Repo {
     if (!keys.length) return out;
     const { results } = await this.db.prepare(
       `SELECT n.id, n.deck_id, n.word_key, ${noteCols(null)}, d.level_no FROM notes n JOIN decks d ON d.id = n.deck_id
-       WHERE d.kind = 'catalog' AND d.level_no IS NOT NULL AND n.word_key IN (SELECT value FROM json_each(?)) ORDER BY d.level_no, n.id`,
+       WHERE d.kind = 'catalog' AND d.level_no <= ${LAST_LEVEL} AND n.word_key IN (SELECT value FROM json_each(?)) ORDER BY d.level_no, n.id`,
     ).bind(JSON.stringify(keys)).all<Record<string, unknown>>();
     for (const r of results) {
       const k = r.word_key as string;
@@ -540,7 +543,7 @@ export class Repo {
    * Everything the session queue needs, in one D1 call. `pre` statements run first in the same batch; their results come back as `pre`.
    * `currentLevelClosed`: the catalog has the deck of the user's current level and the user is not subscribed to it.
    * `nextLevelExists`: a level change would move the user — the catalog has a level above the current one, or the
-   * current one is the last (level `lastLevel`), after which the user is done with the levels.
+   * current one is the last (LAST_LEVEL), after which the user is done with the levels.
    *
    * New words come in this order: own and AI decks first, then the levels by number; inside a deck by note id, and the
    * directions of a note in the order of `w.directions`. Only the decks that can hold the next new words are read:
@@ -548,7 +551,7 @@ export class Repo {
    * it are finished and the levels above it wait for their turn. So `newNotes` are the next new cards, but not all
    * of them when the level in work is near its end and another open level follows.
    */
-  async candidateCards(userId: number, now: number, w: DayWindow, pre: D1PreparedStatement[] = [], lastLevel = 20): Promise<Candidates & { pre: D1Result<Record<string, unknown>>[]; currentLevelClosed: boolean; nextLevelExists: boolean }> {
+  async candidateCards(userId: number, now: number, w: DayWindow, pre: D1PreparedStatement[] = []): Promise<Candidates & { pre: D1Result<Record<string, unknown>>[]; currentLevelClosed: boolean; nextLevelExists: boolean }> {
     const lim = w.limitEach ?? 50;
     const dirs = JSON.stringify(w.directions);
     const inDirs = "c.direction IN (SELECT value FROM json_each(?))";
@@ -577,9 +580,9 @@ export class Repo {
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state = 'review' AND c.due < ?3 AND c.direction IN (SELECT value FROM json_each(?2)) AND (c.buried_day IS NULL OR c.buried_day != ?4) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS review,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND was_new = 1 AND rating < 4 AND undone = 0 AND reviewed_at >= ?5) AS new_done_today,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND was_new = 1 AND rating = 4 AND undone = 0 AND reviewed_at >= ?5) AS easy_new_today,
-          EXISTS (SELECT 1 FROM users u JOIN decks dk ON dk.level_no = u.level WHERE u.id = ?1 AND NOT EXISTS (SELECT 1 FROM user_decks ud WHERE ud.user_id = ?1 AND ud.deck_id = dk.id)) AS level_closed,
-          EXISTS (SELECT 1 FROM users u WHERE u.id = ?1 AND (u.level = ?6 OR EXISTS (SELECT 1 FROM decks d WHERE d.level_no > u.level AND d.level_no <= ?6))) AS next_level`)
-        .bind(userId, dirs, w.dayEndMs, w.today, w.dayStartMs, lastLevel),
+          EXISTS (SELECT 1 FROM users u JOIN decks dk ON dk.level_no = u.level AND dk.level_no <= ${LAST_LEVEL} WHERE u.id = ?1 AND NOT EXISTS (SELECT 1 FROM user_decks ud WHERE ud.user_id = ?1 AND ud.deck_id = dk.id)) AS level_closed,
+          EXISTS (SELECT 1 FROM users u WHERE u.id = ?1 AND (u.level = ${LAST_LEVEL} OR EXISTS (SELECT 1 FROM decks d WHERE d.level_no > u.level AND d.level_no <= ${LAST_LEVEL}))) AS next_level`)
+        .bind(userId, dirs, w.dayEndMs, w.today, w.dayStartMs),
     ]);
     const [learning, review, fresh, counts] = res.slice(pre.length);
     const c = counts!.results[0]!;
@@ -610,7 +613,7 @@ export class Repo {
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3) AS r30,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3 AND json_extract(state_before, '$.state') = 'review') AS rev30,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3 AND json_extract(state_before, '$.state') = 'review' AND rating > 1) AS ok30,
-          (SELECT d.coverage_pct FROM decks d JOIN users u ON u.id = ?1 WHERE d.level_no < u.level ORDER BY d.level_no DESC LIMIT 1) AS coverage`)
+          (SELECT d.coverage_pct FROM decks d JOIN users u ON u.id = ?1 WHERE d.level_no < u.level AND d.level_no <= ${LAST_LEVEL} ORDER BY d.level_no DESC LIMIT 1) AS coverage`)
         .bind(userId, direction, since),
       this.db.prepare(`SELECT MAX(0, CAST((due - ?2) / 86400000 AS INTEGER)) AS d, COUNT(*) AS n FROM cards
           WHERE user_id = ?1 AND state != 'new' AND due < ?2 + 7 * 86400000 GROUP BY d`).bind(userId, dayStartMs),
