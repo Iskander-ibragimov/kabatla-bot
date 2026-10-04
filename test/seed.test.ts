@@ -159,6 +159,95 @@ describe("catalog seed", () => {
     expect(await deckOf("l02")).toMatchObject({ total: 1 });
   });
 
+  describe("a corrected headword (data/renames.csv, ruling F1)", () => {
+    const fixed = [{ oldWord: "китаб", newWord: "китап" }];
+    const setAudio = (word: string, fileId: string, tries: number) =>
+      env.DB.prepare("UPDATE notes SET audio_file_id = ?, audio_tries = ? WHERE word = ?").bind(fileId, tries, word).run();
+    const audioOf = async (word: string) => env.DB.prepare("SELECT audio_file_id, audio_tries FROM notes WHERE word = ?").bind(word).first();
+
+    it("renames the note in place: the id, the learners' cards and the reports stay, the voice is made again", async () => {
+      await applySeed(env.DB, csvToSql(meta1, [row("китаб", { translation: "книга" }), row("су")]));
+      const [before] = await notes();
+      await setAudio("китаб", "OLD-VOICE", 2);
+      const { repo, user } = await seedUser(env.DB, { now: T });
+      const cardId = await repo.insertCard(user.id, before!.id as number, "tt_ru", gradedMem(T));
+      await repo.insertReport(user.id, before!.id as number, T);
+
+      const sql = csvToSql(meta1, [row("китап", { translation: "книга" }), row("су")], fixed);
+      const first = await applySeed(env.DB, sql);
+      // The rename, and the note's other fields from its row (transcription and example changed with the word).
+      expect(first.changes).toBe(2);
+      expect(await notes()).toEqual([
+        expect.objectContaining({ slug: "l01", id: before!.id, word: "китап", word_key: "китап", transcription: "китап", translation: "книга", example_tt: "Бу — китап.", audio_file_id: null }),
+        expect.objectContaining({ word: "су" }),
+      ]);
+      expect(await audioOf("китап")).toEqual({ audio_file_id: null, audio_tries: 0 });
+      expect(await deckOf("l01")).toMatchObject({ total: 2 });
+      expect(await countRows("cards")).toBe(1);
+      expect(await repo.getCard(user.id, cardId)).toMatchObject({ noteId: before!.id, word: "китап", mem: expect.objectContaining({ state: "review", reps: 1 }) });
+      expect((await repo.recentReports(10)).map((r) => [r.noteId, r.word])).toEqual([[before!.id, "китап"]]);
+      // The corrected word is found, the misspelled one is gone.
+      expect([...(await repo.findCatalogNotes(["китап", "китаб"])).keys()]).toEqual(["китап"]);
+    });
+
+    it("writes nothing when the same seed is loaded again, and keeps the new voice", async () => {
+      await applySeed(env.DB, csvToSql(meta1, [row("китаб"), row("су")]));
+      const sql = csvToSql(meta1, [row("китап"), row("су")], fixed);
+      await applySeed(env.DB, sql);
+      await setAudio("китап", "NEW-VOICE", 0);
+      expect(await applySeed(env.DB, sql)).toMatchObject({ changes: 0, rowsWritten: 0 });
+      expect(await applySeed(env.DB, sql)).toMatchObject({ changes: 0, rowsWritten: 0 });
+      expect(await audioOf("китап")).toEqual({ audio_file_id: "NEW-VOICE", audio_tries: 0 });
+      expect(await countRows("notes")).toBe(2);
+    });
+
+    it("does nothing when the level already has the new word: neither note is touched", async () => {
+      // An earlier deploy loaded the corrected word as a second note, next to the misspelled one.
+      await applySeed(env.DB, csvToSql(meta1, [row("китаб"), row("су")]));
+      await applySeed(env.DB, csvToSql(meta1, [row("китап"), row("су")]));
+      await setAudio("китаб", "OLD-VOICE", 1);
+      const before = await notes();
+      expect(before.map((n) => n.word)).toEqual(["китаб", "су", "китап"]);
+      expect(await applySeed(env.DB, csvToSql(meta1, [row("китап"), row("су")], fixed))).toMatchObject({ changes: 0, rowsWritten: 0 });
+      expect(await notes()).toEqual(before);
+      expect(await audioOf("китаб")).toEqual({ audio_file_id: "OLD-VOICE", audio_tries: 1 });
+    });
+
+    it("does nothing when the old word is not in the level, and touches no other deck", async () => {
+      await applySeed(env.DB, csvToSql(meta1, [row("китап"), row("су")]));
+      await applySeed(env.DB, csvToSql(meta(2), [row("китаб")]));
+      const { repo, user } = await seedUser(env.DB, { now: T });
+      await repo.insertNotes(await repo.customDeck(user.id, T), [{ word: "китаб", transcription: null, pos: "n", translation: "моя книга", exampleTt: "", exampleRu: "", exampleSrc: "" }]);
+      const before = await notes();
+      expect(await applySeed(env.DB, csvToSql(meta1, [row("китап"), row("су")], fixed))).toMatchObject({ changes: 0, rowsWritten: 0 });
+      // «китаб» of level 2 and the learner's own «китаб» are other notes: the rename is for level 1 only.
+      expect(await notes()).toEqual(before);
+      expect(before.filter((n) => n.word === "китаб").map((n) => n.slug)).toEqual(["l02", null]);
+    });
+
+    it("finds the old word by its key and stores the key of the new one", async () => {
+      await applySeed(env.DB, csvToSql(meta1, [row("Сау бул!"), row("су")]));
+      const [before] = await notes();
+      expect(before!.word_key).toBe("сау бул");
+      await applySeed(env.DB, csvToSql(meta1, [row("Сау бул'ыгыз!"), row("су")], [{ oldWord: " сау бул ", newWord: "Сау бул'ыгыз!" }]));
+      expect((await notes())[0]).toMatchObject({ id: before!.id, word: "Сау бул'ыгыз!", word_key: "сау бул'ыгыз" });
+    });
+
+    it("stands in the seed after the deck and before the notes, one statement per line", () => {
+      const lines = csvToSql(meta1, [row("китап"), row("су")], [...fixed, { oldWord: "со", newWord: "су" }]).split("\n");
+      expect(lines).toHaveLength(7);
+      expect(lines[0]).toMatch(/^WITH .* INSERT INTO decks .*;$/);
+      for (const line of lines.slice(1, 3)) expect(line).toMatch(/^UPDATE notes SET word = .*;$/);
+      for (const line of lines.slice(3, 5)) expect(line).toMatch(/^WITH .* INSERT INTO notes .*;$/);
+      expect(lines[5]).toMatch(/^UPDATE decks SET total .*;$/);
+    });
+
+    it("refuses a rename without an old or a new word", () => {
+      expect(() => csvToSql(meta1, [row("китап")], [{ oldWord: " ", newWord: "китап" }])).toThrow(/l01.*rename.*old/);
+      expect(() => csvToSql(meta1, [row("китап")], [{ oldWord: "китаб", newWord: "?!" }])).toThrow(/l01.*rename.*new/);
+    });
+  });
+
   it("leaves a user's own copy of a level word alone", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
     const own = await repo.customDeck(user.id, T);

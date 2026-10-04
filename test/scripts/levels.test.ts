@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CSV_HEADER, type Row, checkLevels, coverage, coverageDrops, formatLevel, levelFile, levelNumber, parseLevel, tokenize, wordForm } from "../../scripts/lib/levels";
+import { CSV_HEADER, type Row, checkLevels, checkRenames, coverage, coverageDrops, formatLevel, levelFile, levelNumber, parseLevel, renamesOf, tokenize, wordForm } from "../../scripts/lib/levels";
 import { transcribe } from "../../src/content/transcribe";
 import { levelSlug } from "../../src/users/service";
 
@@ -229,6 +229,54 @@ describe("checkLevels", () => {
     expect(checkLevels(fixtureLevels(3), { ...opts(3), minPhrases: 3 })).toEqual([]);
     expect(checkLevels(fixtureLevels(3), { ...opts(3), minPhrases: 55 })).toEqual([expect.stringMatching(/фраз.*3.*55/)]);
     expect(checkLevels(fixtureLevels(2), { ...opts(2), minPhrases: 55 })).toEqual([]);
+  });
+});
+
+describe("checkRenames: data/renames.csv", () => {
+  const levels = fixtureLevels(2);
+  const [inLevel1, alsoInLevel1] = [levels[0]![0]!.word, levels[0]![1]!.word];
+  const inLevel2 = levels[1]![0]!.word;
+  const file = (...lines: string[]) => ["level,old_word,new_word", ...lines].join("\n") + "\n";
+
+  it("passes a file with the header only, and an absent file", () => {
+    expect(checkRenames(file(), levels)).toEqual([]);
+    expect(checkRenames("", levels)).toEqual([]);
+  });
+
+  it("passes a rename whose new word stands in the level and whose old word does not", () => {
+    expect(checkRenames(file(`1,батим,${inLevel1}`, `2,"со, су",${inLevel2}`), levels)).toEqual([]);
+    expect(renamesOf(file(`1,батим,${inLevel1}`, `2,"со, су",${inLevel2}`), 1)).toEqual([{ oldWord: "батим", newWord: inLevel1 }]);
+    expect(renamesOf(file(`1,батим,${inLevel1}`), 2)).toEqual([]);
+    expect(renamesOf("", 1)).toEqual([]);
+  });
+
+  it("wants the three columns in the header", () => {
+    expect(checkRenames("level,old,new\n", levels)).toEqual(["renames.csv:1 заголовок «level,old,new», нужен «level,old_word,new_word»"]);
+  });
+
+  it("wants a level that has a file", () => {
+    expect(checkRenames(file(`3,батим,${inLevel1}`), levels)).toEqual(["renames.csv:2 уровня «3» нет: есть уровни 1–2"]);
+    expect(checkRenames(file(`,батим,${inLevel1}`, `l01,батим,${inLevel1}`, `1.5,батим,${inLevel1}`, `0,батим,${inLevel1}`), levels)).toHaveLength(4);
+  });
+
+  it("wants the new word in the file of that level", () => {
+    expect(checkRenames(file("1,батим,яңасүз"), levels)).toEqual(["renames.csv:2 нового слова «яңасүз» нет в l01"]);
+    // A word of another level is not in this one.
+    expect(checkRenames(file(`1,батим,${inLevel2}`), levels)).toEqual([`renames.csv:2 нового слова «${inLevel2}» нет в l01`]);
+  });
+
+  it("wants the old word to be gone from the file of that level", () => {
+    expect(checkRenames(file(`1,${alsoInLevel1},${inLevel1}`), levels)).toEqual([`renames.csv:2 старое слово «${alsoInLevel1}» всё ещё стоит в l01`]);
+    // The same word with other punctuation or case is not a rename: such a fix needs no line here.
+    expect(checkRenames(file(`1,${inLevel1.toUpperCase()}!,${inLevel1}`), levels)).toEqual([`renames.csv:2 старое слово «${inLevel1.toUpperCase()}!» всё ещё стоит в l01`]);
+  });
+
+  it("wants both words, and each old word once per level", () => {
+    expect(checkRenames(file(`1,,${inLevel1}`), levels)).toEqual(["renames.csv:2 пустое old_word"]);
+    expect(checkRenames(file("1,батим,"), levels)).toEqual(["renames.csv:2 пустое new_word"]);
+    expect(checkRenames(file(`1,батим,${inLevel1}`, `1,Батим,${alsoInLevel1}`), levels)).toEqual(["renames.csv:3 старое слово «Батим» уже переименовано в строке 2"]);
+    // The same misspelling in two levels is two renames.
+    expect(checkRenames(file(`1,батим,${inLevel1}`, `2,батим,${inLevel2}`), levels)).toEqual([]);
   });
 });
 

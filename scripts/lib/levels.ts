@@ -2,7 +2,7 @@
  * Level files of the catalog (data/levels/l01.csv … l20.csv): their format, the rules they must keep, and the
  * coverage figure. Pure: no I/O, so the same code runs in the scripts and in the Workers test runtime.
  */
-import { parseCsv, toCsv } from "../../src/content/csv";
+import { type Rename, parseCsv, toCsv } from "../../src/content/csv";
 import { isTatarText } from "../../src/content/tatar";
 import { wordKey } from "../../src/db/repo";
 import type { PLACEMENT } from "../../src/users/placement";
@@ -171,6 +171,47 @@ export function checkLevels(levels: Row[][], opts: CheckOptions): string[] {
     });
     errors.push(...coverageDrops(meta));
   }
+  return errors;
+}
+
+/** Columns of data/renames.csv: a corrected headword of a level. `level` is the level number, 1…20. */
+export const RENAMES_HEADER = ["level", "old_word", "new_word"] as const;
+const RENAMES_FILE = "renames.csv";
+
+/** The renames of one level, from the text of data/renames.csv; none when the file is absent or empty. */
+export function renamesOf(text: string, level: number): Rename[] {
+  return parseCsv(text).filter((r) => Number(r.level) === level).map((r) => ({ oldWord: r.old_word ?? "", newWord: r.new_word ?? "" }));
+}
+
+/**
+ * Checks data/renames.csv against the level files; `levels[0]` is level 1. A line says: in this level the word that
+ * was stored as `old_word` is now `new_word`. So the level must exist, its file must hold the new word and must no
+ * longer hold the old one; an old word is renamed once per level. Words are compared by their keys, like notes:
+ * a change of case or of the punctuation at the edges is not a rename, the seed updates such a word in place.
+ * Returns the violations as `renames.csv:2 <what is wrong>`, the number being the line of the file.
+ */
+export function checkRenames(text: string, levels: Row[][]): string[] {
+  const header = text.split(/\r?\n/, 1)[0]!.trim();
+  if (header === "") return [];
+  if (header !== RENAMES_HEADER.join(",")) return [`${RENAMES_FILE}:1 заголовок «${header}», нужен «${RENAMES_HEADER.join(",")}»`];
+  const errors: string[] = [];
+  const keys = levels.map((rows) => new Set(rows.map((row) => wordKey(row.word))));
+  /** `level:old key` → the line that renames it. */
+  const renamed = new Map<string, number>();
+  parseCsv(text).forEach((r, i) => {
+    const at = `${RENAMES_FILE}:${i + 2}`;
+    const level = Number(r.level);
+    const inLevel = /^\d+$/.test((r.level ?? "").trim()) ? keys[level - 1] : undefined;
+    if (!inLevel) { errors.push(`${at} уровня «${r.level ?? ""}» нет: есть уровни 1–${levels.length}`); return; }
+    const [oldWord, newWord] = [(r.old_word ?? "").trim(), (r.new_word ?? "").trim()];
+    if (wordKey(oldWord) === "") { errors.push(`${at} пустое old_word`); return; }
+    if (wordKey(newWord) === "") { errors.push(`${at} пустое new_word`); return; }
+    const first = renamed.get(`${level}:${wordKey(oldWord)}`);
+    if (first !== undefined) { errors.push(`${at} старое слово «${oldWord}» уже переименовано в строке ${first}`); return; }
+    renamed.set(`${level}:${wordKey(oldWord)}`, i + 2);
+    if (!inLevel.has(wordKey(newWord))) errors.push(`${at} нового слова «${newWord}» нет в ${levelSlug(level)}`);
+    if (inLevel.has(wordKey(oldWord))) errors.push(`${at} старое слово «${oldWord}» всё ещё стоит в ${levelSlug(level)}`);
+  });
   return errors;
 }
 

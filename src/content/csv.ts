@@ -47,9 +47,12 @@ const NOTE_COLUMNS = ["word", "transcription", "pos", "translation", "example_tt
 const same = (table: string, columns: readonly string[]): string => columns.map((c) => `${table}.${c} IS v.${c}`).join(" AND ");
 const assign = (columns: readonly string[]): string => columns.map((c) => `${c} = excluded.${c}`).join(", ");
 
+/** A headword of a level that was corrected: the note stored under `oldWord` becomes `newWord` (data/renames.csv). */
+export interface Rename { oldWord: string; newWord: string }
+
 /**
- * SQL that loads one level of the catalog, one statement per line: the deck (matched by `slug`), every row as a note
- * (matched by deck and word key), then the deck's `total`. Safe to run on a live database on every deploy:
+ * SQL that loads one level of the catalog, one statement per line: the deck (matched by `slug`), the renames, every
+ * row as a note (matched by deck and word key), then the deck's `total`. Safe to run on a live database on every deploy:
  *  - a row that is already in the database with the same fields is not written at all, so loading an unchanged
  *    catalog costs no row writes. The check stands in the SELECT that feeds the INSERT, not in the upsert's own
  *    WHERE: `decks` and `notes` are AUTOINCREMENT tables, and an INSERT that gets as far as the conflict has
@@ -57,9 +60,15 @@ const assign = (columns: readonly string[]): string => columns.map((c) => `${c} 
  *  - a changed row gets its fields updated in place: the note keeps its id, and with it the users' cards;
  *  - an empty `audio_file_id` never erases the audio already attached to the note;
  *  - nothing is deleted, and a word that already stands in another level stays there and is not copied.
- * Throws on a row that lacks a column, a word or a translation.
+ * A corrected spelling of the word itself changes the word key, which is what a row is matched by: without a rename
+ * the corrected row would be a second note and the misspelled one would stay in the learners' queues. A rename moves
+ * the note of this level from the old key to the new one before the rows are loaded: the id, the cards and the
+ * reports stay, and the voice is dropped (`audio_file_id`, `audio_tries`) so that the voicing job says the new word.
+ * It does nothing when the level already has a note under the new key or has none under the old one, so it is
+ * applied once and costs no row writes afterwards.
+ * Throws on a row that lacks a column, a word or a translation, and on a rename without one of its words.
  */
-export function csvToSql(deck: SeedDeck, rows: Record<string, string>[]): string {
+export function csvToSql(deck: SeedDeck, rows: Record<string, string>[], renames: Rename[] = []): string {
   const slug = sqlText(deck.slug);
   const coverage = deck.coveragePct === null ? "NULL" : String(Math.trunc(deck.coveragePct));
   const lines = [
@@ -68,6 +77,16 @@ export function csvToSql(deck: SeedDeck, rows: Record<string, string>[]): string
       `WHERE NOT EXISTS (SELECT 1 FROM decks d WHERE d.slug = v.slug AND ${same("d", DECK_COLUMNS)}) ` +
       `ON CONFLICT (slug) DO UPDATE SET ${assign(DECK_COLUMNS)};`,
   ];
+  for (const r of renames) {
+    const [oldKey, newKey] = [wordKey(r.oldWord), wordKey(r.newWord)];
+    if (oldKey === "") throw new Error(`${deck.slug} rename: empty old word`);
+    if (newKey === "") throw new Error(`${deck.slug} rename of «${r.oldWord}»: empty new word`);
+    lines.push(
+      `UPDATE notes SET word = ${sqlText(r.newWord.trim())}, word_key = ${sqlText(newKey)}, audio_file_id = NULL, audio_tries = 0 ` +
+        `WHERE deck_id = (SELECT id FROM decks WHERE slug = ${slug}) AND word_key = ${sqlText(oldKey)} ` +
+        `AND NOT EXISTS (SELECT 1 FROM notes x WHERE x.deck_id = notes.deck_id AND x.word_key = ${sqlText(newKey)});`,
+    );
+  }
   rows.forEach((row, i) => {
     // The line of the level file: the header is line 1. A file with a wrong header or an empty cell must stop the
     // load here, before an UPDATE blanks the field of a card that people are learning.

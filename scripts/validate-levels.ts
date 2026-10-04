@@ -1,5 +1,5 @@
 /**
- * Checks the level files data/levels/l01.csv … against the rules of the catalog (scripts/lib/levels.ts). Runs in CI.
+ * Checks the level files data/levels/l01.csv … and data/renames.csv against the rules of the catalog (scripts/lib/levels.ts). Runs in CI.
  *   npx tsx scripts/validate-levels.ts          the levels that exist; none is fine
  *   npx tsx scripts/validate-levels.ts --full   all 20 levels are required
  * Exit code 1 and one line per violation (`l01:5 <что не так>`, the number is the line of the file) when a rule is broken.
@@ -7,8 +7,8 @@
 import { existsSync } from "node:fs";
 import { parseCsv } from "../src/content/csv";
 import { PLACEMENT } from "../src/users/placement";
-import { FILES, LEVELS_DIR, levelNumbers, readAttested, readLevel, readMeta, readText, strayLevelFiles } from "./lib/files";
-import { LEVEL_COUNT, checkLevels, levelFile } from "./lib/levels";
+import { FILES, LEVELS_DIR, levelNumbers, readAttested, readLevel, readMeta, readRenames, readText, strayLevelFiles } from "./lib/files";
+import { LEVEL_COUNT, checkLevels, checkRenames, levelFile } from "./lib/levels";
 
 const MIN_PHRASES = 55;
 const full = process.argv.includes("--full");
@@ -26,9 +26,12 @@ const missing = numbers.length ? Array.from({ length: numbers.at(-1)! }, (_, i) 
 if (missing.length) errors.push(`нет файлов ${missing.map(levelFile).join(", ")}: уровни идут подряд с l01`);
 else {
   const core = existsSync(FILES.core) ? parseCsv(readText(FILES.core)).map((row) => row.word ?? "").filter((word) => word.trim() !== "") : undefined;
-  errors.push(...checkLevels(numbers.map(readLevel), {
+  const levels = numbers.map(readLevel);
+  errors.push(...checkLevels(levels, {
     attested: readAttested(), placement: PLACEMENT, expectLevels: full ? LEVEL_COUNT : numbers.length, core, minPhrases: MIN_PHRASES, meta: readMeta(),
   }));
+  // Corrected headwords (data/renames.csv): each must name a level that exists, its new word and no longer its old one.
+  errors.push(...checkRenames(readRenames(), levels));
 }
 
 if (errors.length) {

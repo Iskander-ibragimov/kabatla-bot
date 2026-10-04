@@ -19,6 +19,8 @@ export const FILES = {
   /** Word forms approved by hand (names), one per line. */
   attestedExtra: "data/attested-extra.txt",
   meta: `${LEVELS_DIR}/meta.json`,
+  /** Corrected headwords: `level, old_word, new_word` (see `checkRenames`). */
+  renames: "data/renames.csv",
   seed: "seed/catalog.sql",
   // Not in git (data/work/): the sources and what is built from them.
   lemmas: "data/work/sources/lemmas.tsv",
@@ -41,6 +43,9 @@ export function writeText(path: string, text: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, text);
 }
+
+/** The text of data/renames.csv; empty when there is no such file. */
+export const readRenames = (): string => (existsSync(FILES.renames) ? readFileSync(FILES.renames, "utf8") : "");
 
 /** Non-empty lines of a file, trimmed; an absent file has none. */
 export function readLines(path: string): string[] {
