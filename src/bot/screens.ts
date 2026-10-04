@@ -14,12 +14,13 @@ const checkbox = (on: boolean) => (on ? "☑" : "☐");
 const tzLabel = (min: number) => `UTC${min >= 0 ? "+" : "−"}${Math.floor(Math.abs(min) / 60)}${Math.abs(min) % 60 ? ":" + String(Math.abs(min) % 60).padStart(2, "0") : ""}`;
 
 /**
- * One of the two screens about the bot. In the introduction both go on with «Дальше»; shown again from the settings
- * (`replay`), the first goes on to the second, and the second ends with «Понятно», which is the settings again.
+ * One of the two screens about the bot. In the introduction both go on with «Дальше», each with an answer of its own
+ * (`ob:n1`, `ob:n2`); shown again from the settings (`replay`), the first goes on to the second, and the second ends
+ * with «Понятно», which is the settings again.
  */
 export function renderIntro(n: 1 | 2, lang: Lang, replay = false): Rendered {
   const t = dict(lang);
-  const next = !replay ? btn(t.nextBtn, "ob:next") : n === 1 ? btn(t.nextBtn, "tut:2") : btn(t.gotItBtn, "tut:ok");
+  const next = !replay ? btn(t.nextBtn, `ob:n${n}`) : n === 1 ? btn(t.nextBtn, "tut:2") : btn(t.gotItBtn, "tut:ok");
   return { text: n === 1 ? t.intro1 : t.intro2, keyboard: [[next]] };
 }
 

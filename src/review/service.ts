@@ -183,8 +183,9 @@ export class ReviewService {
     const yesterday = localDay(user.tzOffsetMin, this.now - 86_400_000);
     const streak = user.lastStudyDay === today ? user.streak : user.lastStudyDay === yesterday ? user.streak + 1 : 1;
     const learnedNow = stage(before) !== "learned" && stage(after) === "learned";
-    // The hint of the button, with the interval the grade gave, written the way a button writes it; what is seen is stored with the grade, in the user's statement.
-    const hint = afterGrade(user.hintsSeen, rating, formatInterval(after.due - this.now, user.lang));
+    // The hint of the button names the interval that stood on it: the scheduler's preview, without the fuzz that moves the stored
+    // interval of a card by a day or so. What is seen is stored with the grade, in the user's statement.
+    const hint = afterGrade(user.hintsSeen, rating, formatInterval(preview(before, this.now, user.retention)[rating] - this.now, user.lang));
     const stmts = [
       this.repo.gradeCardStmt(card.id, reps, after),
       this.repo.guardedLogStmt({

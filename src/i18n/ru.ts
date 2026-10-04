@@ -73,7 +73,7 @@ export const ru = {
   levelWords: (n: number) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? "слово" : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "слова" : "слов"}`,
   /*
    * Hints: the first lines of a card or of the screen that ends a session, each shown once (tutorial/hints.ts).
-   * `interval`: the interval the pressed button gave, as the button showed it, like "&lt;10м" or "8д".
+   * `interval`: the interval that stood on the pressed button, like "&lt;10м" or "8д".
    */
   hintFront: "Вспомните перевод, откройте скрытый текст и оцените себя.",
   hintAgain: (interval: string) => `„Снова“: слово вернётся через ${interval}, в этом же занятии, и будет приходить, пока не запомнится.`,

@@ -75,10 +75,10 @@ describe("users", () => {
       expect(await step("tt")).toEqual({ kind: "intro", n: 1 });
       expect(state.user).toMatchObject({ lang: "tt", onboardingStep: "intro1" });
       expect(await startOnboarding(repo, state.user)).toEqual({ kind: "intro", n: 1 });
-      expect(await step("next")).toEqual({ kind: "intro", n: 2 });
+      expect(await step("n1")).toEqual({ kind: "intro", n: 2 });
       expect(state.user.onboardingStep).toBe("intro2");
       expect(await startOnboarding(repo, state.user)).toEqual({ kind: "intro", n: 2 });
-      expect(await step("next")).toEqual({ kind: "levels", lines: lines(true, false) });
+      expect(await step("n2")).toEqual({ kind: "levels", lines: lines(true, false) });
       expect(state.user).toMatchObject({ onboardingStep: "levels", levels: 0b1 });
       expect(await startOnboarding(repo, state.user)).toEqual({ kind: "levels", lines: lines(true, false) });
       expect(await step("lv:2")).toEqual({ kind: "levels", lines: lines(true, true) });
@@ -107,13 +107,28 @@ describe("users", () => {
       };
       // The answers of the introduction that is gone are among them: «Знаю», the words a day, the hour, the time zone.
       const old = ["1", "0", "10", "09:00", "180", "14:35", ""];
-      await refused(["en", "next", "go", "lv:1", ...old]);
+      await refused(["en", "n1", "n2", "next", "go", "lv:1", ...old]);
       await step("ru");
-      await refused(["ru", "tt", "go", "lv:1", ...old]);
-      await step("next");
-      await refused(["ru", "tt", "go", "lv:1", ...old]);
-      await step("next");
-      await refused(["ru", "tt", "next", "lv:", "lv:x", "lv:1.5", "lv:12", "lv:0", "lv:6", ...old]);
+      await refused(["ru", "tt", "n2", "next", "go", "lv:1", ...old]);
+      await step("n1");
+      await refused(["ru", "tt", "n1", "next", "go", "lv:1", ...old]);
+      await step("n2");
+      await refused(["ru", "tt", "n1", "n2", "next", "lv:", "lv:x", "lv:1.5", "lv:12", "lv:0", "lv:6", ...old]);
+    });
+
+    it("«Дальше» of the first screen pressed twice does not pass the second screen: each screen has an answer of its own", async () => {
+      const repo = new Repo(env.DB);
+      const { state, step } = await newcomer(repo, 17);
+      await step("ru");
+      const onFirst = state.user;
+      expect(await step("n1")).toEqual({ kind: "intro", n: 2 });
+      // The second tap is read after the first was stored: the learner stands on the second screen, which does not take it.
+      expect(await step("n1")).toEqual({ kind: "invalid", step: "intro2" });
+      expect(state.user.onboardingStep).toBe("intro2");
+      // Two taps read before either was stored both show the second screen.
+      await repo.updateUser(onFirst.id, { onboardingStep: "intro1" });
+      expect(await Promise.all([advanceOnboarding(repo, onFirst, "n1", T), advanceOnboarding(repo, onFirst, "n1", T)])).toEqual([{ kind: "intro", n: 2 }, { kind: "intro", n: 2 }]);
+      expect((await repo.getUser(onFirst.id))!.onboardingStep).toBe("intro2");
     });
 
     it("the only checked level is not unchecked, and a level without cards is not checked: invalid, with the reason, and nothing written", async () => {

@@ -210,13 +210,20 @@ describe("review service", () => {
       expect(asCard(await new ReviewService(repo, T).nextScreen((await repo.getUser(user.id))!)).lead).toBeNull();
     });
 
-    it("the interval of a hint is the one the grade gave the card, written as on a button", async () => {
-      const { repo, user } = await seedUser(env.DB, { now: T, words: 2, patch: { hintsSeen: HINT.update, lang: "tt" } });
-      const first = asCard(await new ReviewService(repo, T).nextScreen(user));
-      const second = asCard(await graded(repo, user, first, 4));
-      const card = (await repo.getCard(user.id, first.view.cardId))!;
-      expect(second.lead).toEqual({ kind: "button", rating: 4, interval: formatInterval(card.mem.due - T, "tt"), withOrder: true });
-      expect((second.lead as { interval: string }).interval).toMatch(/^\d+көн$/);
+    it("the interval of a hint is the one that stood on the pressed button, not the one the scheduler's fuzz gave the card", async () => {
+      // «Легко» on a new card gives days, which the scheduler moves a little; among these users are grades that land on another day than the button named.
+      await seedCatalog(env.DB, WORDS.slice(0, 2).map(([word, translation]) => ({ level: 1, word, translation })));
+      const moved: boolean[] = [];
+      for (const [tgId, lang, at] of [[1, "tt", T], [2, "ru", T + 7 * MIN], [3, "ru", T + 3 * 60 * MIN], [4, "tt", T + DAY + 11 * MIN]] as const) {
+        const { repo, user } = await seedLearner(env.DB, { now: T, tgId, patch: { hintsSeen: HINT.update, lang } });
+        const first = asCard(await new ReviewService(repo, at).nextScreen(user));
+        const second = asCard(await graded(repo, user, first, 4, at));
+        expect(second.lead).toEqual({ kind: "button", rating: 4, interval: first.intervals[4], withOrder: true });
+        expect(first.intervals[4]).toMatch(lang === "tt" ? /^\d+көн$/ : /^\d+д$/);
+        const card = (await repo.getCard(user.id, first.view.cardId))!;
+        moved.push(formatInterval(card.mem.due - at, lang) !== first.intervals[4]);
+      }
+      expect(moved).toContain(true);
     });
 
     it("a learner who knew the bot before the levels: the update notice until a grade, no hint after it", async () => {

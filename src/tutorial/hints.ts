@@ -11,8 +11,8 @@ export const ALL_HINTS = 63;
 
 /**
  * The lines that stand before a card or before the screen that ends a session. `front`: what to do with a card.
- * `button`: what the button just pressed did to the word, with the interval it gave; `withOrder` adds the line about
- * the order of a session. `update`: the update notice.
+ * `button`: what the button just pressed did to the word, with the interval that stood on it; `withOrder` adds the
+ * line about the order of a session. `update`: the update notice.
  */
 export type Lead = { kind: "front" } | { kind: "update" } | { kind: "button"; rating: Rating; interval: string; withOrder: boolean };
 

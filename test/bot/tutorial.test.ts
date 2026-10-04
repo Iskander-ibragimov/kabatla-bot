@@ -40,6 +40,7 @@ function bot() {
    * Presses the grade button `rating` of the card on screen. Besides the update it gives `shown`, the interval the
    * button showed, and `given`, the interval the grade gave the card, written the same way. They are the same but for
    * an interval of days, which the scheduler moves a little (its fuzz): «8д» on the button may be «9д» for the card.
+   * A hint names the interval of the button.
    */
   const grade = async (rating: 1 | 2 | 3 | 4) => {
     const button = (h.lastMarkup().inline_keyboard ?? []).flat().find((b) => new RegExp(`^g:\\d+:\\d+:${rating}$`).test(b.callback_data))!;
@@ -80,7 +81,7 @@ const COUNTERS = "🔵 10 · 🔴 0 · 🟢 0";
 /** Goes through the introduction in Russian up to the first card, with the levels as they are checked at first: A1. */
 async function introduced(b: ReturnType<typeof bot>) {
   await b.text("/start");
-  for (const answer of ["ob:ru", "ob:next", "ob:next", "ob:go"]) await b.press(answer, 100);
+  for (const answer of ["ob:ru", "ob:n1", "ob:n2", "ob:go"]) await b.press(answer, 100);
 }
 
 describe("the introduction", () => {
@@ -95,16 +96,16 @@ describe("the introduction", () => {
     const lang = await b.press("ob:ru");
     edited(lang);
     expect(b.h.lastText()).toBe("Кабатла учит татарские слова карточками. Слово возвращается тогда, когда вы начинаете его забывать: сначала через минуты, потом через дни и месяцы. Так оно остаётся в памяти надолго.");
-    expect(buttons(b.h.lastMarkup())).toEqual([["Дальше", "ob:next"]]);
+    expect(buttons(b.h.lastMarkup())).toEqual([["Дальше", "ob:n1"]]);
     expect(await b.user()).toMatchObject({ lang: "ru", onboardingStep: "intro1" });
 
-    const first = await b.press("ob:next");
+    const first = await b.press("ob:n1");
     edited(first);
     expect(b.h.lastText()).toBe("Карточка: сверху слово, перевод и пример скрыты. Вспомните перевод, нажмите на скрытый текст и честно оцените себя одной из четырёх кнопок. На каждой кнопке написано, когда слово вернётся.");
-    expect(buttons(b.h.lastMarkup())).toEqual([["Дальше", "ob:next"]]);
+    expect(buttons(b.h.lastMarkup())).toEqual([["Дальше", "ob:n2"]]);
     expect((await b.user()).onboardingStep).toBe("intro2");
 
-    const second = await b.press("ob:next");
+    const second = await b.press("ob:n2");
     edited(second);
     expect(b.h.lastText()).toBe("Что учить? Отметьте один или несколько уровней. Напоминание — каждый день в 09:00 по Москве, 10 новых слов в день. Всё это меняется в /settings.");
     expect(buttons(b.h.lastMarkup())).toEqual(LEVELS_RU(true, false));
@@ -116,6 +117,8 @@ describe("the introduction", () => {
     expect(go.methods).toEqual(["editMessageReplyMarkup", "sendMessage", "answerCallbackQuery"]);
     expect(go.calls[0]!.payload).toMatchObject({ message_id: 100 });
     expect(go.calls[0]!.payload.reply_markup).toBeUndefined();
+    // A card is sent as HTML and never grows a link preview, whatever its source link.
+    expect(go.calls[1]!.payload).toMatchObject({ parse_mode: "HTML", link_preview_options: { is_disabled: true } });
     expect(go.toast).toBeUndefined();
     expect(b.h.lastText().startsWith(`Вспомните перевод, откройте скрытый текст и оцените себя.\n\n${COUNTERS}\n<b>сәлам</b>\n`)).toBe(true);
     expect(buttons(b.h.lastMarkup()).slice(0, 4).map(([, data]) => data)).toEqual([expect.stringMatching(/^g:\d+:0:1$/), expect.stringMatching(/:2$/), expect.stringMatching(/:3$/), expect.stringMatching(/:4$/)]);
@@ -132,7 +135,7 @@ describe("the introduction", () => {
     await catalog(env.DB);
     const b = bot();
     await b.text("/start");
-    for (const answer of ["ob:ru", "ob:next", "ob:next"]) await b.press(answer);
+    for (const answer of ["ob:ru", "ob:n1", "ob:n2"]) await b.press(answer);
 
     const add = await b.press("ob:lv:2");
     edited(add);
@@ -164,11 +167,11 @@ describe("the introduction", () => {
     await b.text("/start");
     edited(await b.press("ob:tt"));
     expect(b.h.lastText()).toBe(tt.intro1);
-    expect(buttons(b.h.lastMarkup())).toEqual([["Алга таба", "ob:next"]]);
-    await b.press("ob:next");
+    expect(buttons(b.h.lastMarkup())).toEqual([["Алга таба", "ob:n1"]]);
+    await b.press("ob:n1");
     expect(b.h.lastText()).toBe(tt.intro2);
-    expect(buttons(b.h.lastMarkup())).toEqual([["Алга таба", "ob:next"]]);
-    await b.press("ob:next");
+    expect(buttons(b.h.lastMarkup())).toEqual([["Алга таба", "ob:n2"]]);
+    await b.press("ob:n2");
     expect(b.h.lastText()).toBe(tt.obLevels);
     expect(buttons(b.h.lastMarkup())).toEqual([
       ["☑ A1 · 5 сүз · текстның ≈45 %", "ob:lv:1"], ["☐ A2 · 1 сүз", "ob:lv:2"], ["☐ B1 · тиздән", "ob:lv:3"], ["☐ B2 · тиздән", "ob:lv:4"], ["☐ C1 · тиздән", "ob:lv:5"], ["Башлау", "ob:go"],
@@ -180,6 +183,28 @@ describe("the introduction", () => {
     expect([good.shown, good.given]).toEqual(["<10мин", "<10мин"]);
   });
 
+  it("a second tap on «Дальше» of the first screen does not skip the second: it stays, and the tap is answered like any answer the step does not take", async () => {
+    await catalog(env.DB);
+    const b = bot();
+    await b.text("/start");
+    await b.press("ob:ru");
+    edited(await b.press("ob:n1"));
+    expect(b.h.lastText()).toBe(ru.intro2);
+    const late = await b.press("ob:n1");
+    edited(late);
+    expect(late.calls[0]!.payload).toMatchObject({ text: ru.intro2, reply_markup: { inline_keyboard: [[{ text: "Дальше", callback_data: "ob:n2" }]] } });
+    expect(late.toast).toBe(ru.chooseAbove);
+    expect((await b.user()).onboardingStep).toBe("intro2");
+    // Two taps that arrive together both show the second screen.
+    await new Repo(env.DB).updateUser((await b.user()).id, { onboardingStep: "intro1" });
+    const before = b.h.tg.calls.length;
+    await Promise.all([b.h.press("ob:n1", 100), b.h.press("ob:n1", 100)]);
+    expect(b.h.tg.calls.slice(before).filter((c) => c.method === "editMessageText").map((c) => c.payload.text)).toEqual([ru.intro2, ru.intro2]);
+    expect((await b.user()).onboardingStep).toBe("intro2");
+    edited(await b.press("ob:n2"));
+    expect(b.h.lastText()).toBe(ru.obLevels);
+  });
+
   it("/start on a step sends the screen of that step again", async () => {
     await catalog(env.DB);
     const b = bot();
@@ -187,10 +212,10 @@ describe("the introduction", () => {
     const again = async () => { const u = await b.text("/start"); expect(u.methods).toEqual(["sendMessage"]); return [b.h.lastText(), buttons(b.h.lastMarkup())]; };
     expect(await again()).toEqual([ru.welcome, [["Русский", "ob:ru"], ["Татарча", "ob:tt"]]]);
     await b.press("ob:ru");
-    expect(await again()).toEqual([ru.intro1, [["Дальше", "ob:next"]]]);
-    await b.press("ob:next");
-    expect(await again()).toEqual([ru.intro2, [["Дальше", "ob:next"]]]);
-    await b.press("ob:next");
+    expect(await again()).toEqual([ru.intro1, [["Дальше", "ob:n1"]]]);
+    await b.press("ob:n1", 100);
+    expect(await again()).toEqual([ru.intro2, [["Дальше", "ob:n2"]]]);
+    await b.press("ob:n2", 100);
     expect(await again()).toEqual([ru.obLevels, LEVELS_RU(true, false)]);
     await b.press("ob:go");
     await b.text("/start");
@@ -201,7 +226,7 @@ describe("the introduction", () => {
     await catalog(env.DB);
     const b = bot();
     await b.text("/start");
-    for (const answer of ["ob:ru", "ob:next", "ob:next"]) await b.press(answer);
+    for (const answer of ["ob:ru", "ob:n1", "ob:n2"]) await b.press(answer);
     const before = b.h.tg.calls.length;
     await Promise.all([b.h.press("ob:go", 100), b.h.press("ob:go", 100)]);
     const calls = b.h.tg.calls.slice(before);
@@ -213,7 +238,7 @@ describe("the introduction", () => {
   it("with an empty catalog the levels are all «скоро», and «Начать» ends on the screen that says there is nothing to learn yet", async () => {
     const b = bot();
     await b.text("/start");
-    for (const answer of ["ob:ru", "ob:next", "ob:next"]) await b.press(answer, 100);
+    for (const answer of ["ob:ru", "ob:n1", "ob:n2"]) await b.press(answer, 100);
     expect(buttons(b.h.lastMarkup()).map(([text]) => text)).toEqual(["☑ A1 · скоро", "☐ A2 · скоро", "☐ B1 · скоро", "☐ B2 · скоро", "☐ C1 · скоро", "Начать"]);
     const go = await b.press("ob:go", 100);
     expect(go.methods).toEqual(["editMessageReplyMarkup", "answerCallbackQuery", "sendMessage"]);
@@ -230,7 +255,7 @@ describe("the introduction", () => {
       const b = bot();
       await b.text("/start");
       const repo = new Repo(env.DB);
-      const steps: [answer: string | null, foreign: string[]][] = [[null, ["ob:next", "ob:go", "ob:lv:1"]], ["ob:ru", ["ob:ru", "ob:go", "ob:lv:1"]], ["ob:next", ["ob:tt", "ob:go"]], ["ob:next", ["ob:ru", "ob:next", "ob:lv:9"]]];
+      const steps: [answer: string | null, foreign: string[]][] = [[null, ["ob:n1", "ob:n2", "ob:next", "ob:go", "ob:lv:1"]], ["ob:ru", ["ob:ru", "ob:n2", "ob:next", "ob:go", "ob:lv:1"]], ["ob:n1", ["ob:tt", "ob:n1", "ob:next", "ob:go"]], ["ob:n2", ["ob:ru", "ob:n1", "ob:n2", "ob:next", "ob:lv:9"]]];
       for (const [answer, foreign] of steps) {
         if (answer) await b.press(answer, 100);
         const user = await b.user();
@@ -250,7 +275,7 @@ describe("the introduction", () => {
       await catalog(env.DB);
       const b = bot();
       await b.text("/start");
-      for (const answer of [null, "ob:ru", "ob:next", "ob:next"]) {
+      for (const answer of [null, "ob:ru", "ob:n1", "ob:n2"]) {
         if (answer) await b.press(answer, 100);
         const user = await b.user();
         for (const typed of ["14:35", "рәхмәт", "/learn", "/levels", "/settings", "/stats", "/undo"]) {
@@ -271,7 +296,7 @@ describe("the introduction", () => {
       const b = bot();
       await introduced(b);
       const user = await b.user();
-      for (const data of [...OLD, "ob:ru", "ob:tt", "ob:next", "ob:lv:2", "ob:lv:1", "ob:go"]) {
+      for (const data of [...OLD, "ob:ru", "ob:tt", "ob:n1", "ob:n2", "ob:next", "ob:lv:2", "ob:lv:1", "ob:go"]) {
         const u = await b.press(data, 100);
         expect(u.calls.map((c) => [c.method, c.payload.text]), data).toEqual([["answerCallbackQuery", ru.staleButton]]);
         expect(u.d1).toBe(1);
@@ -302,7 +327,7 @@ describe("the introduction", () => {
       const b = bot();
       await b.text("/start");
       await new Repo(env.DB).updateUser((await b.user()).id, { onboardingStep: stored, onboardingData: JSON.stringify({ i: 3, known: 2 }) });
-      for (const data of ["ob:1", "ob:10", "ob:09:00", "ob:180", "ob:next", "ob:go"]) {
+      for (const data of ["ob:1", "ob:10", "ob:09:00", "ob:180", "ob:n1", "ob:n2", "ob:go"]) {
         const u = await b.press(data, 100);
         expect(u.calls[0]!.payload, data).toMatchObject({ text: ru.welcome });
         expect(u.toast, data).toBe(ru.chooseAbove);
@@ -345,8 +370,10 @@ describe("hints", () => {
     startsWith("„Трудно“: слово вернётся через &lt;6м. Интервалы будут расти медленнее.", "исәнмесез");
     const easy = await b.grade(4);
     // The words of A1 are all started: the card that comes is one that is due again.
-    expect(b.h.lastText().startsWith(`„Легко“: слово ушло сразу на ${easy.given} и не занимает дневную норму новых слов.\n\n🔵 0 · `)).toBe(true);
-    expect([easy.shown, easy.given]).toEqual([expect.stringMatching(/^\d+д$/), expect.stringMatching(/^\d+д$/)]);
+    // The button read «Легко 8д»: the hint says 8д, whatever day the scheduler's fuzz gave the card.
+    expect(easy.shown).toBe("8д");
+    expect(b.h.lastText().startsWith("„Легко“: слово ушло сразу на 8д и не занимает дневную норму новых слов.\n\n🔵 0 · ")).toBe(true);
+    expect(easy.given).toMatch(/^\d+д$/);
     expect((await b.user()).hintsSeen).toBe(127);
     // Measured: a grade is 6 D1 calls and 3 Telegram calls here, with a hint or without.
     expect([good.d1, goodAgain.d1, again.d1, hard.d1, easy.d1]).toEqual([6, 6, 6, 6, 6]);
@@ -384,7 +411,7 @@ describe("hints", () => {
     const easy = await b.grade(4);
     expect(easy.methods).toEqual(["sendMessage", "deleteMessage", "answerCallbackQuery"]);
     expect(b.h.lastText()).toBe([
-      `„Легко“: слово ушло сразу на ${easy.given} и не занимает дневную норму новых слов.`, ru.hintOrder, "",
+      `„Легко“: слово ушло сразу на ${easy.shown} и не занимает дневную норму новых слов.`, ru.hintOrder, "",
       ru.doneTitle, ru.doneToday(1, 0), ru.streak(1), "", ru.emptyAllDone,
     ].join("\n"));
     expect(easy.d1).toBeLessThanOrEqual(8);
@@ -530,11 +557,11 @@ describe("«Показать обучение заново»", () => {
     await b.text("/learn");
     expect(b.h.lastText().startsWith(`${ru.hintFront}\n\n🔵 20 · 🔴 0 · 🟢 0\n<b>мин</b>\n`)).toBe(true);
     const good = await b.grade(3);
-    expect(b.h.lastText().startsWith(`${ru.hintGood(good.given.replace("<", "&lt;"))}\n${ru.hintOrder}\n\n🔵 19 · 🔴 1 · 🟢 0\n<b>рәхмәт</b>\n`)).toBe(true);
+    expect(b.h.lastText().startsWith(`${ru.hintGood(good.shown.replace("<", "&lt;"))}\n${ru.hintOrder}\n\n🔵 19 · 🔴 1 · 🟢 0\n<b>рәхмәт</b>\n`)).toBe(true);
     await b.grade(3);
     expect(b.h.lastText()).toMatch(/^🔵/);
     const again = await b.grade(1);
-    expect(b.h.lastText().startsWith(`${ru.hintAgain(again.given.replace("<", "&lt;"))}\n\n🔵`)).toBe(true);
+    expect(b.h.lastText().startsWith(`${ru.hintAgain(again.shown.replace("<", "&lt;"))}\n\n🔵`)).toBe(true);
     expect(b.h.tg.calls.filter((c) => String(c.payload.text ?? "").includes("Бот обновился"))).toEqual([]);
   });
 

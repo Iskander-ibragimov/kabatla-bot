@@ -136,8 +136,10 @@ export async function startOnboarding(repo: Repo, user: User): Promise<Onboardin
 }
 
 /**
- * Applies one answer and returns the next screen. The answers: `ru` / `tt` on the language step; `next` on each of the
- * two screens; on «Уровни», `lv:<n>` flips the level n and `go` finishes. Any other answer is invalid and keeps the step.
+ * Applies one answer and returns the next screen. The answers: `ru` / `tt` on the language step; `n1` on the first
+ * screen and `n2` on the second — each screen has its own, so a second tap on «Дальше» of the first, which arrives
+ * when the learner already stands on the second, does not pass the second; on «Уровни», `lv:<n>` flips the level n
+ * and `go` finishes. Any other answer is invalid and keeps the step.
  */
 export async function advanceOnboarding(repo: Repo, user: User, answer: string, now: number): Promise<OnboardingScreen> {
   if (user.onboardingStep == null) return { kind: "stale" };
@@ -148,11 +150,11 @@ export async function advanceOnboarding(repo: Repo, user: User, answer: string, 
       await repo.updateUser(user.id, { lang: answer, onboardingStep: "intro1" });
       return { kind: "intro", n: 1 };
     case "intro1":
-      if (answer !== "next") return invalid;
+      if (answer !== "n1") return invalid;
       await repo.updateUser(user.id, { onboardingStep: "intro2" });
       return { kind: "intro", n: 2 };
     case "intro2":
-      if (answer !== "next") return invalid;
+      if (answer !== "n2") return invalid;
       await repo.updateUser(user.id, { onboardingStep: "levels" });
       return { kind: "levels", lines: await levelLines(repo, user) };
     case "levels": {

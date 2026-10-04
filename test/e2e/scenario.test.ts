@@ -24,7 +24,7 @@ describe("first day and next day", () => {
     await seedCatalog(env.DB, A1.map((word) => ({ level: 1, word })));
     const h = harness(env.DB, { now: T });
     await h.text("/start");
-    for (const answer of ["ob:ru", "ob:next", "ob:next", "ob:go"]) await h.press(answer, 100);
+    for (const answer of ["ob:ru", "ob:n1", "ob:n2", "ob:go"]) await h.press(answer, 100);
     // «Начать» gives the first card at once, with the hint of the first card; «▶ Учить» shows the same card.
     expect(h.lastText().startsWith(`${ru.hintFront}\n\n🔵 10 · 🔴 0 · 🟢 0\n<b>бала</b>\n`)).toBe(true);
     await h.press("learn");
@@ -99,9 +99,9 @@ describe("first day and next day", () => {
     await update(() => h.text("/start"));
     await press("ob:tt");
     expect(h.lastText()).toBe(tt.intro1);
-    await press("ob:next");
+    await press("ob:n1");
     expect(h.lastText()).toBe(tt.intro2);
-    await press("ob:next");
+    await press("ob:n2");
     expect(h.lastText()).toBe(tt.obLevels);
     expect((h.lastMarkup().inline_keyboard ?? []).flat().map((b) => b.text)).toEqual(["☑ A1 · 100 сүз · текстның ≈31 %", "☐ A2 · 1 сүз", "☐ B1 · тиздән", "☐ B2 · тиздән", "☐ C1 · тиздән", "Башлау"]);
     await press("ob:go");
@@ -110,13 +110,16 @@ describe("first day and next day", () => {
     expect(h.tg.calls.slice(-3).map((c) => c.method)).toEqual(["editMessageReplyMarkup", "sendMessage", "answerCallbackQuery"]);
     expect(h.lastText().startsWith(`${tt.hintFront}\n\n🔵 10 · 🔴 0 · 🟢 0\n<b>${words100[0]}</b>\n`)).toBe(true);
 
+    /** The interval on the «Җиңел» button of the first card, like «8көн»: the hint above the second card names it. */
+    let firstEasy = "";
     for (let i = 0; i < 100; i++) {
       expect(h.lastText()).toContain(`<b>${words100[i]}</b>`);
       // «Җиңел» explains itself above the second card, with the order of a session, and never again.
-      if (i === 1) expect(h.lastText()).toMatch(new RegExp(`^„Җиңел“: сүз шунда ук озакка китте — кайтканчы \\d+көн бар\\. Ул көнлек яңа сүзләр санына керми\\.\n${tt.hintOrder}\n\n🔵 10 · 🔴 0 · 🟢 0\n`));
+      if (i === 1) expect(h.lastText().startsWith(`„Җиңел“: сүз шунда ук озакка китте — кайтканчы ${firstEasy} бар. Ул көнлек яңа сүзләр санына керми.\n${tt.hintOrder}\n\n🔵 10 · 🔴 0 · 🟢 0\n`)).toBe(true);
       if (i > 1) expect(h.lastText().startsWith("🔵 10 · 🔴 0 · 🟢 0\n")).toBe(true);
       const easy = (h.lastMarkup().inline_keyboard ?? []).flat().find((b) => b.callback_data === easyButton(h))!;
       expect(easy.text.startsWith(`${tt.easy} `)).toBe(true);
+      if (i === 0) firstEasy = easy.text.slice(tt.easy.length + 1);
       await press(easy.callback_data);
     }
     // Every word of the checked level is in work: the session ends, in Tatar; the bot opens nothing by itself and offers the next level.
