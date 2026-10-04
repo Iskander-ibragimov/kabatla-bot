@@ -26,8 +26,7 @@ function fixtureLevels(n = 2): Row[][] {
 }
 
 const attested = new Set(["бу", "мин", ...fixtureLevels(4).flat().flatMap((r) => tokenize(r.example_tt))]);
-const opts = (expectLevels: number) => ({ attested, placement: [], expectLevels });
-const attested8 = new Set(["бу", "мин", ...fixtureLevels(8).flat().flatMap((r) => tokenize(r.example_tt))]);
+const opts = (expectLevels: number) => ({ attested, expectLevels });
 
 describe("level files", () => {
   it("names level files like the deck slugs", () => {
@@ -101,11 +100,11 @@ describe("tokenize and wordForm", () => {
 describe("checkLevels", () => {
   it("reports every violation with level and row", () => {
     const bad = fixtureLevels(); bad[0]![3]!.word = "hава"; bad[1]![0]!.word = bad[0]![0]!.word; bad[0]![5]!.example_tt = "Бу — кыйшыксүз.";
-    const errs = checkLevels(bad, { attested, placement: [], expectLevels: 2 });
+    const errs = checkLevels(bad, { attested, expectLevels: 2 });
     expect(errs).toEqual(expect.arrayContaining([expect.stringMatching(/l01:5 .*букв/), expect.stringMatching(/l02:2 .*дубль/), expect.stringMatching(/l01:7 .*кыйшыксүз/)]));
   });
 
-  it("passes a clean fixture", () => expect(checkLevels(fixtureLevels(), { attested, placement: [], expectLevels: 2 })).toEqual([]));
+  it("passes a clean fixture", () => expect(checkLevels(fixtureLevels(), { attested, expectLevels: 2 })).toEqual([]));
 
   it("wants exactly the expected number of levels, 100 rows each", () => {
     const levels = fixtureLevels(); levels[1]!.pop();
@@ -191,30 +190,6 @@ describe("checkLevels", () => {
     levels[0]![9]!.word = ` ${levels[0]![0]!.word.toUpperCase()}`;
     levels[0]![9]!.example_tt = levels[0]![0]!.example_tt;
     expect(checkLevels(levels, opts(2))).toEqual([expect.stringMatching(/^l01:11 .*дубль.*l01:2/)]);
-  });
-
-  it("wants every placement word in its level, for the levels that exist", () => {
-    const levels = fixtureLevels();
-    const placement = [{ word: levels[0]![0]!.word, level: 1 }, { word: levels[0]![1]!.word, level: 2 }, { word: "юк", level: 1 }, { word: "җәмгыять", level: 16 }];
-    expect(checkLevels(levels, { attested, placement, expectLevels: 2 })).toEqual([
-      expect.stringMatching(new RegExp(`^l02: .*${levels[0]![1]!.word}.*l01`)),
-      expect.stringMatching(/^l01: .*юк/),
-    ]);
-  });
-
-  it("leaves a placement word alone until its level exists, wherever the word stands", () => {
-    const levels = fixtureLevels();
-    const placement = [{ word: levels[1]![5]!.word, level: 6 }, { word: "җәмгыять", level: 16 }];
-    expect(checkLevels(levels, { attested, placement, expectLevels: 2 })).toEqual([]);
-  });
-
-  it("checks every placement word once all the levels exist", () => {
-    const levels = fixtureLevels(8);
-    const placement = [{ word: levels[5]![0]!.word, level: 6 }, { word: levels[1]![5]!.word, level: 7 }, { word: "җәмгыять", level: 8 }];
-    expect(checkLevels(levels, { attested: attested8, placement, expectLevels: 8 })).toEqual([
-      expect.stringMatching(new RegExp(`^l07: .*${levels[1]![5]!.word}.*l02`)),
-      expect.stringMatching(/^l08: .*җәмгыять/),
-    ]);
   });
 
   it("wants the core words in levels 1–4 once four levels exist", () => {

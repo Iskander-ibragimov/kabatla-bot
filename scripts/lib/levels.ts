@@ -5,7 +5,6 @@
 import { type Rename, parseCsv, toCsv } from "../../src/content/csv";
 import { isTatarText } from "../../src/content/tatar";
 import { wordKey } from "../../src/db/repo";
-import type { PLACEMENT } from "../../src/users/placement";
 import { levelSlug } from "../../src/users/service";
 import { verbStems } from "./tatar-verbs";
 
@@ -69,7 +68,6 @@ export function wordForm(example: string, word: string, pos: string, strict = fa
 export interface CheckOptions {
   /** Lower-case word forms the corpus knows, plus the forms approved by hand. */
   attested: ReadonlySet<string>;
-  placement: typeof PLACEMENT;
   expectLevels: number;
   /** Everyday core words; checked once levels 1–4 exist. */
   core?: readonly string[];
@@ -149,13 +147,6 @@ export function checkLevels(levels: Row[][], opts: CheckOptions): string[] {
     });
   });
 
-  // A placement word is checked once the file of its level exists; with all the levels in place every word is.
-  for (const p of opts.placement) {
-    if (p.level > levels.length) continue;
-    const found = seen.get(wordKey(p.word));
-    if (!found) errors.push(`${levelSlug(p.level)}: нет слова «${p.word}» из проверки уровня`);
-    else if (found.level !== p.level) errors.push(`${levelSlug(p.level)}: слово «${p.word}» из проверки уровня стоит в ${levelSlug(found.level)}`);
-  }
   if (opts.core && levels.length >= 4) {
     for (const word of opts.core) {
       const found = seen.get(wordKey(word));

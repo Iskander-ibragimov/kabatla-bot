@@ -1,6 +1,6 @@
 import type { DirectionSetting, Lang, Repo, User } from "../db/repo";
-import { LEVELS, levelBit } from "../levels/scale";
-import { PLACEMENT, placementLevel } from "./placement";
+import { type LevelLine, levelLines, toggleLevel } from "../levels/service";
+import { HINT } from "../tutorial/hints";
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -40,15 +40,6 @@ export function dayWindow(offsetMin: number, now: number): Window {
 /** Interface language from Telegram's language code: Tatar for `tt`, Russian for everything else. */
 export function langFromTelegram(code?: string): Lang {
   return code?.split(/[-_]/)[0]!.toLowerCase() === "tt" ? "tt" : "ru";
-}
-
-/** UTC offset in minutes from the local time the user reports; handles the midnight wrap. */
-export function offsetFromReported(h: number, m: number, now: number): number {
-  const utc = new Date(now);
-  let diff = h * 60 + m - (utc.getUTCHours() * 60 + utc.getUTCMinutes());
-  while (diff <= -720) diff += 1440;
-  while (diff > 840) diff -= 1440;
-  return Math.round(diff / 30) * 30;
 }
 
 export async function getOrCreate(repo: Repo, tgId: number, chatId: number, tgLang: string | undefined, now: number): Promise<{ user: User; created: boolean }> {
@@ -96,97 +87,87 @@ export async function setSetting(repo: Repo, userId: number, key: SettingKey, va
   await repo.updateUser(userId, patch);
 }
 
-export type OnboardingScreen =
-  | { kind: "lang" }
-  | { kind: "placement"; index: number; word: string }
-  | { kind: "goal"; level: number; known: number }
-  | { kind: "remind" }
-  | { kind: "tz"; options: { label: string; offset: number }[] }
-  | { kind: "finished"; remindAt: string; tzOffsetMin: number; level: number }
-  | { kind: "invalid"; step: string }
-  /** The answer came after another one had already finished onboarding; nothing was written. */
-  | { kind: "stale" };
+/**
+ * What a new learner studies with until it is changed in the settings; the step «Уровни» of the introduction says so,
+ * and its finish stores it. The levels are the learner's own choice on that step, A1 to begin with.
+ */
+export const DEFAULTS = { newPerDay: 10, remindAt: "09:00", tzOffsetMin: 180 } as const;
 
-const TZ_CHOICES = [120, 180, 240, 300, 420, 600];
-function tzOptions(now: number) {
-  return TZ_CHOICES.map((offset) => {
-    const d = new Date(now + offset * 60_000);
-    return { offset, label: `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}` };
-  });
-}
-
-/** Slug of the catalog deck that holds a level: l01 … l20. */
+/** Slug of the catalog deck that held a level by hundreds: l01 … l20. */
 export const levelSlug = (level: number) => `l${String(level).padStart(2, "0")}`;
 
-/** Re-renders the current onboarding step (used on /start while onboarding). */
-export function startOnboarding(user: User, now = Date.now()): OnboardingScreen {
-  const data = user.onboardingData ? (JSON.parse(user.onboardingData) as { i: number; known: number }) : { i: 0, known: 0 };
-  switch (user.onboardingStep) {
-    case "placement": return { kind: "placement", index: data.i, word: PLACEMENT[data.i]?.word ?? PLACEMENT[0]!.word };
-    case "goal": return { kind: "goal", level: user.level, known: data.known };
-    case "remind": return { kind: "remind" };
-    case "tz": return { kind: "tz", options: tzOptions(now) };
+/**
+ * The introduction, `users.onboarding_step`: the language, two screens about the bot, the levels to study; NULL once
+ * it is finished. Nothing else is asked: the rest is `DEFAULTS`.
+ */
+const STEPS = ["lang", "intro1", "intro2", "levels"] as const;
+type Step = (typeof STEPS)[number];
+/** The step a learner stands on. A stored step the introduction does not have is its first one, so nobody is left on a step that takes no answer. */
+const stepOf = (user: Pick<User, "onboardingStep">): Step => STEPS.find((s) => s === user.onboardingStep) ?? "lang";
+
+export type OnboardingScreen =
+  | { kind: "lang" }
+  | { kind: "intro"; n: 1 | 2 }
+  /** The levels of the scale, to check and uncheck. */
+  | { kind: "levels"; lines: LevelLine[] }
+  /** The introduction is over: the first card comes next. */
+  | { kind: "finished" }
+  /**
+   * The step does not take this answer; nothing was written. `why`: the answer was a level that cannot be flipped —
+   * `last`, the only one checked; `soon`, one without cards.
+   */
+  | { kind: "invalid"; step: string; why?: "last" | "soon" }
+  /** The answer came after the introduction was finished; nothing was written. */
+  | { kind: "stale" };
+
+/** The screen of the step the learner stands on (shown on /start, and in place of a screen the introduction no longer has). */
+export async function startOnboarding(repo: Repo, user: User): Promise<OnboardingScreen> {
+  switch (stepOf(user)) {
+    case "intro1": return { kind: "intro", n: 1 };
+    case "intro2": return { kind: "intro", n: 2 };
+    case "levels": return { kind: "levels", lines: await levelLines(repo, user) };
     default: return { kind: "lang" };
   }
 }
 
-/** Applies one answer and returns the next screen. Invalid answers keep the step. */
+/**
+ * Applies one answer and returns the next screen. The answers: `ru` / `tt` on the language step; `next` on each of the
+ * two screens; on «Уровни», `lv:<n>` flips the level n and `go` finishes. Any other answer is invalid and keeps the step.
+ */
 export async function advanceOnboarding(repo: Repo, user: User, answer: string, now: number): Promise<OnboardingScreen> {
-  const step = user.onboardingStep;
-  const invalid = { kind: "invalid", step: step ?? "" } as const;
-  if (step === "lang") {
-    if (answer !== "ru" && answer !== "tt") return invalid;
-    await repo.updateUser(user.id, { lang: answer, onboardingStep: "placement", onboardingData: JSON.stringify({ i: 0, known: 0 }) });
-    return { kind: "placement", index: 0, word: PLACEMENT[0]!.word };
-  }
-  if (step === "placement") {
-    if (answer !== "0" && answer !== "1") return invalid;
-    const d = user.onboardingData ? (JSON.parse(user.onboardingData) as { i: number; known: number }) : { i: 0, known: 0 };
-    const next = { i: d.i + 1, known: d.known + Number(answer) };
-    if (next.i < PLACEMENT.length) {
-      await repo.updateUser(user.id, { onboardingData: JSON.stringify(next) });
-      return { kind: "placement", index: next.i, word: PLACEMENT[next.i]!.word };
+  if (user.onboardingStep == null) return { kind: "stale" };
+  const invalid = { kind: "invalid", step: user.onboardingStep } as const;
+  switch (stepOf(user)) {
+    case "lang":
+      if (answer !== "ru" && answer !== "tt") return invalid;
+      await repo.updateUser(user.id, { lang: answer, onboardingStep: "intro1" });
+      return { kind: "intro", n: 1 };
+    case "intro1":
+      if (answer !== "next") return invalid;
+      await repo.updateUser(user.id, { onboardingStep: "intro2" });
+      return { kind: "intro", n: 2 };
+    case "intro2":
+      if (answer !== "next") return invalid;
+      await repo.updateUser(user.id, { onboardingStep: "levels" });
+      return { kind: "levels", lines: await levelLines(repo, user) };
+    case "levels": {
+      const level = answer.match(/^lv:([1-5])$/);
+      if (level) {
+        // The same rules as in the settings: one statement that looks at the stored set and changes it.
+        const res = await toggleLevel(repo, user, Number(level[1]));
+        if (res !== "ok") return { ...invalid, why: res };
+        // The statement gives no new set, and another tap may have changed it too: the row is read again.
+        return { kind: "levels", lines: await levelLines(repo, (await repo.getUser(user.id))!) };
+      }
+      if (answer !== "go") return invalid;
+      // Two «Начать» may arrive together, or one after the learner has studied: the write is guarded on the step, so only the first finishes.
+      const finished = await repo.finishOnboarding(user.id, {
+        ...DEFAULTS, onboardingStep: null, onboardingData: null, hintsSeen: HINT.update,
+        nextDailyAt: nextOccurrence(DEFAULTS.tzOffsetMin, DEFAULTS.remindAt, now), nextEveningAt: nextOccurrence(DEFAULTS.tzOffsetMin, EVENING_AT, now),
+      });
+      return finished ? { kind: "finished" } : { kind: "stale" };
     }
-    // The level named on the next screen is the one that will be opened, see the time-zone step.
-    const placed = placementLevel(next.known);
-    const level = (await repo.startLevel(placed))?.levelNo ?? placed;
-    await repo.updateUser(user.id, { level, onboardingStep: "goal", onboardingData: JSON.stringify(next) });
-    return { kind: "goal", level, known: next.known };
   }
-  if (step === "goal") {
-    const n = Number(answer);
-    if (!NEW_PER_DAY.includes(n as never)) return invalid;
-    await repo.updateUser(user.id, { newPerDay: n, onboardingStep: "remind" });
-    return { kind: "remind" };
-  }
-  if (step === "remind") {
-    if (!HHMM.test(answer)) return invalid;
-    await repo.updateUser(user.id, { remindAt: answer, onboardingStep: "tz" });
-    return { kind: "tz", options: tzOptions(now) };
-  }
-  if (step === "tz") {
-    let offset: number | null = null;
-    const typed = answer.trim().match(/^(\d{1,2})[:.](\d{2})$/);
-    if (typed) {
-      const h = Number(typed[1]), m = Number(typed[2]);
-      if (h < 24 && m < 60) offset = offsetFromReported(h, m, now);
-    } else if (/^-?\d+$/.test(answer) && TZ_CHOICES.includes(Number(answer))) offset = Number(answer);
-    if (offset == null) return invalid;
-    // The catalog may not hold the placed level yet (ruling T16b): the learner starts at the nearest level that exists,
-    // and `users.level` is the level actually opened. With an empty catalog the placed level stays, with nothing opened.
-    const start = await repo.startLevel(user.level);
-    const level = start?.levelNo ?? user.level;
-    // Transitional, until the onboarding lets the learner check the levels: the start level, as far as the scale
-    // A1–C1 goes, is the one checked level, so the session gives the catalog words of that level.
-    // Two answers to this step may arrive together: the write is guarded on the step, so only one of them finishes.
-    const [finished] = await repo.batch(repo.finishOnboardingStmts(user.id, {
-      level, levels: levelBit(Math.min(level, LEVELS.length)), tzOffsetMin: offset, onboardingStep: null, onboardingData: null,
-      nextDailyAt: nextOccurrence(offset, user.remindAt, now), nextEveningAt: nextOccurrence(offset, EVENING_AT, now),
-    }, start?.deckId ?? null, now));
-    if (!finished!.meta.changes) return { kind: "stale" };
-    return { kind: "finished", remindAt: user.remindAt, tzOffsetMin: offset, level };
-  }
-  return invalid;
 }
 
 export type { DirectionSetting };

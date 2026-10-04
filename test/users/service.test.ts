@@ -1,23 +1,13 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { Repo } from "../../src/db/repo";
-import { levelBit } from "../../src/levels/scale";
-import { PLACEMENT, placementLevel } from "../../src/users/placement";
-import { advanceOnboarding, getOrCreate, levelSlug, langFromTelegram, nextOccurrence, offsetFromReported, setSetting, startOnboarding } from "../../src/users/service";
-import { seedLevels } from "../helpers/seed";
+import { Repo, type User } from "../../src/db/repo";
+import { HINT } from "../../src/tutorial/hints";
+import { advanceOnboarding, getOrCreate, levelSlug, langFromTelegram, nextOccurrence, setSetting, startOnboarding } from "../../src/users/service";
+import { seedCatalog, seedLearner } from "../helpers/seed";
 
 const T = Date.UTC(2026, 8, 30, 6, 0);
 
 describe("users", () => {
-  it("offset across midnight", () => {
-    expect(offsetFromReported(0, 30, Date.UTC(2026, 8, 29, 21, 30))).toBe(180);
-  });
-  it("negative offset", () => {
-    expect(offsetFromReported(5, 0, Date.UTC(2026, 8, 30, 10, 0))).toBe(-300);
-  });
-  it("offset rounds to 30 minutes and India works", () => {
-    expect(offsetFromReported(11, 32, Date.UTC(2026, 8, 30, 6, 0))).toBe(330);
-  });
   it("lang detection", () => {
     expect(langFromTelegram("tt")).toBe("tt");
     expect(langFromTelegram("TT-ru")).toBe("tt");
@@ -27,8 +17,6 @@ describe("users", () => {
     expect(langFromTelegram("tts")).toBe("ru");
     expect(langFromTelegram(undefined)).toBe("ru");
   });
-  it.each([[0, 1], [2, 1], [3, 2], [4, 2], [5, 4], [6, 4], [7, 7], [8, 7], [9, 10], [10, 10]])("%i known → level %i", (k, l) => expect(placementLevel(k)).toBe(l));
-  it("tests ten words from levels 1,1,2,3,4,6,8,10,13,16", () => expect(PLACEMENT.map((p) => p.level)).toEqual([1, 1, 2, 3, 4, 6, 8, 10, 13, 16]));
   it("level slug is l01…l20", () => expect([1, 9, 20].map(levelSlug)).toEqual(["l01", "l09", "l20"]));
   it("invalid settings rejected", async () => {
     const repo = new Repo(env.DB);
@@ -58,153 +46,135 @@ describe("users", () => {
     expect(b.user).toMatchObject({ level: 1, direction: "tt_ru" });
   });
 
-  it("finishes onboarding on the time-zone step and opens only the start level", async () => {
-    const repo = new Repo(env.DB);
-    const deckIds = await seedLevels(env.DB, { 1: ["бер"], 4: ["дүрт"] });
-    let { user } = await getOrCreate(repo, 9, 9, "ru", T);
-    expect(startOnboarding(user)).toEqual({ kind: "lang" });
-    const step = async (answer: string) => { const s = await advanceOnboarding(repo, user, answer, T); user = (await repo.getUser(user.id))!; return s; };
-    expect(await step("tt")).toMatchObject({ kind: "placement", index: 0, word: PLACEMENT[0]!.word });
-    expect(user.lang).toBe("tt");
-    for (let i = 0; i < 10; i++) await step(i < 5 ? "1" : "0");
-    expect(user.level).toBe(4);
-    expect(user.onboardingStep).toBe("goal");
-    expect(startOnboarding(user)).toEqual({ kind: "goal", level: 4, known: 5 });
-    expect(await step("10")).toEqual({ kind: "remind" });
-    expect((await step("09:00")).kind).toBe("tz");
-    expect(await step("hello")).toMatchObject({ kind: "invalid" });
-    expect(await step("180")).toEqual({ kind: "finished", remindAt: "09:00", tzOffsetMin: 180, level: 4 });
-    expect(await repo.userDeckIds(user.id)).toEqual([deckIds[4]]);
-    expect(user).toMatchObject({ onboardingStep: null, onboardingData: null, level: 4, newPerDay: 10 });
-    // Until the onboarding asks for the levels: the start level is the one checked level, so the session gives its words.
-    expect(user.levels).toBe(levelBit(4));
-  });
-
-  /** A user on the time-zone step who was placed at `level`. */
-  async function placedAt(repo: Repo, tgId: number, level: number) {
-    const { user } = await getOrCreate(repo, tgId, tgId, "ru", T);
-    await repo.updateUser(user.id, { onboardingStep: "tz", level });
-    return (await repo.getUser(user.id))!;
-  }
-
-  it("the finish checks the start level on the scale A1–C1, and C1 for a start level above it (until the onboarding asks for the levels)", async () => {
-    const repo = new Repo(env.DB);
-    await seedLevels(env.DB, { 2: ["ике"], 9: ["тугыз"] });
-    for (const [tgId, placed, level, levels] of [[31, 2, 2, levelBit(2)], [32, 12, 9, levelBit(5)]] as const) {
-      const user = await placedAt(repo, tgId, placed);
-      expect(user.levels).toBe(levelBit(1));
-      await advanceOnboarding(repo, user, "180", T);
-      expect(await repo.getUser(user.id)).toMatchObject({ level, levels });
+  describe("onboarding", () => {
+    /** A1 has two words and covers 45% of a text, A2 has one word; B1, B2 and C1 have none. */
+    async function catalog() {
+      await seedCatalog(env.DB, [{ level: 1, word: "бер" }, { level: 1, word: "ике" }, { level: 2, word: "өч" }]);
+      await env.DB.prepare("UPDATE decks SET coverage_pct = 45 WHERE level_no = 1").run();
     }
-    // An answer that finishes nothing checks nothing.
-    const late = await placedAt(repo, 33, 2);
-    await repo.updateUser(late.id, { onboardingStep: null });
-    expect(await advanceOnboarding(repo, late, "180", T)).toEqual({ kind: "stale" });
-    expect((await repo.getUser(late.id))!.levels).toBe(levelBit(1));
-  });
+    /** A new user (Telegram id `tgId`) and `step`: one answer, after which the user's row is read again. */
+    async function newcomer(repo: Repo, tgId: number) {
+      const state = { user: (await getOrCreate(repo, tgId, tgId, "ru", T)).user };
+      const step = async (answer: string, now = T) => { const s = await advanceOnboarding(repo, state.user, answer, now); state.user = (await repo.getUser(state.user.id))!; return s; };
+      return { state, step };
+    }
+    /** A user on the step «Уровни», with `patch` over the row. */
+    async function atLevels(repo: Repo, tgId: number, patch: Partial<User> = {}) {
+      const { user } = await getOrCreate(repo, tgId, tgId, "ru", T);
+      await repo.updateUser(user.id, { onboardingStep: "levels", ...patch });
+      return (await repo.getUser(user.id))!;
+    }
+    const line = (no: number, code: string, checked: boolean, total: number, size: number, coveragePct: number | null = null) => ({ no, code, checked, total, size, started: 0, coveragePct });
+    const lines = (a1: boolean, a2: boolean) => [line(1, "A1", a1, 2, 500, 45), line(2, "A2", a2, 1, 850), line(3, "B1", false, 0, 850), line(4, "B2", false, 0, 800), line(5, "C1", false, 0, 850)];
 
-  describe("start level on an incomplete catalog (ruling T16b)", () => {
-    it("starts at the highest existing level not above the placed one", async () => {
+    it("the steps: language, two screens, the levels, and the finish with the defaults stored", async () => {
       const repo = new Repo(env.DB);
-      const deckIds = await seedLevels(env.DB, { 1: ["бер"], 2: ["ике"], 9: ["тугыз"] });
-      const user = await placedAt(repo, 13, 7);
-      expect(await advanceOnboarding(repo, user, "180", T)).toEqual({ kind: "finished", remindAt: "09:00", tzOffsetMin: 180, level: 2 });
-      expect(await repo.userDeckIds(user.id)).toEqual([deckIds[2]]);
-      expect(await repo.getUser(user.id)).toMatchObject({ onboardingStep: null, level: 2 });
+      await catalog();
+      const { state, step } = await newcomer(repo, 9);
+      expect(await startOnboarding(repo, state.user)).toEqual({ kind: "lang" });
+      expect(await step("tt")).toEqual({ kind: "intro", n: 1 });
+      expect(state.user).toMatchObject({ lang: "tt", onboardingStep: "intro1" });
+      expect(await startOnboarding(repo, state.user)).toEqual({ kind: "intro", n: 1 });
+      expect(await step("next")).toEqual({ kind: "intro", n: 2 });
+      expect(state.user.onboardingStep).toBe("intro2");
+      expect(await startOnboarding(repo, state.user)).toEqual({ kind: "intro", n: 2 });
+      expect(await step("next")).toEqual({ kind: "levels", lines: lines(true, false) });
+      expect(state.user).toMatchObject({ onboardingStep: "levels", levels: 0b1 });
+      expect(await startOnboarding(repo, state.user)).toEqual({ kind: "levels", lines: lines(true, false) });
+      expect(await step("lv:2")).toEqual({ kind: "levels", lines: lines(true, true) });
+      expect(state.user).toMatchObject({ onboardingStep: "levels", levels: 0b11 });
+      expect(await step("lv:1")).toEqual({ kind: "levels", lines: lines(false, true) });
+      expect(state.user.levels).toBe(0b10);
+      const at1500 = Date.UTC(2026, 8, 30, 12, 0); // 15:00 in Moscow
+      expect(await step("go", at1500)).toEqual({ kind: "finished" });
+      expect(state.user).toMatchObject({
+        onboardingStep: null, onboardingData: null, hintsSeen: HINT.update, lang: "tt", levels: 0b10, posGroups: 255, newMode: "guided", topicNo: null,
+        newPerDay: 10, remindAt: "09:00", tzOffsetMin: 180,
+        // The first reminder is the next 09:00 in Moscow, not the moment of the finish; the evening one is today's 20:00.
+        nextDailyAt: Date.UTC(2026, 9, 1, 6, 0), nextEveningAt: Date.UTC(2026, 8, 30, 17, 0),
+      });
+      expect(await repo.userDeckIds(state.user.id)).toEqual([]);
     });
 
-    it("with only level 1 published everybody starts at level 1", async () => {
+    it("an answer the step does not take is invalid and writes nothing", async () => {
       const repo = new Repo(env.DB);
-      const deckIds = await seedLevels(env.DB, { 1: ["бер"] });
-      for (const [tgId, placed] of [[21, 1], [22, 2], [23, 4], [24, 7], [25, 10]] as const) {
-        const user = await placedAt(repo, tgId, placed);
-        expect(await advanceOnboarding(repo, user, "180", T)).toMatchObject({ kind: "finished", level: 1 });
-        expect(await repo.userDeckIds(user.id)).toEqual([deckIds[1]]);
-        expect((await repo.getUser(user.id))!.level).toBe(1);
-      }
-    });
-
-    it("starts at the lowest existing level when there is none at or below the placed one", async () => {
-      const repo = new Repo(env.DB);
-      const deckIds = await seedLevels(env.DB, { 5: ["биш"], 8: ["сигез"] });
-      const user = await placedAt(repo, 14, 2);
-      expect(await advanceOnboarding(repo, user, "180", T)).toMatchObject({ kind: "finished", level: 5 });
-      expect(await repo.userDeckIds(user.id)).toEqual([deckIds[5]]);
-      expect((await repo.getUser(user.id))!.level).toBe(5);
-    });
-
-    it("keeps the placed level without a subscription when the catalog is empty", async () => {
-      const repo = new Repo(env.DB);
-      const user = await placedAt(repo, 15, 4);
-      expect(await advanceOnboarding(repo, user, "180", T)).toMatchObject({ kind: "finished", level: 4 });
-      expect(await repo.userDeckIds(user.id)).toEqual([]);
-      expect(await repo.getUser(user.id)).toMatchObject({ onboardingStep: null, level: 4 });
-    });
-
-    it("own decks and AI decks are not levels to start from", async () => {
-      const repo = new Repo(env.DB);
-      const other = await getOrCreate(repo, 16, 16, "ru", T);
-      await repo.customDeck(other.user.id, T);
-      expect(await repo.startLevel(4)).toBeNull();
-      const deckIds = await seedLevels(env.DB, { 3: ["өч"] });
-      expect(await repo.startLevel(4)).toEqual({ deckId: deckIds[3], levelNo: 3 });
-      expect(await repo.startLevel(3)).toEqual({ deckId: deckIds[3], levelNo: 3 });
-      expect(await repo.startLevel(1)).toEqual({ deckId: deckIds[3], levelNo: 3 });
-    });
-
-    it("the placement test already names the level that will be opened", async () => {
-      const repo = new Repo(env.DB);
-      await seedLevels(env.DB, { 1: ["бер"], 2: ["ике"] });
-      let { user } = await getOrCreate(repo, 17, 17, "ru", T);
-      const step = async (answer: string) => { const s = await advanceOnboarding(repo, user, answer, T); user = (await repo.getUser(user.id))!; return s; };
+      await catalog();
+      const { state, step } = await newcomer(repo, 10);
+      const refused = async (answers: string[]) => {
+        const before = state.user;
+        for (const answer of answers) expect(await step(answer), answer).toEqual({ kind: "invalid", step: before.onboardingStep });
+        expect(state.user).toEqual(before);
+      };
+      // The answers of the introduction that is gone are among them: «Знаю», the words a day, the hour, the time zone.
+      const old = ["1", "0", "10", "09:00", "180", "14:35", ""];
+      await refused(["en", "next", "go", "lv:1", ...old]);
       await step("ru");
-      let last = await step("1");
-      for (let i = 1; i < 10; i++) last = await step("1");
-      // Ten known words place at level 10; the catalog ends at level 2.
-      expect(last).toEqual({ kind: "goal", level: 2, known: 10 });
-      expect(user).toMatchObject({ level: 2, onboardingStep: "goal" });
-      expect(startOnboarding(user)).toEqual({ kind: "goal", level: 2, known: 10 });
+      await refused(["ru", "tt", "go", "lv:1", ...old]);
+      await step("next");
+      await refused(["ru", "tt", "go", "lv:1", ...old]);
+      await step("next");
+      await refused(["ru", "tt", "next", "lv:", "lv:x", "lv:1.5", "lv:12", "lv:0", "lv:6", ...old]);
     });
-  });
 
-  describe("finishing onboarding twice", () => {
-    it("of two concurrent answers to the time-zone step only one finishes; the other is stale and writes nothing", async () => {
+    it("the only checked level is not unchecked, and a level without cards is not checked: invalid, with the reason, and nothing written", async () => {
       const repo = new Repo(env.DB);
-      const deckIds = await seedLevels(env.DB, { 1: ["бер"] });
-      const user = await placedAt(repo, 31, 1);
-      const screens = await Promise.all([advanceOnboarding(repo, user, "180", T), advanceOnboarding(repo, user, "240", T)]);
+      await catalog();
+      const user = await atLevels(repo, 11);
+      expect(await advanceOnboarding(repo, user, "lv:1", T)).toEqual({ kind: "invalid", step: "levels", why: "last" });
+      for (const answer of ["lv:3", "lv:4", "lv:5"]) expect(await advanceOnboarding(repo, user, answer, T), answer).toEqual({ kind: "invalid", step: "levels", why: "soon" });
+      expect(await repo.getUser(user.id)).toEqual(user);
+    });
+
+    it("of two «Начать» at once one finishes; the other is stale", async () => {
+      const repo = new Repo(env.DB);
+      await catalog();
+      const user = await atLevels(repo, 12);
+      const screens = await Promise.all([advanceOnboarding(repo, user, "go", T), advanceOnboarding(repo, user, "go", T)]);
       expect(screens.map((s) => s.kind).sort()).toEqual(["finished", "stale"]);
-      const won = screens.find((s) => s.kind === "finished") as { tzOffsetMin: number };
-      expect(await repo.getUser(user.id)).toMatchObject({ onboardingStep: null, tzOffsetMin: won.tzOffsetMin, level: 1 });
-      expect(await repo.userDeckIds(user.id)).toEqual([deckIds[1]]);
+      expect(await repo.getUser(user.id)).toMatchObject({ onboardingStep: null, hintsSeen: HINT.update, nextDailyAt: nextOccurrence(180, "09:00", T) });
     });
 
-    it("an answer that arrives with the user row read before the finish changes nothing", async () => {
+    it("«Начать» that arrives with the user row read before the finish changes nothing", async () => {
       const repo = new Repo(env.DB);
-      await seedLevels(env.DB, { 1: ["бер"], 2: ["ике"] });
-      const before = await placedAt(repo, 32, 1);
-      expect((await advanceOnboarding(repo, before, "180", T)).kind).toBe("finished");
-      // The learner moved on and left level 1; the late answer must neither move them back nor open anything.
-      await repo.updateUser(before.id, { level: 2 });
-      await env.DB.prepare("DELETE FROM user_decks WHERE user_id = ?").bind(before.id).run();
-      expect(await advanceOnboarding(repo, before, "240", T + 60_000)).toEqual({ kind: "stale" });
-      expect(await repo.getUser(before.id)).toMatchObject({ onboardingStep: null, tzOffsetMin: 180, level: 2, nextDailyAt: nextOccurrence(180, "09:00", T) });
-      expect(await repo.userDeckIds(before.id)).toEqual([]);
+      await catalog();
+      const before = await atLevels(repo, 13);
+      expect(await advanceOnboarding(repo, before, "go", T)).toEqual({ kind: "finished" });
+      // The learner has studied and changed the settings since; the late answer brings neither the hints nor the defaults back.
+      await repo.updateUser(before.id, { hintsSeen: 127, newPerDay: 20, remindAt: "19:00", tzOffsetMin: 300, nextDailyAt: 5, nextEveningAt: 6 });
+      const studied = await repo.getUser(before.id);
+      expect(await advanceOnboarding(repo, before, "go", T + 60_000)).toEqual({ kind: "stale" });
+      expect(await repo.getUser(before.id)).toEqual(studied);
     });
-  });
 
-  it("first reminder is scheduled for the next occurrence, not right after onboarding", async () => {
-    const repo = new Repo(env.DB);
-    await seedLevels(env.DB, { 1: ["китап"] });
-    let { user } = await getOrCreate(repo, 11, 11, "ru", T);
-    await repo.updateUser(user.id, { onboardingStep: "tz", level: 1, remindAt: "09:00" });
-    user = (await repo.getUser(user.id))!;
-    const at1500 = Date.UTC(2026, 8, 30, 12, 0); // 15:00 local
-    await advanceOnboarding(repo, user, "180", at1500);
-    const u = (await repo.getUser(user.id))!;
-    expect(u.nextDailyAt).toBe(Date.UTC(2026, 9, 1, 6, 0)); // tomorrow 09:00 local
-    expect(u.nextEveningAt).toBe(Date.UTC(2026, 8, 30, 17, 0)); // today 20:00 local
-    expect(nextOccurrence(180, "09:00", Date.UTC(2026, 8, 30, 5, 0))).toBe(Date.UTC(2026, 8, 30, 6, 0));
+    it("the finish stores what the step «Уровни» says, also for a learner who had answered the introduction that is gone", async () => {
+      const repo = new Repo(env.DB);
+      await catalog();
+      const user = await atLevels(repo, 14, { newPerDay: 20, remindAt: "19:00", tzOffsetMin: 300, onboardingData: JSON.stringify({ i: 10, known: 4 }), level: 2 });
+      expect(await advanceOnboarding(repo, user, "go", T)).toEqual({ kind: "finished" });
+      expect(await repo.getUser(user.id)).toMatchObject({
+        onboardingStep: null, onboardingData: null, newPerDay: 10, remindAt: "09:00", tzOffsetMin: 180, levels: 0b1,
+        nextDailyAt: nextOccurrence(180, "09:00", T), nextEveningAt: nextOccurrence(180, "20:00", T),
+      });
+    });
+
+    it.each(["placement", "goal", "remind", "tz", "zzz"])("a step the introduction does not have (%s) is the language step: the learner is not stuck", async (stored) => {
+      const repo = new Repo(env.DB);
+      const { user } = await getOrCreate(repo, 15, 15, "ru", T);
+      await repo.updateUser(user.id, { onboardingStep: stored });
+      const there = (await repo.getUser(user.id))!;
+      expect(await startOnboarding(repo, there)).toEqual({ kind: "lang" });
+      expect(await advanceOnboarding(repo, there, "1", T)).toEqual({ kind: "invalid", step: stored });
+      expect(await advanceOnboarding(repo, there, "ru", T)).toEqual({ kind: "intro", n: 1 });
+      expect((await repo.getUser(user.id))!.onboardingStep).toBe("intro1");
+    });
+
+    it("a learner who has finished is answered as stale, whatever the answer, and nothing is written", async () => {
+      const repo = new Repo(env.DB);
+      await catalog();
+      const { user } = await seedLearner(env.DB, { now: T, tgId: 16 });
+      for (const answer of ["ru", "next", "lv:2", "go", "1"]) expect(await advanceOnboarding(repo, user, answer, T), answer).toEqual({ kind: "stale" });
+      expect(await repo.getUser(user.id)).toEqual(user);
+    });
   });
 
   it("changing the reminder time reschedules it", async () => {
@@ -213,15 +183,5 @@ describe("users", () => {
     await repo.updateUser(user.id, { onboardingStep: null, tzOffsetMin: 180 });
     await setSetting(repo, user.id, "remindAt", "21:00", T);
     expect((await repo.getUser(user.id))!.nextDailyAt).toBe(Date.UTC(2026, 8, 30, 18, 0));
-  });
-
-  it("typed local time answers the timezone step", async () => {
-    const repo = new Repo(env.DB);
-    let { user } = await getOrCreate(repo, 10, 10, "ru", T);
-    await repo.updateUser(user.id, { onboardingStep: "tz", level: 3 });
-    user = (await repo.getUser(user.id))!;
-    const s = await advanceOnboarding(repo, user, "14:00", T);
-    expect(s).toMatchObject({ kind: "finished", tzOffsetMin: 480, level: 3 });
-    expect((await repo.getUser(user.id))!.tzOffsetMin).toBe(480);
   });
 });

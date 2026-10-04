@@ -4,7 +4,8 @@ import { type SeedLevel, type SeedTopic, catalogToSql } from "../../src/content/
 import { Repo, type User } from "../../src/db/repo";
 import { LEVELS, levelBit } from "../../src/levels/scale";
 import { ReviewService } from "../../src/review/service";
-import { newMem } from "../../src/srs/fsrs";
+import { formatInterval, newMem } from "../../src/srs/fsrs";
+import { ALL_HINTS, HINT } from "../../src/tutorial/hints";
 import { countingDb } from "../helpers/countingDb";
 import { asCard, gradeShown } from "../helpers/review";
 import { WORDS, note, seedCatalog, seedLearner } from "../helpers/seed";
@@ -182,6 +183,88 @@ describe("review service", () => {
       await env.DB.prepare("UPDATE user_progress SET started = 5 WHERE user_id = ? AND level = 1 AND topic_no = 8").bind(user.id).run();
       expect((await applySeed(env.DB, sql)).rowsWritten).toBeGreaterThan(0);
       expect(await repo.progress(user.id)).toEqual(counted);
+    });
+  });
+
+  describe("hints", () => {
+    /** The screen that follows a grade of the card on screen `s`, with the user's row as the database holds it. */
+    const graded = async (repo: Repo, user: User, s: ReturnType<typeof asCard>, rating: 1 | 2 | 3 | 4, now = T) =>
+      new ReviewService(repo, now).grade((await repo.getUser(user.id))!, s.view.cardId, s.view.reps, rating);
+    const seen = async (repo: Repo, user: User) => (await repo.getUser(user.id))!.hintsSeen;
+
+    it("a learner fresh from the introduction: the hint of the first card until a grade, then the hint of each button once, with the interval the grade gave", async () => {
+      const { repo, user } = await seedUser(env.DB, { now: T, patch: { hintsSeen: HINT.update } });
+      const first = asCard(await new ReviewService(repo, T).nextScreen(user));
+      expect(first.lead).toEqual({ kind: "front" });
+      // Showing a card stores nothing about the hints: the grade does.
+      expect(await seen(repo, user)).toBe(HINT.update);
+      const second = asCard(await graded(repo, user, first, 3));
+      expect(second.lead).toEqual({ kind: "button", rating: 3, interval: first.intervals[3], withOrder: true });
+      expect(await seen(repo, user)).toBe(HINT.update | HINT.front | HINT.good | HINT.order);
+      const third = asCard(await graded(repo, user, second, 3));
+      expect(third.lead).toBeNull();
+      const fourth = asCard(await graded(repo, user, third, 1));
+      expect(fourth.lead).toEqual({ kind: "button", rating: 1, interval: third.intervals[1], withOrder: false });
+      expect(await seen(repo, user)).toBe(HINT.update | HINT.front | HINT.good | HINT.order | HINT.again);
+      // A screen that follows no grade carries nothing once a card was graded.
+      expect(asCard(await new ReviewService(repo, T).nextScreen((await repo.getUser(user.id))!)).lead).toBeNull();
+    });
+
+    it("the interval of a hint is the one the grade gave the card, written as on a button", async () => {
+      const { repo, user } = await seedUser(env.DB, { now: T, words: 2, patch: { hintsSeen: HINT.update, lang: "tt" } });
+      const first = asCard(await new ReviewService(repo, T).nextScreen(user));
+      const second = asCard(await graded(repo, user, first, 4));
+      const card = (await repo.getCard(user.id, first.view.cardId))!;
+      expect(second.lead).toEqual({ kind: "button", rating: 4, interval: formatInterval(card.mem.due - T, "tt"), withOrder: true });
+      expect((second.lead as { interval: string }).interval).toMatch(/^\d+көн$/);
+    });
+
+    it("a learner who knew the bot before the levels: the update notice until a grade, no hint after it", async () => {
+      const { repo, user } = await seedUser(env.DB, { now: T, patch: { hintsSeen: ALL_HINTS } });
+      const first = asCard(await new ReviewService(repo, T).nextScreen(user));
+      expect(first.lead).toEqual({ kind: "update" });
+      expect(asCard(await graded(repo, user, first, 3)).lead).toBeNull();
+      expect(await seen(repo, user)).toBe(127);
+    });
+
+    it("the screen that ends a session carries the hint of the grade before it; without a grade the update notice, never the hint of the first card", async () => {
+      const { repo, user } = await seedUser(env.DB, { now: T, words: 1, patch: { hintsSeen: HINT.update } });
+      const first = asCard(await new ReviewService(repo, T).nextScreen(user));
+      const done = await graded(repo, user, first, 4);
+      expect(done).toMatchObject({ kind: "done", lead: { kind: "button", rating: 4, withOrder: true } });
+      const end = async (hintsSeen: number) => new ReviewService(repo, T).nextScreen({ ...(await repo.getUser(user.id))!, hintsSeen });
+      expect(await end(127)).toMatchObject({ kind: "done", lead: null });
+      expect(await end(HINT.update)).toMatchObject({ kind: "done", lead: null });
+      expect(await end(ALL_HINTS)).toMatchObject({ kind: "done", lead: { kind: "update" } });
+      expect(await end(0)).toMatchObject({ kind: "done", lead: { kind: "update" } });
+    });
+
+    it("a grade that is not applied marks no hint; undo gives the card back without one and leaves the hints as the grade marked them", async () => {
+      const { repo, user } = await seedUser(env.DB, { now: T, words: 2, patch: { hintsSeen: HINT.update } });
+      const svc = new ReviewService(repo, T);
+      const first = asCard(await svc.nextScreen(user));
+      // The button of a card that was graded already (another number of grades): stale, and nothing is stored.
+      expect((await svc.grade(user, first.view.cardId, 5, 3)).kind).toBe("stale");
+      expect(await seen(repo, user)).toBe(HINT.update);
+      await graded(repo, user, first, 3);
+      const undone = asCard(await svc.undo((await repo.getUser(user.id))!));
+      expect(undone.lead).toBeNull();
+      expect(await seen(repo, user)).toBe(HINT.update | HINT.front | HINT.good | HINT.order);
+    });
+
+    it("a hint costs no D1 call: a grade with one makes as many as a grade without", async () => {
+      const calls = async (hintsSeen: number, tgId: number) => {
+        const { repo, user } = await seedLearner(env.DB, { now: T, tgId, patch: { hintsSeen } });
+        const first = asCard(await new ReviewService(repo, T).nextScreen(user));
+        const db = countingDb(env.DB);
+        const next = await new ReviewService(new Repo(db), T).grade((await repo.getUser(user.id))!, first.view.cardId, 0, 3);
+        return { d1: db.calls, hinted: asCard(next).lead != null };
+      };
+      await seedCatalog(env.DB, WORDS.slice(0, 5).map(([word, translation]) => ({ level: 1, word, translation })));
+      const [withHint, without] = [await calls(HINT.update, 1), await calls(127, 2)];
+      expect([withHint.hinted, without.hinted]).toEqual([true, false]);
+      expect(withHint.d1).toBe(without.d1);
+      expect(withHint.d1).toBeLessThanOrEqual(7);
     });
   });
 

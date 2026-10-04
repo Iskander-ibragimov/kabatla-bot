@@ -4,18 +4,14 @@ import type { Dict } from "./ru";
  * Tatar UI strings: the same keys as `ru`, plain literary Tatar for a reader whose Tatar is weak.
  * Only the letters ә ө ү җ ң һ (U+04D9, U+04E9, U+04AF, U+0497, U+04A3, U+04BB and capitals) besides the Russian
  * alphabet; test/i18n/dict.test.ts rejects look-alikes. Numbers never take a suffix here («кайтканчы 8 минут бар»,
- * «Вакыты: 09:00», «37/100»), so no text depends on how a number is read aloud; the one exception is the ordinal of a
- * level («4 нче дәрәҗә»), where case endings go on the word «дәрәҗә». The levels of the scale are named by their
- * codes, A1…C1, as in Russian; a case ending goes on the word «дәрәҗә» after the code («A2 дәрәҗәсен өстәү»).
+ * «Вакыты: 09:00», «37/100»), so no text depends on how a number is read aloud; an interval of a hint («<10мин»,
+ * «8көн») stands the same way, before «бар». The levels of the scale are named by their codes, A1…C1, as in Russian;
+ * a case ending goes on the word «дәрәҗә» after the code («A2 дәрәҗәсен өстәү»).
  */
 const POS: Record<string, string> = {
   n: "исем", v: "фигыль", adj: "сыйфат", adv: "рәвеш", pron: "алмашлык", num: "сан",
   post: "бәйлек", conj: "теркәгеч", part: "кисәкчә", intj: "ымлык", phr: "гыйбарә",
 };
-
-/** Numbers 1…20 whose name ends in a back-vowel syllable (алты, тугыз, ун, уналты, унтугыз) take «нчы». */
-const BACK_ORDINALS = [6, 9, 10, 16, 19];
-const levelName = (n: number) => `${n} ${BACK_ORDINALS.includes(n) ? "нчы" : "нче"} дәрәҗә`;
 
 /** The eight groups of parts of speech of the settings, by the key of the group (levels/scale.ts), in the plural. */
 const POS_GROUPS: Record<string, string> = {
@@ -69,15 +65,20 @@ export const tt: Dict = {
   foundN: (n) => `${n} сүз таптым:`,
   aiNote: "🤖 <i>тәрҗемәне AI ясады, тикшерегез</i>",
   welcome: "Сәлам! Мин — <b>Кабатла</b> 👋\nТатар сүзләрен аралыклы кабатлау ысулы белән өйрәнергә булышам, Anki кушымтасындагы кебек.\n\nКайсы телдә сөйләшәбез?",
-  placementQ: (i, word) => `Дәрәҗәгезне тикшерик · ${i}/10\n\nБу сүзне беләсезме?\n\n<b>${word}</b>`,
-  knowBtn: "Беләм",
-  dontKnowBtn: "Белмим",
-  goalQ: (level) => `Башлыйбыз: <b>${levelName(level)}</b>.\n\nКөненә ничә яңа сүз өйрәнәсез?`,
-  goalBtn: (n) => (n === 5 ? "5 · җиңел" : n === 10 ? "10 · уртача" : "20 · күп"),
-  remindQ: "Сәгать ничәдә искә төшерим?",
-  tzQ: "Сездә хәзер сәгать ничә? Шулай сәгать поясыгызны белермен.\n<i>Үз вариантыгыз булмаса, вакытны языгыз, мәсәлән 14:35.</i>",
-  finished: (time, tz) => `Әзер! Кабатлыйсы сүзләр булса, көн саен искә төшерермен. Вакыты: <b>${time}</b> (${tz}).`,
-  easyHint: "Сүзне белсәгез, „Җиңел“ төймәсенә басыгыз",
+  intro1: "Кабатла татар сүзләрен карточкалар ярдәмендә өйрәтә. Сүз сез аны оныта башлаган вакытта кире кайта: башта берничә минуттан, аннары көннәр һәм айлар узгач. Шулай ул хәтердә озакка кала.",
+  intro2: "Карточка: өстә — сүз, ә тәрҗемәсе белән мисалы яшерелгән. Тәрҗемәсен искә төшерегез, яшерелгән текстка басыгыз һәм дүрт төймәнең берсенә басып, үзегезгә гадел бәя куегыз. Һәр төймәгә сүзнең кайчан кайтачагы язылган.",
+  nextBtn: "Алга таба",
+  gotItBtn: "Аңлашылды",
+  obLevels: "Нәрсә өйрәнәбез? Бер яки берничә дәрәҗәне билгеләгез. Искә төшерү — көн саен, вакыты: 09:00 (Мәскәү вакыты); көненә 10 яңа сүз. Боларның барысын да /settings командасы белән үзгәртеп була.",
+  obGoBtn: "Башлау",
+  levelWords: (n) => `${n} сүз`,
+  hintFront: "Тәрҗемәсен искә төшерегез, яшерелгән текстны ачыгыз һәм үзегезгә бәя куегыз.",
+  hintAgain: (interval) => `„Яңадан“: сүз кайтканчы ${interval} бар. Ул шушы ук шөгыльдә кайтачак һәм истә калганчы килеп торачак.`,
+  hintHard: (interval) => `„Авыр“: сүз кайтканчы ${interval} бар. Аралыклар акрынрак үсәчәк.`,
+  hintGood: (interval) => `„Яхшы“: сүз кайтканчы ${interval} бар. Аны тагын искә төшерсәгез, аралык үсәчәк: көннәр, аннары атналар һәм айлар.`,
+  hintEasy: (interval) => `„Җиңел“: сүз шунда ук озакка китте — кайтканчы ${interval} бар. Ул көнлек яңа сүзләр санына керми.`,
+  hintOrder: "Шөгыльдәге тәртип: башта ныгытудагы сүзләр, аннары бүгенге кабатлаулар, алар арасында яңа сүзләр.",
+  updateNotice: "Бот яңартылды: A1–C1 дәрәҗәләре, темалар һәм сүзләр тәртибе — /levels командасында",
   chooseAbove: "Югарыдагы төймәләрнең берсенә басыгыз ↑",
   alreadySetUp: "Барысы да көйләнгән инде 🙂 /learn — кабатлау, /help — барлык командалар.",
   staleButton: "Бу төймә искергән инде",
@@ -116,6 +117,7 @@ export const tt: Dict = {
   setDir: (d) => `↔️ Юнәлеш: ${d === "both" ? "икесе дә" : d === "ru_tt" ? "русча → татарча" : "татарча → русча"}`,
   setAuto: (on) => `🔊 Автомат тавыш: ${on ? "кабызылган" : "сүндерелгән"}`,
   setHub: "📚 Дәрәҗәләр, темалар, сүзләр тәртибе",
+  setTutorial: "🎓 Өйрәтүне яңадан күрсәтү",
   tzText: "🕒 <b>Сәгать поясы</b>\nХәзерге вакытыгыз күрсәтелгән юлны сайлагыз.",
   help: "<b>Командалар</b>\n/learn — кабатлау\n/levels — дәрәҗәләр, темалар, сүзләр тәртибе\n/gen тема — AI-тупланма\n/stats — алгарыш\n/settings — көйләүләр\n/undo — бәяне кире алу\n\nҮз сүзегезне өстәү өчен, аны чатка языгыз. Исемлек итеп тә була — 20 юлга кадәр. Шул ук хәбәрдәге сылтама карточкага беркетелә.\n\n<i>Чыганаклар: сүзләрнең ешлыгы — corpus.tatar язма корпусы; темалар — „Мин татарча беләм!“ проекты дәрәҗәләренең спецификацияләре буенча (КФУ); мисалларның бер өлеше — Tatoeba (CC BY 2.0 FR); тавыш — speech.tatar сөйләм синтезы сервисы.</i>",
   helpAdd: "Сүзне яки гыйбарәне чатка языгыз, мәсәлән <code>рәхмәт</code>. Берьюлы берничә юл язарга була, чыганакка сылтаманы шул ук хәбәргә өстәгез.",

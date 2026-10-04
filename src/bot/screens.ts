@@ -5,34 +5,46 @@ import type { Hub, LevelLine, TopicLine } from "../levels/service";
 import type { Lang } from "../srs/fsrs";
 import type { Cumulative } from "../stats/service";
 import type { OnboardingScreen } from "../users/service";
-import { REMIND_TIMES, TZ_OFFSETS } from "../users/service";
+import { TZ_OFFSETS } from "../users/service";
 import type { Button, Keyboard, PreviewItem, Rendered } from "./views";
 import { esc, fitMessage, previewLines } from "./views";
 
 const btn = (text: string, data: string, style?: Button["style"]): Button => (style ? { text, callback_data: data, style } : { text, callback_data: data });
+const checkbox = (on: boolean) => (on ? "☑" : "☐");
 const tzLabel = (min: number) => `UTC${min >= 0 ? "+" : "−"}${Math.floor(Math.abs(min) / 60)}${Math.abs(min) % 60 ? ":" + String(Math.abs(min) % 60).padStart(2, "0") : ""}`;
 
+/**
+ * One of the two screens about the bot. In the introduction both go on with «Дальше»; shown again from the settings
+ * (`replay`), the first goes on to the second, and the second ends with «Понятно», which is the settings again.
+ */
+export function renderIntro(n: 1 | 2, lang: Lang, replay = false): Rendered {
+  const t = dict(lang);
+  const next = !replay ? btn(t.nextBtn, "ob:next") : n === 1 ? btn(t.nextBtn, "tut:2") : btn(t.gotItBtn, "tut:ok");
+  return { text: n === 1 ? t.intro1 : t.intro2, keyboard: [[next]] };
+}
+
+/** A level on its button of the step «Уровни»: «☑ A1 · 400 слов · ≈45 % текста», or «☐ A2 · скоро» for a level without cards. */
+function levelChoice(l: LevelLine, t: Dict): string {
+  const head = `${checkbox(l.checked)} ${l.code}`;
+  if (l.total === 0) return `${head} · ${t.levelSoon}`;
+  return `${head} · ${t.levelWords(l.total)}${l.coveragePct == null ? "" : ` · ${t.levelCoverage(l.coveragePct)}`}`;
+}
+
+/** The screen of a step of the introduction. A screen that is no step (the finish, a refused answer) has nothing to show. */
 export function renderOnboarding(s: OnboardingScreen, lang: Lang): Rendered {
   const t = dict(lang);
   switch (s.kind) {
     case "lang":
       return { text: t.welcome, keyboard: [[btn("Русский", "ob:ru"), btn("Татарча", "ob:tt")]] };
-    case "placement":
-      return { text: t.placementQ(s.index + 1, esc(s.word)), keyboard: [[btn(t.knowBtn, "ob:1", "success"), btn(t.dontKnowBtn, "ob:0")]] };
-    case "goal":
-      return { text: t.goalQ(s.level), keyboard: [[btn(t.goalBtn(5), "ob:5"), btn(t.goalBtn(10), "ob:10", "primary"), btn(t.goalBtn(20), "ob:20")]] };
-    case "remind":
-      return { text: t.remindQ, keyboard: [REMIND_TIMES.slice(0, 3).map((x) => btn(x, `ob:${x}`)), REMIND_TIMES.slice(3).map((x) => btn(x, `ob:${x}`))] };
-    case "tz":
-      return { text: t.tzQ, keyboard: [s.options.slice(0, 3).map((o) => btn(o.label, `ob:${o.offset}`)), s.options.slice(3).map((o) => btn(o.label, `ob:${o.offset}`))] };
-    case "finished":
-      return { text: `${t.finished(s.remindAt, tzLabel(s.tzOffsetMin))}\n\n${t.easyHint}`, keyboard: [] };
+    case "intro":
+      return renderIntro(s.n, lang);
+    case "levels":
+      return { text: t.obLevels, keyboard: [...s.lines.map((l) => [btn(levelChoice(l, t), `ob:lv:${l.no}`)]), [btn(t.obGoBtn, "ob:go", "primary")]] };
     default:
       return { text: t.chooseAbove, keyboard: [] };
   }
 }
 
-const checkbox = (on: boolean) => (on ? "☑" : "☐");
 /** A button of a list where one option is in use: that one carries the mark. */
 const option = (on: boolean, text: string, data: string) => btn(on ? `✅ ${text}` : text, data);
 const capitalized = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -126,7 +138,7 @@ export function renderSettings(u: User): Rendered {
     keyboard: [
       [btn(t.setLang, "set:lang")], [btn(t.setMode(u.retention), "set:ret")], [btn(t.setNew(u.newPerDay), "set:new")],
       [btn(t.setRemind(u.remindAt), "set:rem")], [btn(t.setTz(tzLabel(u.tzOffsetMin)), "set:tz")], [btn(t.setDir(u.direction), "set:dir")],
-      [btn(t.setAuto(u.autoplay), "set:auto")], [btn(t.setHub, "set:hub")],
+      [btn(t.setAuto(u.autoplay), "set:auto")], [btn(t.setHub, "set:hub")], [btn(t.setTutorial, "set:tut")],
     ],
   };
 }

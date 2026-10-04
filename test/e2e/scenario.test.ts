@@ -1,17 +1,19 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Repo } from "../../src/db/repo";
+import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
+import { HINT } from "../../src/tutorial/hints";
 import { tick } from "../../src/reminders/service";
 import { easyButton, harness } from "../helpers/botHarness";
 import { countingDb } from "../helpers/countingDb";
 import { fakeTelegram } from "../helpers/fakeTelegram";
-import { WORDS, seedLevels } from "../helpers/seed";
+import { seedCatalog, seedLevels } from "../helpers/seed";
 
 const MIN = 60_000, DAY = 86_400_000;
 const T = Date.UTC(2026, 8, 30, 6, 0); // 09:00 Moscow
-/** Level 2 is the deck this scenario studies: enough words for two days of ten new cards. */
-const LEVEL_2 = [
+/** The words of A1 in this scenario: enough for two days of ten new cards. */
+const A1 = [
   "бала", "ана", "ата", "кул", "күз", "баш", "ел", "ай", "кич", "төн", "иртә", "шәһәр", "урам", "мәктәп", "дус",
   "тел", "акча", "ипи", "сөт", "ит", "алма", "чәй", "агач", "елга", "тау", "кояш", "яңгыр", "кар", "җил", "күл",
 ];
@@ -19,26 +21,28 @@ const gradeButtons = (m: { inline_keyboard?: { callback_data: string }[][] }) =>
 
 describe("first day and next day", () => {
   it("onboarding, a session, a reminder next morning and grown memory", async () => {
-    await seedLevels(env.DB, { 1: WORDS.map(([word]) => word), 2: LEVEL_2 });
+    await seedCatalog(env.DB, A1.map((word) => ({ level: 1, word })));
     const h = harness(env.DB, { now: T });
     await h.text("/start");
-    await h.press("ob:ru");
-    for (let i = 0; i < 10; i++) await h.press(i < 4 ? "ob:1" : "ob:0");
-    await h.press("ob:10");
-    await h.press("ob:09:00");
-    await h.press("ob:180");
-    await h.press("ob:l02");
+    for (const answer of ["ob:ru", "ob:next", "ob:next", "ob:go"]) await h.press(answer, 100);
+    // «Начать» gives the first card at once, with the hint of the first card; «▶ Учить» shows the same card.
+    expect(h.lastText().startsWith(`${ru.hintFront}\n\n🔵 10 · 🔴 0 · 🟢 0\n<b>бала</b>\n`)).toBe(true);
     await h.press("learn");
-    expect(h.lastText()).toContain("<b>бала</b>");
+    expect(h.lastText().startsWith(`${ru.hintFront}\n\n🔵 10 · 🔴 0 · 🟢 0\n<b>бала</b>\n`)).toBe(true);
     let t = T;
     let sessionMsg = 100;
+    /** What stands before the counters of the card on screen: a hint, or nothing. */
+    const leads: string[] = [];
     for (let i = 0; i < 10; i++) {
       const g = gradeButtons(h.lastMarkup());
       expect(g).toHaveLength(4);
       t += 20_000;
       h.setNow(t);
       await h.press(i % 4 === 0 ? g[0]! : g[2]!, sessionMsg);
+      leads.push(h.lastText().split("🔵")[0]!);
     }
+    // The first card was graded «Снова», the second «Хорошо»: each button explains itself once, the first with the order of a session; up to the fifth card and beyond nothing else is said.
+    expect(leads).toEqual([`${ru.hintAgain("&lt;1м")}\n${ru.hintOrder}\n\n`, `${ru.hintGood("&lt;10м")}\n\n`, "", "", "", "", "", "", "", ""]);
     // finish learning steps
     for (let i = 0; i < 30 && gradeButtons(h.lastMarkup()).length; i++) {
       t += 11 * MIN;
@@ -54,8 +58,8 @@ describe("first day and next day", () => {
     const repo = new Repo(env.DB);
     const u = (await repo.getUserByTg(42))!;
     expect(u.streak).toBe(1);
-    expect(u).toMatchObject({ level: 2, direction: "tt_ru" });
-    expect(await repo.userDeckIds(u.id)).toEqual([(await repo.getDeckBySlug("l02"))!.id]);
+    expect(u).toMatchObject({ levels: 1, direction: "tt_ru", onboardingStep: null, hintsSeen: HINT.update | HINT.front | HINT.again | HINT.good | HINT.order });
+    expect(await repo.userDeckIds(u.id)).toEqual([]);
     const tg = fakeTelegram();
     const nextMorning = T + DAY + MIN;
     await tick({ repo, tg, now: nextMorning });
@@ -76,7 +80,7 @@ describe("first day and next day", () => {
     expect(await maxDays()).toBeGreaterThan(before);
   });
 
-  it("Tatar interface: onboarding → 100 words of the level → the session ends; level 2 is not opened", async () => {
+  it("Tatar interface: the introduction → 100 words of A1 → the session ends; A2 is not checked by the bot", async () => {
     const words100 = Array.from({ length: 100 }, (_, i) => `сүз${i + 1}`);
     await seedLevels(env.DB, { 1: words100, 2: ["авыл"] }, { 1: 31 });
     const db = countingDb(env.DB);
@@ -94,21 +98,23 @@ describe("first day and next day", () => {
 
     await update(() => h.text("/start"));
     await press("ob:tt");
-    expect(h.lastText()).toBe(tt.placementQ(1, "бар"));
-    for (let i = 0; i < 10; i++) {
-      expect((h.lastMarkup().inline_keyboard ?? []).flat().map((b) => b.text)).toEqual([tt.knowBtn, "Белмим"]);
-      await press("ob:0");
-    }
-    expect(h.lastText()).toBe(tt.goalQ(1));
-    await press("ob:20");
-    await press("ob:09:00");
-    await press("ob:180");
-    expect(h.tg.of("editMessageText").at(-1)!.payload.text).toBe(`${tt.finished("09:00", "UTC+3")}\n\n${tt.easyHint}`);
-    expect(h.lastText()).toContain(`<b>${words100[0]}</b>`);
-    expect(h.lastText().startsWith("🔵 20 · 🔴 0 · 🟢 0\n")).toBe(true);
+    expect(h.lastText()).toBe(tt.intro1);
+    await press("ob:next");
+    expect(h.lastText()).toBe(tt.intro2);
+    await press("ob:next");
+    expect(h.lastText()).toBe(tt.obLevels);
+    expect((h.lastMarkup().inline_keyboard ?? []).flat().map((b) => b.text)).toEqual(["☑ A1 · 100 сүз · текстның ≈31 %", "☐ A2 · 1 сүз", "☐ B1 · тиздән", "☐ B2 · тиздән", "☐ C1 · тиздән", "Башлау"]);
+    await press("ob:go");
+    // The message of the introduction keeps its last text and loses its buttons; nothing else is sent but the card.
+    expect(h.tg.of("editMessageText").at(-1)!.payload.text).toBe(tt.obLevels);
+    expect(h.tg.calls.slice(-3).map((c) => c.method)).toEqual(["editMessageReplyMarkup", "sendMessage", "answerCallbackQuery"]);
+    expect(h.lastText().startsWith(`${tt.hintFront}\n\n🔵 10 · 🔴 0 · 🟢 0\n<b>${words100[0]}</b>\n`)).toBe(true);
 
     for (let i = 0; i < 100; i++) {
       expect(h.lastText()).toContain(`<b>${words100[i]}</b>`);
+      // «Җиңел» explains itself above the second card, with the order of a session, and never again.
+      if (i === 1) expect(h.lastText()).toMatch(new RegExp(`^„Җиңел“: сүз шунда ук озакка китте — кайтканчы \\d+көн бар\\. Ул көнлек яңа сүзләр санына керми\\.\n${tt.hintOrder}\n\n🔵 10 · 🔴 0 · 🟢 0\n`));
+      if (i > 1) expect(h.lastText().startsWith("🔵 10 · 🔴 0 · 🟢 0\n")).toBe(true);
       const easy = (h.lastMarkup().inline_keyboard ?? []).flat().find((b) => b.callback_data === easyButton(h))!;
       expect(easy.text.startsWith(`${tt.easy} `)).toBe(true);
       await press(easy.callback_data);
@@ -122,8 +128,8 @@ describe("first day and next day", () => {
 
     const repo = new Repo(env.DB);
     const u = (await repo.getUserByTg(42))!;
-    expect(u).toMatchObject({ lang: "tt", level: 1, levels: 1, newPerDay: 20, onboardingStep: null });
-    expect(await repo.userDeckIds(u.id)).toEqual([(await repo.getDeckBySlug("l01"))!.id]);
+    expect(u).toMatchObject({ lang: "tt", levels: 1, newPerDay: 10, onboardingStep: null, hintsSeen: HINT.update | HINT.front | HINT.easy | HINT.order });
+    expect(await repo.userDeckIds(u.id)).toEqual([]);
     const log = await env.DB.prepare("SELECT COUNT(*) AS n, SUM(was_new) AS fresh, MIN(rating) AS lo FROM review_log WHERE user_id = ?").bind(u.id).first<{ n: number; fresh: number; lo: number }>();
     expect(log).toEqual({ n: 100, fresh: 100, lo: 4 });
   });

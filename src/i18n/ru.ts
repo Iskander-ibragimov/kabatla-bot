@@ -60,15 +60,30 @@ export const ru = {
   /** Last line of a preview that has a card made by the AI. */
   aiNote: "🤖 <i>перевод сделан AI, проверьте</i>",
   welcome: "Привет! Я <b>Кабатла</b> 👋\nПомогу выучить татарские слова методом интервальных повторений, как в Anki.\n\nНа каком языке общаться?",
-  placementQ: (i: number, word: string) => `Проверим уровень · ${i}/10\n\nЗнаете слово?\n\n<b>${word}</b>`,
-  knowBtn: "Знаю",
-  dontKnowBtn: "Не знаю",
-  goalQ: (level: number) => `Начнём с уровня <b>${level}</b>.\n\nСколько новых слов в день?`,
-  goalBtn: (n: number) => (n === 5 ? "5 · легко" : n === 10 ? "10 · норм" : "20 · много"),
-  remindQ: "Во сколько присылать напоминание?",
-  tzQ: "Сколько у вас сейчас времени? Так я узнаю часовой пояс.\n<i>Если нет вашего варианта, напишите время, например 14:35.</i>",
-  finished: (time: string, tz: string) => `Готово! Каждый день в <b>${time}</b> (${tz}) пришлю напоминание, если есть что повторить.`,
-  easyHint: "Если слово знаете, жмите „Легко“",
+  /* The introduction: two screens about the bot, then the levels to study. The same two screens are «Показать обучение заново». */
+  intro1: "Кабатла учит татарские слова карточками. Слово возвращается тогда, когда вы начинаете его забывать: сначала через минуты, потом через дни и месяцы. Так оно остаётся в памяти надолго.",
+  intro2: "Карточка: сверху слово, перевод и пример скрыты. Вспомните перевод, нажмите на скрытый текст и честно оцените себя одной из четырёх кнопок. На каждой кнопке написано, когда слово вернётся.",
+  nextBtn: "Дальше",
+  /** The button of the second screen when the screens are shown again from the settings. */
+  gotItBtn: "Понятно",
+  /** The step «Уровни»; under it a button for every level, with its checkbox, and the button that finishes. It names the defaults of users/service.ts. */
+  obLevels: "Что учить? Отметьте один или несколько уровней. Напоминание — каждый день в 09:00 по Москве, 10 новых слов в день. Всё это меняется в /settings.",
+  obGoBtn: "Начать",
+  /** «400 слов»: the cards a level has, on its button of the step «Уровни». */
+  levelWords: (n: number) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? "слово" : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "слова" : "слов"}`,
+  /*
+   * Hints: the first lines of a card or of the screen that ends a session, each shown once (tutorial/hints.ts).
+   * `interval`: the interval the pressed button gave, as the button showed it, like "&lt;10м" or "8д".
+   */
+  hintFront: "Вспомните перевод, откройте скрытый текст и оцените себя.",
+  hintAgain: (interval: string) => `„Снова“: слово вернётся через ${interval}, в этом же занятии, и будет приходить, пока не запомнится.`,
+  hintHard: (interval: string) => `„Трудно“: слово вернётся через ${interval}. Интервалы будут расти медленнее.`,
+  hintGood: (interval: string) => `„Хорошо“: слово вернётся через ${interval}. Вспомните его снова — интервал вырастет: дни, потом недели и месяцы.`,
+  hintEasy: (interval: string) => `„Легко“: слово ушло сразу на ${interval} и не занимает дневную норму новых слов.`,
+  /** The second line of the first of the four hints above. */
+  hintOrder: "Порядок в занятии: сначала слова на закреплении, потом повторения на сегодня, между ними новые слова.",
+  /** Shown once, above a card, to a learner who knew the bot before the levels A1–C1. */
+  updateNotice: "Бот обновился: уровни A1–C1, темы и порядок слов — в /levels",
   chooseAbove: "Выберите вариант кнопкой выше ↑",
   alreadySetUp: "Вы уже настроены 🙂 /learn — повторять, /help — все команды.",
   staleButton: "Эта кнопка уже неактуальна",
@@ -114,6 +129,8 @@ export const ru = {
   setAuto: (on: boolean) => `🔊 Автоозвучка: ${on ? "вкл" : "выкл"}`,
   /** The row of the settings that opens /levels. */
   setHub: "📚 Уровни, темы, порядок слов",
+  /** The row of the settings that shows the two screens of the introduction again and brings the hints back. */
+  setTutorial: "🎓 Показать обучение заново",
   /** The screen of the time zones; each button under it is a zone with the time it is there now. */
   tzText: "🕒 <b>Часовой пояс</b>\nВыберите строку с вашим текущим временем.",
   help: "<b>Команды</b>\n/learn — повторять\n/levels — уровни, темы, порядок слов\n/gen тема — AI-колода\n/stats — прогресс\n/settings — настройки\n/undo — отменить оценку\n\nЧтобы добавить своё слово, просто напишите его в чат. Можно списком до 20 строк. Ссылка в том же сообщении прикрепится к карточке.\n\n<i>Источники: частота слов — письменный корпус corpus.tatar; темы — по спецификациям уровней проекта „Мин татарча беләм!“ (КФУ); примеры — в том числе из Tatoeba (CC BY 2.0 FR); озвучка — сервис speech.tatar.</i>",

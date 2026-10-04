@@ -14,11 +14,13 @@ import { ReviewService, type Screen } from "../review/service";
 import type { Rating } from "../srs/fsrs";
 import { cumulative } from "../stats/service";
 import type { TgApi } from "../tg/client";
+import { HINTS_KEPT_ON_REPLAY } from "../tutorial/hints";
 import { REMIND_TIMES, RETENTIONS, TZ_OFFSETS, advanceOnboarding, getOrCreate, langFromTelegram, setSetting, startOnboarding } from "../users/service";
 import {
-  learnKeyboard, renderGenPreview, renderHub, renderLevelChecks, renderModes, renderOnboarding, renderPosChecks, renderSettings, renderStats, renderTimeZones, renderTopics,
+  learnKeyboard, renderGenPreview, renderHub, renderIntro, renderLevelChecks, renderModes, renderOnboarding, renderPosChecks, renderSettings, renderStats, renderTimeZones,
+  renderTopics,
 } from "./screens";
-import { type Keyboard, type Rendered, addReplyText, esc, hostOf, renderAddPreview, renderCard, renderDone } from "./views";
+import { type Keyboard, type Rendered, addReplyText, esc, hostOf, renderAddPreview, renderCard, renderDone, renderLead } from "./views";
 
 export interface BotDeps {
   config: Config;
@@ -64,13 +66,15 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
    * Telegram clients keep a spoiler revealed when a message is edited, so every card needs its own message.
    * The tap is answered once, after the card is out, with `note` when there is something to say.
    * With autoplay on, the voice of the card is the last call: it never delays the card (ruling T16a).
+   * A hint the screen carries is its first lines: it is never a message of its own.
    */
   const show = async (ctx: Ctx, s: Screen, mode: "replace" | "send", note?: string) => {
     const t = dict(ctx.user.lang);
     if (s.kind === "stale") return toast(ctx, t.staleButton);
     if (s.kind === "noundo") { if (ctx.callbackQuery) return toast(ctx, t.nothingToUndo); await ctx.reply(t.nothingToUndo); return; }
     if (s.kind === "nothing") { await toast(ctx); await send(ctx, { text: t.nothingToLearn, keyboard: [[{ text: t.decksBtn, callback_data: "levels" }]] }); return; }
-    const r = s.kind === "card" ? renderCard(s.view, s.counts, s.intervals, s.canUndo, ctx.user.lang) : renderDone(s.summary, ctx.user.lang, s.empty);
+    const lead = s.lead ? renderLead(s.lead, ctx.user.lang) : "";
+    const r = s.kind === "card" ? renderCard(s.view, s.counts, s.intervals, s.canUndo, ctx.user.lang, lead) : renderDone(s.summary, ctx.user.lang, s.empty, lead);
     const cardId = s.kind === "card" ? s.view.cardId : null;
     const chatId = ctx.user.chatId;
     const old = mode === "replace" ? clickedId(ctx) : undefined;
@@ -108,17 +112,24 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await next();
   });
 
-  /* onboarding */
-  const answerOb = async (ctx: Ctx, answer: string, messageId?: number) => {
+  /*
+   * The introduction: the language, two screens about the bot and the levels to study follow one another in one
+   * message; «Начать» takes the buttons off that message and sends the first card.
+   */
+  const answerOb = async (ctx: Ctx, answer: string) => {
+    const t = dict(ctx.user.lang);
     const screen = await advanceOnboarding(repo, ctx.user, answer, deps.now());
-    if (screen.kind === "invalid") { if (ctx.callbackQuery) return toast(ctx, dict(ctx.user.lang).chooseAbove); await ctx.reply(dict(ctx.user.lang).chooseAbove); return; }
-    // Another update has just finished onboarding and sent the first card: a second tap is a stale button, a second typed time gets no answer.
-    if (screen.kind === "stale") return toast(ctx, dict(ctx.user.lang).staleButton);
-    const lang = screen.kind === "placement" && screen.index === 0 && (answer === "ru" || answer === "tt") ? answer : ctx.user.lang;
-    await editOrSend(ctx, messageId, renderOnboarding(screen, lang));
-    if (screen.kind !== "finished") return toast(ctx);
-    // The first card is a new message through the same path as /learn (it also answers the callback);
-    // the user row is re-read for the new time zone and level.
+    // Another update has just finished the introduction and sent the first card.
+    if (screen.kind === "stale") return toast(ctx, t.staleButton);
+    if (screen.kind === "invalid") {
+      if (screen.why) return toast(ctx, screen.why === "last" ? t.needLevel : t.levelEmpty);
+      // A button of a step already passed, or of the introduction that is gone («Знаю», an hour, a time zone): its message becomes the step the learner stands on.
+      return redraw(ctx, renderOnboarding(await startOnboarding(repo, ctx.user), ctx.user.lang), t.chooseAbove);
+    }
+    if (screen.kind !== "finished") return redraw(ctx, renderOnboarding(screen, answer === "ru" || answer === "tt" ? answer : ctx.user.lang));
+    const asked = clickedId(ctx);
+    if (asked) await ctx.api.editMessageReplyMarkup(ctx.user.chatId, asked).catch(() => undefined);
+    // The first card is a new message through the same path as /learn (it also answers the tap); the row is read again for what the finish stored.
     ctx.user = (await repo.getUser(ctx.user.id))!;
     await show(ctx, await reviews().nextScreen(ctx.user), "send");
   };
@@ -126,11 +137,12 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   c.command("start", async (ctx) => {
     const t = dict(ctx.user.lang);
     if (!ctx.user.onboardingStep) { await send(ctx, { text: t.alreadySetUp, keyboard: learnKeyboard(ctx.user.lang) }); return; }
-    await send(ctx, renderOnboarding(startOnboarding(ctx.user, deps.now()), ctx.user.lang));
+    await send(ctx, renderOnboarding(await startOnboarding(repo, ctx.user), ctx.user.lang));
   });
   c.callbackQuery(/^ob:(.+)$/, async (ctx) => {
-    if (!ctx.user.onboardingStep) return toast(ctx);
-    await answerOb(ctx, ctx.match[1]!, clickedId(ctx));
+    // A button of the introduction pressed after it: there is nothing left to answer.
+    if (!ctx.user.onboardingStep) return toast(ctx, dict(ctx.user.lang).staleButton);
+    await answerOb(ctx, ctx.match[1]!);
   });
 
   /** Commands other than /start only work after onboarding. */
@@ -183,7 +195,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   const staleToHub = async (ctx: Ctx) => redraw(ctx, await hubScreen(ctx), dict(ctx.user.lang).staleButton);
 
   // During the introduction the buttons of the settings screens change nothing: the tap is answered with the hint.
-  c.callbackQuery(/^(levels$|hub|lv:|ps:|md:|tp:|tz:|fix:|set:(hub|tz|back)$)/, async (ctx, next) => {
+  c.callbackQuery(/^(levels$|hub|lv:|ps:|md:|tp:|tz:|fix:|tut:|set:(hub|tz|back|tut)$)/, async (ctx, next) => {
     if (ctx.user.onboardingStep) return toast(ctx, dict(ctx.user.lang).chooseAbove);
     await next();
   });
@@ -328,6 +340,16 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await reread(ctx);
     await redraw(ctx, renderSettings(ctx.user));
   });
+  /*
+   * «Показать обучение заново»: the two screens of the introduction in the message of the settings, and every hint
+   * comes again. Nothing else of the learner changes.
+   */
+  c.callbackQuery("set:tut", async (ctx) => {
+    await repo.keepHints(ctx.user.id, HINTS_KEPT_ON_REPLAY);
+    await redraw(ctx, renderIntro(1, ctx.user.lang, true));
+  });
+  c.callbackQuery("tut:2", async (ctx) => redraw(ctx, renderIntro(2, ctx.user.lang, true)));
+  c.callbackQuery("tut:ok", async (ctx) => redraw(ctx, renderSettings(ctx.user)));
   c.command("stats", async (ctx) => { if (await ready(ctx)) await ctx.reply(renderStats(await cumulative(repo, ctx.user, deps.now()), ctx.user.lang), HTML); });
   c.command("help", async (ctx) => { await ctx.reply(dict(ctx.user.lang).help, HTML); });
   c.callbackQuery("help:add", async (ctx) => { await toast(ctx); await ctx.reply(dict(ctx.user.lang).helpAdd, HTML); });
@@ -338,16 +360,13 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await ctx.reply(await adminStatsText(repo, deps.now()), HTML);
   });
 
-  /* free text: onboarding answers, manual translations, custom words */
+  /* free text: manual translations, custom words */
   c.on("message:text", async (ctx) => {
     const text = ctx.message.text;
     const t = dict(ctx.user.lang);
     if (text.startsWith("/")) { await ctx.reply(t.unknownCommand); return; }
-    if (ctx.user.onboardingStep) {
-      if (ctx.user.onboardingStep === "tz") return answerOb(ctx, text);
-      await ctx.reply(t.chooseAbove);
-      return;
-    }
+    // No step of the introduction takes a typed answer.
+    if (ctx.user.onboardingStep) { await ctx.reply(t.chooseAbove); return; }
     const svc = content();
     const pending = svc.pendingKind(ctx.user);
     if (pending === "manual") {

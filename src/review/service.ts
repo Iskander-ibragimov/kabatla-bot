@@ -2,6 +2,7 @@ import type { CardRow, Direction, NewNote, NewScope, Queue, Repo, User } from ".
 import { type EmptyReason, emptyReason, mergeStreams, nextSpans, readSpans, scopeKey, writeSpans } from "../levels/order";
 import { LEVELS, levelsOf, posCodesOf } from "../levels/scale";
 import { type Mem, type Rating, formatInterval, grade as fsrsGrade, memoryDays, newMem, preview, stage } from "../srs/fsrs";
+import { type Lead, afterGrade, onCard, onDone } from "../tutorial/hints";
 import { type Window, dayWindow, localDay } from "../users/service";
 import { pick } from "./pick";
 
@@ -15,14 +16,15 @@ export interface Feedback { word: string; kind: "grow" | "step" | "lapse" | "fir
 /** `n`: the new cards still to come today; while a level has a word to give it is what is left of the day's limit. */
 export interface Counts { n: number; l: number; r: number }
 export interface DaySummary { reviewsToday: number; learnedToday: number; nextLearningInMs: number | null; streak: number }
-export type { EmptyReason };
+export type { EmptyReason, Lead };
 export type Screen =
-  | { kind: "card"; view: CardView; counts: Counts; intervals: Record<Rating, string>; feedback: Feedback | null; canUndo: boolean }
+  /** `lead`: the hint that stands before the card in the same message, see tutorial/hints.ts; null when there is none. */
+  | { kind: "card"; view: CardView; counts: Counts; intervals: Record<Rating, string>; feedback: Feedback | null; canUndo: boolean; lead: Lead | null }
   /**
    * The session is over for now. `empty`: why no new word came although the day's limit is not spent, and what to
-   * offer the learner; null when new words are not allowed any more today.
+   * offer the learner; null when new words are not allowed any more today. `lead`: as on a card.
    */
-  | { kind: "done"; summary: DaySummary; feedback: Feedback | null; empty: EmptyReason | null }
+  | { kind: "done"; summary: DaySummary; feedback: Feedback | null; empty: EmptyReason | null; lead: Lead | null }
   | { kind: "stale" }
   | { kind: "noundo" }
   /** The user has no card at all and there is no new word to give. */
@@ -127,7 +129,12 @@ export class ReviewService {
     return { n: Math.min(newLeftOf(user, q.counts), candidates), l: q.counts.learning, r: q.counts.review };
   }
 
-  async nextScreen(user: User, feedback: Feedback | null = null): Promise<Screen> {
+  /**
+   * The next screen of the session. `hint`: the hint of the grade this screen follows. A screen that follows no grade,
+   * or a grade without a hint, carries the hint that is due by what the user has seen (`user.hintsSeen`); after a
+   * grade that is none, the grade having marked both of them.
+   */
+  async nextScreen(user: User, feedback: Feedback | null = null, hint: Lead | null = null): Promise<Screen> {
     const w = dayWindow(user.tzOffsetMin, this.now);
     const read = await this.sessionQueue(user, w);
     const { q, fresh } = read;
@@ -147,7 +154,7 @@ export class ReviewService {
         : null;
       const nextDue = q.learning.length ? Math.min(...q.learning.map((x) => x.mem.due)) : null;
       return {
-        kind: "done", feedback, empty,
+        kind: "done", feedback, empty, lead: hint ?? onDone(user.hintsSeen),
         summary: { reviewsToday: end.reviewsToday, learnedToday: end.learnedToday, streak: user.streak,
           nextLearningInMs: nextDue == null ? null : Math.max(0, nextDue - this.now) },
       };
@@ -161,7 +168,10 @@ export class ReviewService {
     const pv = preview(row.mem, this.now, user.retention);
     const intervals = { 1: 0, 2: 0, 3: 0, 4: 0 } as Record<Rating, string | number>;
     for (const g of [1, 2, 3, 4] as Rating[]) intervals[g] = formatInterval(pv[g] - this.now, user.lang);
-    return { kind: "card", view: toView(row), counts: this.countsOf(user, read), intervals: intervals as Record<Rating, string>, feedback, canUndo: feedback != null };
+    return {
+      kind: "card", view: toView(row), counts: this.countsOf(user, read), intervals: intervals as Record<Rating, string>, feedback, canUndo: feedback != null,
+      lead: hint ?? onCard(user.hintsSeen),
+    };
   }
 
   async grade(user: User, cardId: number, reps: number, rating: Rating): Promise<Screen> {
@@ -173,6 +183,8 @@ export class ReviewService {
     const yesterday = localDay(user.tzOffsetMin, this.now - 86_400_000);
     const streak = user.lastStudyDay === today ? user.streak : user.lastStudyDay === yesterday ? user.streak + 1 : 1;
     const learnedNow = stage(before) !== "learned" && stage(after) === "learned";
+    // The hint of the button, with the interval the grade gave, written the way a button writes it; what is seen is stored with the grade, in the user's statement.
+    const hint = afterGrade(user.hintsSeen, rating, formatInterval(after.due - this.now, user.lang));
     const stmts = [
       this.repo.gradeCardStmt(card.id, reps, after),
       this.repo.guardedLogStmt({
@@ -180,7 +192,7 @@ export class ReviewService {
         intervalAfterMs: after.due - this.now, reviewedAt: this.now, wasNew: before.state === "new", learnedNow,
         streakBefore: user.streak, lastStudyDayBefore: user.lastStudyDay,
       }),
-      this.repo.guardedUserStmt(user.id, { streak, lastStudyDay: today, lastReviewAt: this.now, mixCounter: user.mixCounter + 1 }),
+      this.repo.guardedUserStmt(user.id, { streak, lastStudyDay: today, lastReviewAt: this.now, mixCounter: user.mixCounter + 1, hintsSeen: hint.seen }),
       this.repo.guardedUsageStmt(new Date(this.now).toISOString().slice(0, 10), 1, ROWS_PER_REVIEW),
       // The counter of started words changes exactly one row whenever the grade was applied, so the statement after it is still guarded.
       this.repo.progressStmt(user.id, card.noteId, card.id, before.state === "new"),
@@ -191,8 +203,8 @@ export class ReviewService {
     }
     const res = await this.repo.batch(stmts);
     if (!res[0]?.meta.changes) return { kind: "stale" };
-    const updated: User = { ...user, streak, lastStudyDay: today, lastReviewAt: this.now, mixCounter: user.mixCounter + 1 };
-    return this.nextScreen(updated, feedbackOf(card.word, before, after, this.now));
+    const updated: User = { ...user, streak, lastStudyDay: today, lastReviewAt: this.now, mixCounter: user.mixCounter + 1, hintsSeen: hint.seen };
+    return this.nextScreen(updated, feedbackOf(card.word, before, after, this.now), hint.lead);
   }
 
   /**
@@ -216,6 +228,6 @@ export class ReviewService {
     for (const g of [1, 2, 3, 4] as Rating[]) intervals[g] = formatInterval(pv[g] - this.now, user.lang);
     // The queue is read for the counters alone: nothing of it is stored.
     const read = await this.readQueue(user, dayWindow(user.tzOffsetMin, this.now));
-    return { kind: "card", view: toView(card), intervals, feedback: null, canUndo: false, counts: this.countsOf(user, read) };
+    return { kind: "card", view: toView(card), intervals, feedback: null, canUndo: false, counts: this.countsOf(user, read), lead: null };
   }
 }

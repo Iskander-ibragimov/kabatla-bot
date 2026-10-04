@@ -6,7 +6,6 @@
  */
 import { existsSync } from "node:fs";
 import { parseCsv } from "../src/content/csv";
-import { PLACEMENT } from "../src/users/placement";
 import { FILES, LEVELS_DIR, levelNumbers, readAttested, readLevel, readMeta, readRenames, readText, strayLevelFiles } from "./lib/files";
 import { LEVEL_COUNT, checkLevels, checkRenames, levelFile } from "./lib/levels";
 
@@ -28,7 +27,7 @@ else {
   const core = existsSync(FILES.core) ? parseCsv(readText(FILES.core)).map((row) => row.word ?? "").filter((word) => word.trim() !== "") : undefined;
   const levels = numbers.map(readLevel);
   errors.push(...checkLevels(levels, {
-    attested: readAttested(), placement: PLACEMENT, expectLevels: full ? LEVEL_COUNT : numbers.length, core, minPhrases: MIN_PHRASES, meta: readMeta(),
+    attested: readAttested(), expectLevels: full ? LEVEL_COUNT : numbers.length, core, minPhrases: MIN_PHRASES, meta: readMeta(),
   }));
   // Corrected headwords (data/renames.csv): each must name a level that exists, its new word and no longer its old one.
   errors.push(...checkRenames(readRenames(), levels));

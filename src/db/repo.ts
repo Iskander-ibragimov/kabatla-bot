@@ -241,18 +241,19 @@ export class Repo {
     return (r.meta.changes ?? 0) > 0;
   }
   /**
-   * The write that ends onboarding, two statements for one batch: the user patch, applied only while the user is still on
-   * the time-zone step, and the subscription to the start deck (if there is one), made only when the patch was applied.
-   * Of two concurrent answers to that step one changes the row; `meta.changes` of the first statement tells which.
+   * The write that ends the introduction: the patch is applied only while the user still stands on its last step,
+   * «Уровни». Of answers that arrive together, or after the learner has studied, only the first changes the row;
+   * returns whether this one did.
    */
-  finishOnboardingStmts(userId: number, patch: Partial<Omit<User, "id">>, deckId: number | null, now: number): D1PreparedStatement[] {
+  async finishOnboarding(userId: number, patch: Partial<Omit<User, "id">>): Promise<boolean> {
     const keys = Object.keys(patch);
     const vals = keys.map((k) => { const v = (patch as Record<string, unknown>)[k]; return typeof v === "boolean" ? (v ? 1 : 0) : (v ?? null); });
-    const stmts = [this.db.prepare(`UPDATE users SET ${keys.map((k) => `${snake(k)} = ?`).join(", ")} WHERE id = ? AND onboarding_step = 'tz'`).bind(...vals, userId)];
-    if (deckId != null) {
-      stmts.push(this.db.prepare("INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) SELECT ?, ?, ? WHERE changes() = 1").bind(userId, deckId, now));
-    }
-    return stmts;
+    const r = await this.db.prepare(`UPDATE users SET ${keys.map((k) => `${snake(k)} = ?`).join(", ")} WHERE id = ? AND onboarding_step = 'levels'`).bind(...vals, userId).run();
+    return (r.meta.changes ?? 0) > 0;
+  }
+  /** Forgets the hints the user has seen, all but those of the mask `keep`, in one statement over the stored set. */
+  async keepHints(userId: number, keep: number): Promise<void> {
+    await this.db.prepare("UPDATE users SET hints_seen = hints_seen & ?2 WHERE id = ?1").bind(userId, keep).run();
   }
 
   /**
@@ -323,17 +324,6 @@ export class Repo {
       decks: levelDecksOf(decks!.results), totals: pairTotals(totals!.results), progress: pairsStarted(progress!.results), topics: topicRows(topics!.results),
       own: (owned?.results ?? []).map((r) => this.rowToDeck(r)),
     };
-  }
-  /**
-   * The level a learner placed at `placed` starts from while the catalog is not complete: the highest existing level
-   * not above `placed`, or the lowest existing one when there is none; null when the catalog has no levels at all.
-   */
-  async startLevel(placed: number): Promise<{ deckId: number; levelNo: number } | null> {
-    const r = await this.db.prepare(
-      `SELECT id, level_no FROM decks WHERE level_no <= ${LAST_LEVEL}
-       ORDER BY (level_no <= ?1) DESC, CASE WHEN level_no <= ?1 THEN -level_no ELSE level_no END LIMIT 1`,
-    ).bind(placed).first<{ id: number; level_no: number }>();
-    return r ? { deckId: r.id, levelNo: r.level_no } : null;
   }
   private rowToDeck(r: Record<string, unknown>): DeckRow {
     return { id: r.id as number, slug: (r.slug as string) ?? null, ownerId: (r.owner_id as number) ?? null, kind: r.kind as DeckRow["kind"],

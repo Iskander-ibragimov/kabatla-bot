@@ -26,10 +26,11 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   fixLevelBtn: [["A2"], ["C1"]],
   addAll: [[3]],
   foundN: [[3]],
-  placementQ: [[1, "китап"]],
-  goalQ: [[2], [6]],
-  goalBtn: [[5], [10], [20]],
-  finished: [["09:00", "UTC+3"]],
+  levelWords: [[1], [2], [5], [11], [21], [22], [112], [400], [850]],
+  hintAgain: [["1мин"]],
+  hintHard: [["6мин"]],
+  hintGood: [["10мин"]],
+  hintEasy: [["8көн"], ["2,3ай"]],
   askWords: [["мисал.рф"]],
   dupLine: [["китап", "Минем сүзләр", false], ["китап", "Минем сүзләр", true]],
   manualAsk: [["китап"]],
@@ -182,6 +183,46 @@ describe("i18n dictionaries", () => {
     expect(POS_GROUPS.map((g) => ru.posGroupName(g))).toEqual(["существительные", "глаголы", "прилагательные", "наречия", "местоимения", "числительные", "служебные слова", "фразы"]);
     expect(POS_GROUPS.map((g) => tt.posGroupName(g))).toEqual(["исемнәр", "фигыльләр", "сыйфатлар", "рәвешләр", "алмашлыклар", "саннар", "ярдәмлек сүзләр", "гыйбарәләр"]);
     for (const d of [ru, tt]) for (const key of ["zzz", "toString", "__proto__"]) expect(d.posGroupName(key)).toBe(key);
+  });
+
+  it("the two screens of the introduction and the step of the levels, word for word in Russian", () => {
+    expect(ru.intro1).toBe("Кабатла учит татарские слова карточками. Слово возвращается тогда, когда вы начинаете его забывать: сначала через минуты, потом через дни и месяцы. Так оно остаётся в памяти надолго.");
+    expect(ru.intro2).toBe("Карточка: сверху слово, перевод и пример скрыты. Вспомните перевод, нажмите на скрытый текст и честно оцените себя одной из четырёх кнопок. На каждой кнопке написано, когда слово вернётся.");
+    expect(ru.obLevels).toBe("Что учить? Отметьте один или несколько уровней. Напоминание — каждый день в 09:00 по Москве, 10 новых слов в день. Всё это меняется в /settings.");
+    expect([ru.nextBtn, ru.gotItBtn, ru.obGoBtn, ru.setTutorial]).toEqual(["Дальше", "Понятно", "Начать", "🎓 Показать обучение заново"]);
+    expect([tt.nextBtn, tt.gotItBtn, tt.obGoBtn, tt.setTutorial]).toEqual(["Алга таба", "Аңлашылды", "Башлау", "🎓 Өйрәтүне яңадан күрсәтү"]);
+    // The Tatar step names the same defaults and the same command.
+    for (const part of ["09:00", "10", "/settings"]) expect(tt.obLevels).toContain(part);
+    expect(tt.intro2).toContain("дүрт төймәнең");
+  });
+
+  it("counts the words of a level: «1 слово», «2 слова», «5 слов»; Tatar has one form", () => {
+    expect([1, 2, 4, 5, 11, 12, 14, 21, 22, 25, 101, 111, 112, 400, 500, 850].map((n) => ru.levelWords(n))).toEqual([
+      "1 слово", "2 слова", "4 слова", "5 слов", "11 слов", "12 слов", "14 слов", "21 слово", "22 слова", "25 слов", "101 слово", "111 слов", "112 слов", "400 слов", "500 слов", "850 слов",
+    ]);
+    expect([1, 2, 5, 400].map((n) => tt.levelWords(n))).toEqual(["1 сүз", "2 сүз", "5 сүз", "400 сүз"]);
+  });
+
+  it("the six lines of the hints and the update notice, word for word in Russian, with the interval where the button gave one", () => {
+    expect([ru.hintFront, ru.hintAgain("1м"), ru.hintHard("6м"), ru.hintGood("10м"), ru.hintEasy("8д"), ru.hintOrder, ru.updateNotice]).toEqual([
+      "Вспомните перевод, откройте скрытый текст и оцените себя.",
+      "„Снова“: слово вернётся через 1м, в этом же занятии, и будет приходить, пока не запомнится.",
+      "„Трудно“: слово вернётся через 6м. Интервалы будут расти медленнее.",
+      "„Хорошо“: слово вернётся через 10м. Вспомните его снова — интервал вырастет: дни, потом недели и месяцы.",
+      "„Легко“: слово ушло сразу на 8д и не занимает дневную норму новых слов.",
+      "Порядок в занятии: сначала слова на закреплении, потом повторения на сегодня, между ними новые слова.",
+      "Бот обновился: уровни A1–C1, темы и порядок слов — в /levels",
+    ]);
+    // Each Tatar hint names its button as the button is named, and holds the interval.
+    expect([tt.hintAgain("1мин"), tt.hintHard("6мин"), tt.hintGood("10мин"), tt.hintEasy("8көн")].map((text, i) => text.startsWith(`„${[tt.again, tt.hard, tt.good, tt.easy][i]}“: `))).toEqual([true, true, true, true]);
+    expect([tt.hintAgain("1мин"), tt.hintHard("6мин"), tt.hintGood("10мин"), tt.hintEasy("8көн")].map((text, i) => text.includes(` ${["1мин", "6мин", "10мин", "8көн"][i]} бар`))).toEqual([true, true, true, true]);
+    expect([ru.hintAgain("x"), ru.hintHard("x"), ru.hintGood("x"), ru.hintEasy("x")].map((text, i) => text.startsWith(`„${[ru.again, ru.hard, ru.good, ru.easy][i]}“: `))).toEqual([true, true, true, true]);
+    for (const d of [ru, tt]) expect(d.updateNotice).toContain("/levels");
+  });
+
+  it("has no text of the introduction that is gone: the test of ten words and the three questions", () => {
+    const gone = ["placementQ", "knowBtn", "dontKnowBtn", "goalQ", "goalBtn", "remindQ", "tzQ", "finished", "easyHint"];
+    expect(KEYS.filter((k) => gone.includes(k))).toEqual([]);
   });
 
   it("the toasts of the checkboxes", () => {

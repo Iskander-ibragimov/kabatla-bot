@@ -73,9 +73,13 @@ export async function seedLevels(db: D1Database, levels: Record<number, string[]
   return ids;
 }
 
+/** Every hint and the update notice are seen: the cards of such a learner carry no first lines. */
+const HINTS_ALL_SEEN = 127;
+
 /**
  * A user who finished onboarding and is subscribed to the deck of `level` (default 1).
  * When that deck does not exist yet, it is created from the first `words` (default 5) entries of WORDS.
+ * The hints are seen (`hintsSeen` 127) unless the patch says otherwise.
  */
 export async function seedUser(db: D1Database, opts: { now: number; level?: number; levels?: number; words?: number; patch?: Partial<User>; tgId?: number }) {
   const repo = new Repo(db);
@@ -87,7 +91,7 @@ export async function seedUser(db: D1Database, opts: { now: number; level?: numb
   const userId = await repo.insertUser({ tgId: opts.tgId ?? 1, chatId: opts.tgId ?? 1, lang: "ru", now: opts.now });
   const tz = opts.patch?.tzOffsetMin ?? 180;
   await repo.updateUser(userId, {
-    onboardingStep: null, tzOffsetMin: tz, level,
+    onboardingStep: null, tzOffsetMin: tz, level, hintsSeen: HINTS_ALL_SEEN,
     ...(level <= 5 || opts.levels != null ? { levels: opts.levels ?? levelBit(level) } : {}),
     nextDailyAt: nextOccurrence(tz, opts.patch?.remindAt ?? "09:00", opts.now), nextEveningAt: nextOccurrence(tz, "20:00", opts.now),
     ...(opts.patch ?? {}),
@@ -99,14 +103,16 @@ export async function seedUser(db: D1Database, opts: { now: number; level?: numb
 
 /**
  * A user who finished onboarding, with no deck and no subscription: the learner of the new model, whose new catalog
- * words come from the checked levels (`users.levels`, A1 by default) and not from subscribed level decks.
+ * words come from the checked levels (`users.levels`, A1 by default) and not from subscribed level decks. The hints are
+ * seen (`hintsSeen` 127) unless the patch says otherwise: 64 is a learner fresh from the introduction, 63 one who
+ * knew the bot before the levels A1–C1.
  */
 export async function seedLearner(db: D1Database, opts: { now: number; tgId?: number; patch?: Partial<User> }): Promise<{ repo: Repo; user: User }> {
   const repo = new Repo(db);
   const userId = await repo.insertUser({ tgId: opts.tgId ?? 1, chatId: opts.tgId ?? 1, lang: "ru", now: opts.now });
   const tz = opts.patch?.tzOffsetMin ?? 180;
   await repo.updateUser(userId, {
-    onboardingStep: null, tzOffsetMin: tz,
+    onboardingStep: null, tzOffsetMin: tz, hintsSeen: HINTS_ALL_SEEN,
     nextDailyAt: nextOccurrence(tz, opts.patch?.remindAt ?? "09:00", opts.now), nextEveningAt: nextOccurrence(tz, "20:00", opts.now),
     ...(opts.patch ?? {}),
   });

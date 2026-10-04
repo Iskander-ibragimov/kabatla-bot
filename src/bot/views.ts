@@ -9,8 +9,8 @@ export type Keyboard = Button[][];
 export interface Rendered { text: string; keyboard: Keyboard }
 
 import type { CardDraft, Duplicate } from "../content/service";
-import type { CardView, Counts, DaySummary, EmptyReason, Feedback } from "../review/service";
-export type { CardView, Counts, DaySummary, EmptyReason, Feedback };
+import type { CardView, Counts, DaySummary, EmptyReason, Feedback, Lead } from "../review/service";
+export type { CardView, Counts, DaySummary, EmptyReason, Feedback, Lead };
 /** What a preview shows of a card that is not saved yet. */
 export type PreviewItem = Pick<CardDraft, "word" | "transcription" | "pos" | "translation" | "exampleTt" | "exampleRu" | "sourceUrl" | "ai">;
 
@@ -153,7 +153,20 @@ function fitCard(render: (fit: CardFit) => string): string {
     ?? render({ ...least, word: LEAST.word });
 }
 
-/** `lead` is a line that stands before the card in the same message; it counts toward the length. */
+/**
+ * The text of a hint, see tutorial/hints.ts: what to do with a card, the update notice, or what the pressed button
+ * did to the word — with the line about the order of a session under it when it is the first such hint.
+ */
+export function renderLead(l: Lead, lang: Lang): string {
+  const t = dict(lang);
+  if (l.kind === "front") return t.hintFront;
+  if (l.kind === "update") return t.updateNotice;
+  // The interval is the text of a button, like «<10м»: it is escaped for the message.
+  const line = { 1: t.hintAgain, 2: t.hintHard, 3: t.hintGood, 4: t.hintEasy }[l.rating](esc(l.interval));
+  return l.withOrder ? `${line}\n${t.hintOrder}` : line;
+}
+
+/** `lead` is what stands before the card in the same message, a hint; it counts toward the length. */
 function cardText(v: CardView, c: Counts, lang: Lang, lead: string, fit: CardFit): string {
   const word = esc(clipMiddle(v.word, fit.word));
   const translation = esc(clip(v.translation, fit.translation));
@@ -197,11 +210,12 @@ export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, str
 
 /**
  * The screen that ends a session. `empty`: why no new word came although the day allows more; it is said in the last
- * line, with the button that mends it above the other two, when there is something to mend.
+ * line, with the button that mends it above the other two, when there is something to mend. `lead`: a hint, which
+ * stands above everything else.
  */
-export function renderDone(s: DaySummary, lang: Lang, empty: EmptyReason | null): Rendered {
+export function renderDone(s: DaySummary, lang: Lang, empty: EmptyReason | null, lead = ""): Rendered {
   const t = dict(lang);
-  const lines: string[] = [];
+  const lines: string[] = lead ? [lead, ""] : [];
   lines.push(t.doneTitle, t.doneToday(s.reviewsToday, s.learnedToday));
   if (s.nextLearningInMs != null) lines.push("", t.doneNextLearning(formatLong(s.nextLearningInMs, lang)));
   if (s.streak > 0) lines.push(t.streak(s.streak));
