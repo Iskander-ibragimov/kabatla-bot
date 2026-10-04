@@ -423,7 +423,7 @@ describe("content service: own words", () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
     const svc = service(repo, failingLlm());
     const r = await svc.prepareAdd(user, `мату${STRESS}р https://c.com`, []);
-    expect(r).toEqual({ kind: "manual", word: "матур", others: [], duplicates: [] });
+    expect(r).toEqual({ kind: "manual", word: "матур", others: [], duplicates: [], at: T });
     const word = await svc.completeManual(await fresh(repo, user), " красивый ");
     expect(word).toBe("матур");
     expect(transcribe("матур")).toBe("мату́р");
@@ -434,6 +434,56 @@ describe("content service: own words", () => {
     expect((await fresh(repo, user)).pendingEdit).toBeNull();
     expect(await svc.completeManual(await fresh(repo, user), "ещё")).toBeNull();
     expect(await jobsCount()).toBe(0);
+  });
+
+  it("waits for a translation typed by hand, or for the translation of an edited preview, for 10 minutes", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const svc = service(repo, failingLlm());
+    await svc.prepareAdd(user, "матур", []);
+    const waiting = await fresh(repo, user);
+    const at = (minutes: number, ms = 0) => service(repo, failingLlm(), T + minutes * 60_000 + ms);
+    expect(at(0).pendingKind(waiting)).toBe("manual");
+    expect(at(10).pendingKind(waiting)).toBe("manual");
+    expect(at(10, 1).pendingKind(waiting)).toBeNull();
+    // After that time the text is not a translation: nothing is stored.
+    expect(await at(10, 1).completeManual(waiting, "красивый")).toBeNull();
+    expect(await ownNotes(user.id)).toEqual([]);
+    // A state without a time was written by an earlier version of the bot: it has ended.
+    expect(svc.pendingKind({ ...waiting, pendingEdit: JSON.stringify({ manual: { word: "матур", url: null } }) })).toBeNull();
+    expect(svc.pendingKind({ ...waiting, pendingEdit: JSON.stringify({ preview: { previewId: 1 } }) })).toBeNull();
+
+    const ai = service(repo, llmReturning([card("зур", "большой")]));
+    const r = await preview(ai, await fresh(repo, user), "зур");
+    await ai.startEdit(user, r.previewId);
+    const editing = await fresh(repo, user);
+    expect(at(10).pendingKind(editing)).toBe("preview");
+    expect(at(10, 1).pendingKind(editing)).toBeNull();
+  });
+
+  it("cancelManual ends the wait it was asked about and no other", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const svc = service(repo, failingLlm());
+    const r = await svc.prepareAdd(user, "матур", []);
+    if (r.kind !== "manual") throw new Error(r.kind);
+    expect(await svc.cancelManual(await fresh(repo, user), r.at + 1)).toBe(false);
+    expect(svc.pendingKind(await fresh(repo, user))).toBe("manual");
+    expect(await svc.cancelManual(await fresh(repo, user), r.at)).toBe(true);
+    expect((await fresh(repo, user)).pendingEdit).toBeNull();
+    expect(await svc.cancelManual(await fresh(repo, user), r.at)).toBe(false);
+  });
+
+  it("the next message with words clears a wait that has ended, in the call that the message makes anyway", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 1 });
+    await seedLevels(env.DB, { 5: ["бәхет"] });
+    await service(repo, failingLlm()).prepareAdd(user, "матур", []);
+    const stale = await fresh(repo, user);
+    expect(stale.pendingEdit).not.toBeNull();
+    const db = countingDb(env.DB);
+    const later = new ContentService(new Repo(db), { llm: client(failingLlm()) }, T + 11 * 60_000);
+    // A word of the catalog: a preview, nothing to wait for.
+    expect((await later.prepareAdd(stale, "бәхет", [])).kind).toBe("preview");
+    expect((await fresh(repo, user)).pendingEdit).toBeNull();
+    expect(db.calls).toBeLessThanOrEqual(7);
   });
 
   it("keeps the catalog cards in the preview when the AI is down and lists the rest as untranslated", async () => {
@@ -482,9 +532,12 @@ describe("content service: own words", () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
     const svc = service(repo, llmReturning([card("матур", "красивый")]));
     const r = await preview(svc, user, "матур");
-    await svc.startEdit(user, r.previewId);
+    // ✏️ is pressed a minute before the preview expires, the text comes a minute later: the bot still waits, the preview is gone.
+    const DAY = 24 * 3_600_000;
+    await service(repo, failingLlm(), T + DAY - 60_000).startEdit(user, r.previewId);
     const editing = await fresh(repo, user);
-    const later = service(repo, failingLlm(), T + 24 * 3_600_000 + 1);
+    const later = service(repo, failingLlm(), T + DAY + 1);
+    expect(later.pendingKind(editing)).toBe("preview");
     expect(await later.editPreviewTranslation(editing, "красивый")).toEqual({ kind: "gone" });
     expect((await fresh(repo, user)).pendingEdit).toBeNull();
     expect((await repo.getPreview<{ translation: string }[]>(user.id, r.previewId, "add", 0))![0]!.translation).toBe("красивый");

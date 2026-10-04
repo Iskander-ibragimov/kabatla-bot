@@ -17,13 +17,16 @@ export type AddResult =
   | { kind: "too-long"; max: number }
   | { kind: "duplicates-only"; duplicates: Duplicate[] }
   | { kind: "preview"; previewId: number; items: CardDraft[]; duplicates: Duplicate[]; manual: string[] }
-  | { kind: "manual"; word: string; others: string[]; duplicates: Duplicate[] };
+  /** `at`: when the bot began to wait for the translation; it names this wait in the ✖️ button of the request. */
+  | { kind: "manual"; word: string; others: string[]; duplicates: Duplicate[]; at: number };
 export type EditResult = { kind: "edited"; previewId: number; items: CardDraft[] } | { kind: "too-long" } | { kind: "gone" };
 export type GenResult = { kind: "limit" } | { kind: "failed" } | { kind: "preview"; previewId: number; topic: string; items: CardDraft[] };
 
 interface Deps { llm: LlmClient }
-interface PendingManual { word: string; url: string | null }
-interface PendingPreviewEdit { previewId: number }
+/** What `users.pending_edit` holds while the bot waits for a typed translation; `at` is when the wait began. */
+interface PendingManual { word: string; url: string | null; at: number }
+interface PendingPreviewEdit { previewId: number; at: number }
+interface Pending { manual?: PendingManual; preview?: PendingPreviewEdit }
 
 /** What a learner may type, in characters: a line with a word or phrase, and a translation given by hand. The same limits as for the model's fields. */
 export const MAX_TYPED = { line: MAX.word, translation: MAX.translation } as const;
@@ -41,6 +44,12 @@ function storedTranslation(text: string): string {
 }
 
 const PENDING_URL_MS = 10 * 60_000;
+/**
+ * How long the bot waits for a translation it asked for (the model is down, or ✏️ was pressed on a preview).
+ * After that the next text is a message with words like any other: a learner who comes back later types a new word,
+ * not the translation of the old one.
+ */
+const PENDING_EDIT_MS = 10 * 60_000;
 const PREVIEW_TTL_MS = 24 * 3_600_000;
 
 /** Combining grave and acute accents: stress marks that come along with a copied word. `transcribe` puts its own. */
@@ -91,17 +100,20 @@ export class ContentService {
   async prepareAdd(user: User, text: string, entities: Entity[]): Promise<AddResult> {
     const parsed = parseWordsAndLinks(text, entities);
     const lines = cleanLines(parsed.items);
+    // A wait for a translation that has ended is forgotten in the write this message makes anyway.
+    const patch: Partial<User> = user.pendingEdit && !this.pending(user) ? { pendingEdit: null } : {};
     if (!lines.length) {
       if (!parsed.orphanUrl) return { kind: "empty" };
-      await this.repo.updateUser(user.id, { pendingUrl: parsed.orphanUrl, pendingUrlAt: this.now });
+      await this.repo.updateUser(user.id, { ...patch, pendingUrl: parsed.orphanUrl, pendingUrlAt: this.now });
       return { kind: "ask-words", url: parsed.orphanUrl };
     }
     // A longer line is not a word or a phrase. Nothing is looked up or stored, so a remembered link waits for the next message.
     if (lines.some((l) => l.word.length > MAX_TYPED.line)) return { kind: "too-long", max: MAX_TYPED.line };
     if (user.pendingUrl && user.pendingUrlAt != null) {
       if (this.now - user.pendingUrlAt <= PENDING_URL_MS && lines.every((l) => !l.url)) for (const l of lines) l.url = user.pendingUrl;
-      await this.repo.updateUser(user.id, { pendingUrl: null, pendingUrlAt: null });
+      Object.assign(patch, { pendingUrl: null, pendingUrlAt: null });
     }
+    if (Object.keys(patch).length) await this.repo.updateUser(user.id, patch);
 
     const known = await this.repo.findNotesForUser(user.id, lines.map((l) => l.word));
     const notKnown = lines.filter((l) => !known.has(wordKey(l.word)));
@@ -127,7 +139,7 @@ export class ContentService {
 
     const duplicates: Duplicate[] = [];
     const drafts: CardDraft[] = [];
-    const manual: PendingManual[] = [];
+    const manual: Omit<PendingManual, "at">[] = [];
     const links: D1PreparedStatement[] = [];
     /** Two lines may lead to one word («эни» and «мама» → «әни»): it is answered once. */
     const seen = new Set<string>();
@@ -153,8 +165,9 @@ export class ContentService {
     if (!drafts.length) {
       const first = manual[0];
       if (!first) return { kind: "duplicates-only", duplicates };
-      await this.repo.updateUser(user.id, { pendingEdit: JSON.stringify({ manual: first }) });
-      return { kind: "manual", word: first.word, others: manual.slice(1).map((m) => m.word), duplicates };
+      const wait: Pending = { manual: { ...first, at: this.now } };
+      await this.repo.updateUser(user.id, { pendingEdit: JSON.stringify(wait) });
+      return { kind: "manual", word: first.word, others: manual.slice(1).map((m) => m.word), duplicates, at: this.now };
     }
     const previewId = await this.repo.insertPreview(user.id, "add", drafts, this.now);
     return { kind: "preview", previewId, items: drafts, duplicates, manual: manual.map((m) => m.word) };
@@ -175,9 +188,17 @@ export class ContentService {
     return byInput;
   }
 
-  /** Saves a card from a translation the user typed after AI was unavailable. Throws on a translation that `typedTranslation` refuses. */
+  /** What the bot is waiting for from this user, or null: a wait ends PENDING_EDIT_MS after it began; a state without a time is older than that. */
+  private pending(user: User): Pending | null {
+    if (!user.pendingEdit) return null;
+    const p = JSON.parse(user.pendingEdit) as Pending;
+    const at = p.manual?.at ?? p.preview?.at;
+    return typeof at === "number" && this.now - at <= PENDING_EDIT_MS ? p : null;
+  }
+
+  /** Saves a card from a translation the user typed after AI was unavailable; null when the bot is not waiting for one. Throws on a translation that `typedTranslation` refuses. */
   async completeManual(user: User, text: string): Promise<string | null> {
-    const pending = user.pendingEdit ? (JSON.parse(user.pendingEdit) as { manual?: PendingManual }) : null;
+    const pending = this.pending(user);
     if (!pending?.manual) return null;
     const translation = storedTranslation(text);
     const m = pending.manual;
@@ -190,8 +211,8 @@ export class ContentService {
   async startEdit(user: User, previewId: number): Promise<CardDraft[] | null> {
     const items = await this.repo.getPreview<CardDraft[]>(user.id, previewId, "add", this.now - PREVIEW_TTL_MS);
     if (!items) return null;
-    const edit: PendingPreviewEdit = { previewId };
-    await this.repo.updateUser(user.id, { pendingEdit: JSON.stringify({ preview: edit }) });
+    const wait: Pending = { preview: { previewId, at: this.now } };
+    await this.repo.updateUser(user.id, { pendingEdit: JSON.stringify(wait) });
     return items;
   }
 
@@ -201,7 +222,7 @@ export class ContentService {
    * caller treats the text as an ordinary message. `too-long`: `typedTranslation` refuses the text; the bot keeps waiting.
    */
   async editPreviewTranslation(user: User, text: string): Promise<EditResult> {
-    const pending = user.pendingEdit ? (JSON.parse(user.pendingEdit) as { preview?: PendingPreviewEdit }) : null;
+    const pending = this.pending(user);
     if (!pending?.preview) return { kind: "gone" };
     const id = pending.preview.previewId;
     const items = await this.repo.getPreview<CardDraft[]>(user.id, id, "add", this.now - PREVIEW_TTL_MS);
@@ -219,10 +240,17 @@ export class ContentService {
     return { kind: "edited", previewId: id, items };
   }
 
+  /** What the next text of the user is: the translation asked for by hand, the translation of the preview in edit, or (null) a message with words. */
   pendingKind(user: User): "manual" | "preview" | null {
-    if (!user.pendingEdit) return null;
-    const p = JSON.parse(user.pendingEdit) as { manual?: unknown; preview?: unknown };
-    return p.manual ? "manual" : p.preview ? "preview" : null;
+    const p = this.pending(user);
+    return p?.manual ? "manual" : p?.preview ? "preview" : null;
+  }
+
+  /** ✖️ under the request for a translation: ends the wait that began at `at`. False when the bot is not waiting for that translation any more. */
+  async cancelManual(user: User, at: number): Promise<boolean> {
+    if (this.pending(user)?.manual?.at !== at) return false;
+    await this.repo.updateUser(user.id, { pendingEdit: null });
+    return true;
   }
 
   /** Saves the words of a preview and deletes it; if the user was editing it, the bot stops waiting for its translation. */

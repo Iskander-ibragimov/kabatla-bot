@@ -213,6 +213,13 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   });
 
   /* custom words */
+  c.callbackQuery(/^add:skip:(\d+)$/, async (ctx) => {
+    const t = dict(ctx.user.lang);
+    // ✖️ under a request for a translation. A request the bot no longer waits on (answered, expired, replaced by a later one) is a stale button.
+    if (!(await content().cancelManual(ctx.user, Number(ctx.match[1])))) return toast(ctx, t.staleButton);
+    await editOrSend(ctx, clickedId(ctx), { text: t.notAdded, keyboard: [] });
+    await toast(ctx);
+  });
   c.callbackQuery(/^add:(ok|edit|no):(\d+)$/, async (ctx) => {
     const t = dict(ctx.user.lang);
     const id = Number(ctx.match[2]);
@@ -295,7 +302,9 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
         else if (res.kind === "empty") r = { text: t.helpAdd, keyboard: [] };
         else if (res.kind === "too-long") r = { text: t.tooLong(res.max), keyboard: [] };
         else {
-          const keyboard = res.kind === "preview" ? renderAddPreview(res.items, res.previewId, user.lang).keyboard : res.kind === "duplicates-only" ? learnKeyboard(user.lang) : [];
+          const keyboard = res.kind === "preview" ? renderAddPreview(res.items, res.previewId, user.lang).keyboard
+            : res.kind === "duplicates-only" ? learnKeyboard(user.lang)
+            : [[{ text: t.cancel, callback_data: `add:skip:${res.at}` }]]; // the request for a translation by hand can be dismissed
           r = { text: addReplyText(res, user.lang), keyboard };
         }
         await editOrSend(ctx, m.message_id, r);

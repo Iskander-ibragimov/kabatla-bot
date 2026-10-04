@@ -605,6 +605,123 @@ describe("bot handlers", () => {
     });
   });
 
+  describe("a translation asked for by hand", () => {
+    const MINUTE = 60_000;
+    const notesCount = async () => (await env.DB.prepare("SELECT COUNT(*) AS n FROM notes").first<{ n: number }>())!.n;
+    /** The model is down: the learner typed «матур» and the bot asks for its translation. */
+    async function asked(lang: "ru" | "tt" = "ru") {
+      const h = harness(env.DB, { now: T });
+      await h.text("/start");
+      const repo = new Repo(env.DB);
+      const u = (await repo.getUserByTg(42))!;
+      await repo.updateUser(u.id, { onboardingStep: null, lang });
+      await h.text("матур");
+      const prompt = h.tg.lastMessageId();
+      expect(h.lastText()).toBe((lang === "ru" ? ru : tt).manualAsk("матур"));
+      return { h, repo, u, prompt };
+    }
+
+    it.each(["ru", "tt"] as const)("the request carries a ✖️ button, %s", async (lang) => {
+      const { h } = await asked(lang);
+      const buttons = (h.lastMarkup().inline_keyboard ?? []).flat();
+      expect(buttons.map((b) => b.text)).toEqual(["✖️"]);
+      expect(buttons[0]!.callback_data).toMatch(/^add:skip:\d+$/);
+    });
+
+    it("✖️ ends the wait: the request is replaced, and the next text is a new word, not a translation", async () => {
+      const { h, repo, u, prompt } = await asked();
+      await h.press(callbacks(h.lastMarkup())[0]!, prompt);
+      expect(h.tg.of("editMessageText").at(-1)!.payload).toMatchObject({ message_id: prompt, text: ru.notAdded });
+      expect(h.lastMarkup().inline_keyboard).toBeUndefined();
+      expect((await repo.getUser(u.id))!.pendingEdit).toBeNull();
+      expect(h.tg.of("answerCallbackQuery").at(-1)!.payload.text).toBeUndefined();
+      await h.text("зур");
+      expect(h.lastText()).toBe(ru.manualAsk("зур"));
+      expect(await notesCount()).toBe(0);
+      // The translation of the second word is taken as before.
+      await h.text("большой");
+      expect(await env.DB.prepare("SELECT word, translation FROM notes").all().then((r) => r.results)).toEqual([{ word: "зур", translation: "большой" }]);
+    });
+
+    it("the wait ends after 10 minutes: a text that comes later is a new word", async () => {
+      const { h, repo, u } = await asked();
+      h.setNow(T + 10 * MINUTE + 1);
+      await h.text("зур");
+      expect(h.lastText()).toBe(ru.manualAsk("зур"));
+      expect(await notesCount()).toBe(0);
+      // The wait is for «зур» now, from this message on.
+      expect(JSON.parse((await repo.getUser(u.id))!.pendingEdit!)).toEqual({ manual: { word: "зур", url: null, at: T + 10 * MINUTE + 1 } });
+    });
+
+    it("a translation that comes within 10 minutes is stored", async () => {
+      const { h } = await asked();
+      h.setNow(T + 10 * MINUTE);
+      await h.text("красивый");
+      expect(h.lastText()).toBe(ru.added("<b>матур</b>"));
+      expect(await env.DB.prepare("SELECT word, translation FROM notes").all().then((r) => r.results)).toEqual([{ word: "матур", translation: "красивый" }]);
+    });
+
+    it("a command typed while the bot waits is a command and is never stored as the translation", async () => {
+      const { h, repo, u } = await asked();
+      await h.text("/help");
+      expect(h.lastText()).toBe(ru.help);
+      await h.text("/levels");
+      expect(h.lastText()).toContain(ru.levelsTitle);
+      await h.text("/кушымта");
+      expect(h.lastText()).toBe(ru.unknownCommand);
+      await h.text("/gen");
+      expect(h.lastText()).toBe(ru.genUsage);
+      expect(await notesCount()).toBe(0);
+      expect((await repo.getUser(u.id))!.pendingEdit).not.toBeNull();
+      await h.text("красивый");
+      expect(await env.DB.prepare("SELECT word, translation FROM notes").all().then((r) => r.results)).toEqual([{ word: "матур", translation: "красивый" }]);
+    });
+
+    it("✖️ of an earlier request does not end the wait for a later word, and is answered like a stale button", async () => {
+      const { h, repo, u, prompt } = await asked();
+      const first = callbacks(h.lastMarkup())[0]!;
+      h.setNow(T + 11 * MINUTE);
+      await h.text("зур");
+      const waiting = (await repo.getUser(u.id))!.pendingEdit;
+      await h.press(first, prompt);
+      expect(h.tg.of("answerCallbackQuery").at(-1)!.payload.text).toBe(ru.staleButton);
+      expect((await repo.getUser(u.id))!.pendingEdit).toBe(waiting);
+      // ✖️ pressed twice, and ✖️ after the wait has ended, are stale too.
+      await h.press(callbacks(h.lastMarkup())[0]!, h.tg.lastMessageId());
+      expect((await repo.getUser(u.id))!.pendingEdit).toBeNull();
+      await h.press(callbacks(h.lastMarkup())[0] ?? first, h.tg.lastMessageId());
+      expect(h.tg.of("answerCallbackQuery").at(-1)!.payload.text).toBe(ru.staleButton);
+    });
+
+    it("a wait left by an earlier version of the bot, without a time, has ended", async () => {
+      const h = harness(env.DB, { now: T });
+      await h.text("/start");
+      const repo = new Repo(env.DB);
+      const u = (await repo.getUserByTg(42))!;
+      await repo.updateUser(u.id, { onboardingStep: null, pendingEdit: JSON.stringify({ manual: { word: "иске", url: null } }) });
+      await h.text("зур");
+      expect(h.lastText()).toBe(ru.manualAsk("зур"));
+      expect(await notesCount()).toBe(0);
+    });
+
+    it("✏️ on a preview waits for the translation for 10 minutes too", async () => {
+      const h = harness(env.DB, { now: T, fetch: echoLlm() });
+      await h.text("/start");
+      const repo = new Repo(env.DB);
+      const u = (await repo.getUserByTg(42))!;
+      await repo.updateUser(u.id, { onboardingStep: null });
+      await h.text("матур");
+      await h.press(callbacks(h.lastMarkup())[1]!, h.tg.lastMessageId());
+      h.setNow(T + 10 * MINUTE + 1);
+      await h.text("зур");
+      // «зур» is a new word with its own preview, not the translation of «матур».
+      expect(h.lastText()).toContain("<b>зур</b>");
+      expect(h.lastText()).not.toContain("матур");
+      expect((await repo.getUser(u.id))!.pendingEdit).toBeNull();
+      expect(await env.DB.prepare("SELECT payload FROM previews ORDER BY id LIMIT 1").first<{ payload: string }>().then((r) => r!.payload)).toContain("перевод");
+    });
+  });
+
   it("D1 daily limit error answers with maintenance and does not throw", async () => {
     const broken = new Repo(env.DB);
     broken.getUserByTg = async () => { throw new Error("D1_ERROR: Your account has exceeded D1's free tier daily row write limit."); };
