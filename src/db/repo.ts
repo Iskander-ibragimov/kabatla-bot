@@ -154,8 +154,12 @@ function rowToCard(r: Record<string, unknown>): CardRow {
     },
   };
 }
-/** Spaces and . , ! ? … : ; « » " ' ( ) - – — at either end of a word or phrase. migrations/0002_word_key_punctuation.sql trims the same set. */
-const KEY_EDGES = /^[ .,!?\u2026:;\u00AB\u00BB"'()\-\u2013\u2014]+|[ .,!?\u2026:;\u00AB\u00BB"'()\-\u2013\u2014]+$/g;
+/**
+ * Spaces, . , ! ? … : ; « » " ' ( ) - – — and the typographic quotes “ ” „ ‘ ’ at either end of a word or phrase.
+ * migrations/0002_word_key_punctuation.sql and 0006_word_key_quotes.sql trim the same set in the stored keys.
+ */
+const EDGE_CHARS = " .,!?\u2026:;\u00AB\u00BB\"'()\\-\u2013\u2014\u201C\u201D\u201E\u2018\u2019";
+const KEY_EDGES = new RegExp(`^[${EDGE_CHARS}]+|[${EDGE_CHARS}]+$`, "g");
 /**
  * The key a word is found by (`notes.word_key`): lower case, single spaces, no punctuation at the edges, so that a
  * typed «рәхмәт» finds the phrase stored as «Рәхмәт!». Punctuation inside stays («юк, рәхмәт»). The shown `word` is not changed.
