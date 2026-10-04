@@ -45,6 +45,8 @@ function storedTranslation(text: string): string {
   return translation;
 }
 
+/** The fewest cards an AI deck may have. */
+const MIN_DECK_CARDS = 5;
 const PENDING_URL_MS = 10 * 60_000;
 /**
  * How long the bot waits for a translation it asked for (the model is down, or ✏️ was pressed on a preview).
@@ -269,24 +271,36 @@ export class ContentService {
   /** Drops a preview; if the user was editing it, the bot stops waiting for its translation (see `Repo.deletePreview`). */
   async cancel(user: User, previewId: number): Promise<void> { await this.repo.deletePreview(user.id, previewId); }
 
+  /**
+   * An AI deck on a topic. A word the catalog has (in any level, open or not) or the user already has is left out: a
+   * card of the model in a deck of the user's own would stand in for the reviewed card of the level for good.
+   * The lookup is two D1 calls. With fewer than MIN_DECK_CARDS words left there is no deck: the result is `failed`
+   * and the daily unit is given back, as when the model is down.
+   */
   async generateDeck(user: User, topic: string, n: number): Promise<GenResult> {
     const count = Math.min(30, Math.max(10, Math.round(n) || 20));
     if (!(await consume(this.repo, user, "gen", this.now))) return { kind: "limit" };
     try {
-      // completeCards gives at least one valid card or throws LlmUnavailable, so `items` is never empty here.
       const cards = await completeCards(this.deps.llm, DECK_SYSTEM, `Topic: ${topic}\nNumber of cards: ${count}`, Date.now() + this.deadlineMs);
       const seen = new Set<string>();
-      const items: CardDraft[] = cards
-        .filter((c) => { const k = wordKey(c.word); if (seen.has(k)) return false; seen.add(k); return true; })
+      const unique = cards.filter((c) => { const k = wordKey(c.word); if (seen.has(k)) return false; seen.add(k); return true; });
+      const words = unique.map((c) => c.word);
+      const [mine, catalog] = await Promise.all([this.repo.findNotesForUser(user.id, words), this.repo.findCatalogNotes(words)]);
+      const items: CardDraft[] = unique
+        .filter((c) => !mine.has(wordKey(c.word)) && !catalog.has(wordKey(c.word)))
         .slice(0, count)
         .map((c) => aiDraft(c, c.word, null));
-      const previewId = await this.repo.insertPreview(user.id, "gen", { topic, items }, this.now);
-      return { kind: "preview", previewId, topic, items };
+      if (items.length >= MIN_DECK_CARDS) {
+        const previewId = await this.repo.insertPreview(user.id, "gen", { topic, items }, this.now);
+        return { kind: "preview", previewId, topic, items };
+      }
     } catch (e) {
       await refund(this.repo, user, "gen", this.now);
       if (e instanceof LlmUnavailable) return { kind: "failed" };
       throw e;
     }
+    await refund(this.repo, user, "gen", this.now);
+    return { kind: "failed" };
   }
 
   async confirmDeck(user: User, previewId: number): Promise<{ deckId: number; title: string; count: number }> {

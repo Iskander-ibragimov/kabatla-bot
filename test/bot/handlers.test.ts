@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { LlmClient } from "../../src/content/llm";
 import { ContentService } from "../../src/content/service";
+import { transcribe } from "../../src/content/transcribe";
 import { Repo } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
@@ -380,7 +381,7 @@ describe("bot handlers", () => {
   });
 
   it("/gen shows the deck with transcriptions and the AI note, and the button adds it", async () => {
-    const cards = ["сәяхәт", "юл", "билет"].map((w, i) => ({ input: w, lang: "tt", word: w, pos: "n", translation: `слово ${i}`, exampleTt: `Бу ${w}.`, exampleRu: `Это слово ${i}.` }));
+    const cards = ["сәяхәт", "юл", "билет", "вокзал", "чемодан"].map((w, i) => ({ input: w, lang: "tt", word: w, pos: "n", translation: `слово ${i}`, exampleTt: `Бу ${w}.`, exampleRu: `Это слово ${i}.` }));
     const f = (async () => json({ choices: [{ message: { content: JSON.stringify({ cards }) } }] })) as typeof fetch;
     const h = harness(env.DB, { now: T, fetch: f });
     await h.text("/start");
@@ -389,17 +390,19 @@ describe("bot handlers", () => {
     await repo.updateUser(u.id, { onboardingStep: null });
     await h.text("/gen в <дороге>");
     expect(h.lastText()).toBe([
-      ru.genTitle("в &lt;дороге&gt;", 3), "",
+      ru.genTitle("в &lt;дороге&gt;", 5), "",
       "• <b>сәяхәт</b> [сәйәхә́т] · <i>сущ.</i> — слово 0", "• <b>юл</b> [йул] · <i>сущ.</i> — слово 1", "• <b>билет</b> [биле́т] · <i>сущ.</i> — слово 2",
+      `• <b>вокзал</b> [${transcribe("вокзал")}] · <i>сущ.</i> — слово 3`, `• <b>чемодан</b> [${transcribe("чемодан")}] · <i>сущ.</i> — слово 4`,
       "", ru.genLeft(2), ru.aiNote,
     ].join("\n"));
     await h.press(callbacks(h.lastMarkup())[0]!, 300);
     expect(h.lastText()).toContain("✅ Колода");
     const decks = await repo.ownDecks(u.id);
-    expect(decks.map((d) => [d.kind, d.total])).toEqual([["ai", 3]]);
+    expect(decks.map((d) => [d.kind, d.total])).toEqual([["ai", 5]]);
     const { results } = await env.DB.prepare("SELECT word, transcription, example_src FROM notes WHERE deck_id = ? ORDER BY id").bind(decks[0]!.id).all();
     expect(results).toEqual([
       { word: "сәяхәт", transcription: "сәйәхә́т", example_src: "ai" }, { word: "юл", transcription: "йул", example_src: "ai" }, { word: "билет", transcription: "биле́т", example_src: "ai" },
+      { word: "вокзал", transcription: transcribe("вокзал"), example_src: "ai" }, { word: "чемодан", transcription: transcribe("чемодан"), example_src: "ai" },
     ]);
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs").first()).toEqual({ n: 0 });
   });

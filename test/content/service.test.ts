@@ -746,6 +746,38 @@ describe("content service: AI decks", () => {
     await expect(svc.confirmDeck(user, r.previewId)).rejects.toThrow();
   });
 
+  it("leaves out the words the catalog has and the words the learner already has, in two D1 calls", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 2 }); // open level 1: китап, вакыт
+    await seedLevels(env.DB, { 7: ["Сәяхәт!", "поезд"] }); // a level that is not open
+    await repo.insertNotes(await repo.customDeck(user.id, T), [note("чемодан")]);
+    const words = ["сәяхәт", "китап", "юл", "Чемодан", "билет", "вокзал", "поезд", "диңгез", "тау", "вакыт"];
+    const llm = llmReturning(words.map((w, i) => card(w, `слово ${i}`)));
+    const db = countingDb(env.DB);
+    const r = await new ContentService(new Repo(db), { llm: client(llm) }, T).generateDeck(user, "сәяхәт", 10);
+    if (r.kind !== "preview") throw new Error(r.kind);
+    // «сәяхәт» and «поезд» are words of level 7, «китап» and «вакыт» of the open level 1, «чемодан» is in «Мои слова».
+    expect(r.items.map((i) => i.word)).toEqual(["юл", "билет", "вокзал", "диңгез", "тау"]);
+    expect(db.calls).toBe(4); // the daily unit, the two lookups, the preview
+    const d = await service(repo, llm).confirmDeck(user, r.previewId);
+    expect(d.count).toBe(5);
+    // The reviewed card of level 7 is not shadowed by a card of the model: «сәяхәт» is still a new word of its level.
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM notes WHERE word_key IN ('сәяхәт', 'поезд', 'китап', 'вакыт', 'чемодан')").first<{ n: number }>())!.n).toBe(5);
+    expect((await fresh(repo, user)).gensCount).toBe(1);
+  });
+
+  it("fails and gives the daily unit back when fewer than 5 new words are left", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 2 }); // китап, вакыт
+    const words = ["китап", "вакыт", "юл", "билет", "вокзал", "тау"];
+    const r = await service(repo, llmReturning(words.map((w, i) => card(w, `слово ${i}`)))).generateDeck(user, "сәяхәт", 10);
+    expect(r).toEqual({ kind: "failed" });
+    expect((await fresh(repo, user)).gensCount).toBe(0);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM previews").first<{ n: number }>())!.n).toBe(0);
+    // Five are enough.
+    const ok = await service(repo, llmReturning([...words, "диңгез"].map((w, i) => card(w, `слово ${i}`)))).generateDeck(await fresh(repo, user), "сәяхәт", 10);
+    expect(ok.kind === "preview" && ok.items.map((i) => i.word)).toEqual(["юл", "билет", "вокзал", "тау", "диңгез"]);
+    expect((await fresh(repo, user)).gensCount).toBe(1);
+  });
+
   it("the two daily limits are counted apart", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
     for (let i = 0; i < 3; i++) expect(await consume(repo, await fresh(repo, user), "gen", T)).toBe(true);
