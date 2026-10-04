@@ -50,7 +50,9 @@ async function fullCatalog(numerals: Numerals): Promise<CatalogNote[]> {
   return results;
 }
 
-type Where = "start" | "middle" | "end";
+type Where = "start" | "middle" | "end" | "run";
+/** The level of the `run` learner: A2, 850 words. */
+const RUN_LEVEL = 2;
 type PosScope = "all" | "num";
 interface Case { where: Where; mode: NewMode; pos: PosScope; direction: DirectionSetting; startedIn?: NewMode; numerals?: Numerals; topicNo?: number }
 
@@ -77,6 +79,8 @@ async function insertCards(userId: number, rows: CardSeed[]) {
  * `start`: nothing is started. `middle`: the first 1 900 catalog words in the order of `startedIn` (the mode of the
  * case unless given: a learner who changed the mode in the middle of a level started them in another order) and five
  * own words are started. `end`: every catalog word is started but the last two of the scope, and five own words.
+ * `run`: one level (A2) is started but for its first and its last word in the order of the mode, and nothing else of
+ * the catalog — a long run of started words stands right behind the head of that level, as after a change of the mode.
  * Started means a card graded yesterday in every asked direction; twenty of them are due today. With «оба», of the
  * thirty words started last every third has its reverse card waiting in state 'new', hidden on an earlier day.
  * Returns what a read needs and the catalog words that are left, in the order of the mode.
@@ -90,7 +94,10 @@ async function learner(catalog: CatalogNote[], c: Case) {
   // The scope of a chosen topic: the topic of the case, or any themed topic when the case leaves the choice open.
   const inTopic = (n: CatalogNote) => c.mode !== "topic" || (c.topicNo == null ? n.topicNo >= 1 : n.topicNo === c.topicNo);
   const left = new Set(order.filter((n) => inPos(c)(n) && inTopic(n)).slice(-2).map((n) => n.id));
-  const started = c.where === "start" ? [] : c.where === "middle" ? mergeStreams([catalog], c.startedIn ?? c.mode).slice(0, 1900) : catalog.filter((n) => !left.has(n.id));
+  const started = c.where === "start" ? []
+    : c.where === "middle" ? mergeStreams([catalog], c.startedIn ?? c.mode).slice(0, 1900)
+      : c.where === "run" ? order.filter((n) => n.level === RUN_LEVEL).slice(1, -1)
+        : catalog.filter((n) => !left.has(n.id));
   const cards: CardSeed[] = [];
   const yesterday = gradedMem(now - DAY);
   started.forEach((n, i) => {
@@ -116,7 +123,9 @@ const given = (q: Queue, mode: NewMode) => [...new Set(mergeStreams(Object.value
 
 /**
  * `stored`: the plan's target for one read of the queue, whatever the read positions stored are worth: fresh, after
- * the walk of one level, or lagging. `first`: the spec's limit for the read that finds the positions.
+ * the walk of one level, or lagging. `first`: the spec's limit for the read that finds the positions after a change
+ * of the settings. The walk over a long run of started words behind a head (the `run` learner) belongs to that
+ * limit as well: each such word is walked over once, and the position stored then lies past it.
  */
 const BUDGET = { stored: 1500, first: 20_000 } as const;
 
@@ -127,7 +136,9 @@ const BUDGET = { stored: 1500, first: 20_000 } as const;
  * - `walk`: right after the word that is next was started, before the new position is stored — the level of that
  *   word is walked on to its next word, however far that is; the position this read finds is stored when the
  *   session would store it (`nextSpans` says `save`). For a learner at the end of the scope this goes on to the last
- *   word, and the largest of these reads is taken: the last one walks a level to its end;
+ *   word, and the largest of these reads is taken: the last one walks a level to its end. For the `run` learner the
+ *   word started is the head of the level with the run: the read walks over every started word behind it, once;
+ * - `after`: the read that follows the walk, with the position the walk found;
  * - `lagging`: with positions that lag as far as they may: a position is stored only when it moved by CURSOR_STEP,
  *   so in every level the words are started up to the last one that lies within CURSOR_STEP of the position.
  * Every read must give, as the first of the merged heads, the word that is next in the order of the mode.
@@ -160,17 +171,28 @@ async function reads(catalog: CatalogNote[], c: Case) {
   expect(stored.q.seen).toEqual(first.q.seen);
 
   let walk = 0;
-  const step = async () => {
-    await start(todo.slice(0, 1));
+  const step = async (head = todo[0]) => {
+    await start(head ? [head] : []);
     const r = await read(spans, version);
     walk = Math.max(walk, r.rows);
     const moved = nextSpans(spans, r.q.seen);
     if (moved.save) spans = moved.spans;
+    return r.q;
   };
-  await step();
+  if (c.where === "run") {
+    // The head of the level with the run is started: the stream walks over the run and gives the last word of the level.
+    const inLevel = todo.filter((n) => n.level === RUN_LEVEL);
+    expect(inLevel).toHaveLength(2);
+    const q = await step(inLevel[0]);
+    expect(q.streams[RUN_LEVEL]!.map((x) => x.noteId)).toEqual(l.w.directions.map(() => inLevel[1]!.id));
+    expect(spans[RUN_LEVEL]).toEqual({ from: ord(inLevel[1]!) - 1, to: null });
+  } else {
+    await step();
+  }
   // At the end of the scope the last words are started one by one: the read after the last word of a level walks
   // that level to its end and finds nothing.
   if (c.where === "end") while (todo.length) await step();
+  const after = await read(spans, version);
 
   const behind = ALL_LEVELS.flatMap((level) => {
     const s = spans[level];
@@ -180,12 +202,13 @@ async function reads(catalog: CatalogNote[], c: Case) {
   await start(behind);
   const lagging = await read(spans, version);
   expect(nextSpans(spans, lagging.q.seen).save).toBe(false);
-  return { first: first.rows, stored: stored.rows, walk, lagging: lagging.rows };
+  return { first: first.rows, stored: stored.rows, walk, after: after.rows, lagging: lagging.rows };
 }
 
+const WHERE = { start: "start", middle: "middle", end: "end", run: "a level started but for its first and last word" } as const;
 const NUMERALS = { even: "numerals only", rare: "numerals only and rare", sparse: "numerals only, three a level far apart" } as const;
 const title = (c: Case) =>
-  `${c.where}, ${c.mode}${c.topicNo === 0 ? " of the basic words" : ""}${c.startedIn ? ` after ${c.startedIn}` : ""}, ${c.pos === "all" ? "all parts of speech" : NUMERALS[c.numerals ?? "even"]}, ${c.direction}`;
+  `${WHERE[c.where]}, ${c.mode}${c.topicNo === 0 ? " of the basic words" : ""}${c.startedIn ? ` after ${c.startedIn}` : ""}, ${c.pos === "all" ? "all parts of speech" : NUMERALS[c.numerals ?? "even"]}, ${c.direction}`;
 
 describe("D1 rows read by repo.queue with the whole catalog (3 850 notes) and all five levels in the scope", () => {
   const cases: Case[] = [];
@@ -219,12 +242,15 @@ describe("D1 rows read by repo.queue with the whole catalog (3 850 notes) and al
   }
   cases.push({ where: "middle", mode: "topic", topicNo: 0, startedIn: "freq", pos: "all", direction: "both" });
   cases.push({ where: "middle", mode: "topic", topicNo: 0, pos: "num", direction: "both" });
+  // A level started in another order: all of it but the first and the last word of the guided order.
+  for (const direction of ["tt_ru", "both"] as const) cases.push({ where: "run", mode: "guided", pos: "all", direction });
   for (const c of cases) {
-    it(`${title(c)}: the first read, the reads with stored positions and the walk of one level stay within the budget`, async () => {
+    it(`${title(c)}: the first read, the reads with stored positions and the walk of one level stay within the budgets`, async () => {
       const r = await reads(await fullCatalog(c.numerals ?? "even"), c);
       expect(r.first).toBeLessThanOrEqual(BUDGET.first);
       expect(r.stored).toBeLessThanOrEqual(BUDGET.stored);
-      expect(r.walk).toBeLessThanOrEqual(BUDGET.stored);
+      expect(r.walk).toBeLessThanOrEqual(c.where === "run" ? BUDGET.first : BUDGET.stored);
+      expect(r.after).toBeLessThanOrEqual(BUDGET.stored);
       expect(r.lagging).toBeLessThanOrEqual(BUDGET.stored);
     });
   }

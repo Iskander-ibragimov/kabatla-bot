@@ -33,11 +33,11 @@ async function grade(repo: Repo, user: User, card: { id: number; noteId: number;
   return repo.batch(stmts);
 }
 
-/** The write of an undo as the review service makes it, with the counter statement after the card is restored. */
+/** The write of an undo as the review service makes it: the card is restored, the grade is marked undone, and the counter statement runs directly after that mark. */
 async function undo(repo: Repo, user: User, cardId: number) {
   const log = (await repo.lastReviewLog(user.id))!;
   expect(log.cardId).toBe(cardId);
-  return repo.batch([repo.updateCardStmt(log.cardId, log.stateBefore), repo.markUndoneStmt(log.id), repo.updateUserStmt(user.id, { streak: 0, lastStudyDay: null }), repo.unprogressStmt(user.id, log.cardId)]);
+  return repo.batch([repo.updateCardStmt(log.cardId, log.stateBefore), repo.markUndoneStmt(log.id), repo.unprogressStmt(user.id, log.cardId), repo.updateUserStmt(user.id, { streak: 0, lastStudyDay: null })]);
 }
 
 async function newCard(repo: Repo, user: User, noteId: number, direction: Direction = "tt_ru") {
@@ -149,13 +149,39 @@ describe("the counters of started words (user_progress)", () => {
     await undo(repo, user, card.id);
     expect(await counters(user.id)).toEqual([{ level: 0, topic_no: 0, started: 0 }, { level: 1, topic_no: 2, started: 1 }]);
     // A counter that is already 0 (a card started before the counters existed and not yet recounted) stays 0.
-    await repo.unprogressStmt(user.id, card.id).run();
+    await grade(repo, user, card, newMem(T));
+    await env.DB.prepare("UPDATE user_progress SET started = 0 WHERE user_id = ? AND level = 0").bind(user.id).run();
+    const again = await undo(repo, user, card.id);
+    expect(again.map((r) => r.meta.changes)).toEqual([1, 1, 1, 1]);
     expect(await counters(user.id)).toEqual([{ level: 0, topic_no: 0, started: 0 }, { level: 1, topic_no: 2, started: 1 }]);
-    // A card of another learner is not this learner's to take back.
+    // A card of another learner is not this learner's to take back, even with a grade of this learner just marked undone.
     const other = await seedLearner(env.DB, { now: T, tgId: 2 });
     const theirs = await newCard(repo, other.user, second!);
-    await repo.unprogressStmt(user.id, theirs.id).run();
+    const log = (await repo.lastReviewLog(user.id))!;
+    const res = await repo.batch([repo.markUndoneStmt(log.id), repo.unprogressStmt(user.id, theirs.id)]);
+    expect(res.map((r) => r.meta.changes)).toEqual([1, 0]);
     expect(await counters(user.id)).toEqual([{ level: 0, topic_no: 0, started: 0 }, { level: 1, topic_no: 2, started: 1 }]);
+  });
+
+  it("two presses of undo for one grade take the word back once: the second write finds the grade undone and leaves the counter", async () => {
+    const ids = await seedCatalog(env.DB, [{ level: 1, word: "бер", topic: 2 }, { level: 1, word: "ике", topic: 2 }]);
+    const { repo, user } = await seedLearner(env.DB, { now: T });
+    const one = await newCard(repo, user, ids[0]!);
+    const two = await newCard(repo, user, ids[1]!);
+    await grade(repo, user, one, newMem(T));
+    await grade(repo, user, two, newMem(T));
+    expect(await counters(user.id)).toEqual([{ level: 1, topic_no: 2, started: 2 }]);
+    // Both presses read the same last grade before either writes.
+    const log = (await repo.lastReviewLog(user.id))!;
+    expect(log.cardId).toBe(two.id);
+    const write = () => repo.batch([repo.updateCardStmt(log.cardId, log.stateBefore), repo.markUndoneStmt(log.id), repo.unprogressStmt(user.id, log.cardId)]);
+    expect((await write()).map((r) => r.meta.changes)).toEqual([1, 1, 1]);
+    expect(await counters(user.id)).toEqual([{ level: 1, topic_no: 2, started: 1 }]);
+    expect((await write()).map((r) => r.meta.changes)).toEqual([1, 0, 0]);
+    expect(await counters(user.id)).toEqual([{ level: 1, topic_no: 2, started: 1 }]);
+    // The word that is still started keeps its count; the grade before it is the one an undo now finds.
+    expect((await repo.getCard(user.id, one.id))!.mem.state).toBe("review");
+    expect((await repo.lastReviewLog(user.id))!.cardId).toBe(one.id);
   });
 });
 

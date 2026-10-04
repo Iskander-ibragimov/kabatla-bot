@@ -928,16 +928,19 @@ export class Repo {
     ).bind(userId, noteId, cardId, wasNew ? 1 : 0);
   }
   /**
-   * Takes a started word back, for the batch of an undo, after the statement that restores the card: 1 is taken from
-   * the counter of the pair of the card's note, never below 0, when no card of the note is outside state 'new' any
-   * more — the undone grade was the first of the word. Nothing changes when the word is still started.
+   * Takes a started word back, for the batch of an undo. It runs directly after `markUndoneStmt` and only when that
+   * one changed a row (SQLite changes()), so one grade is taken back once however many undo writes arrive for it; the
+   * statement that restores the card stands before both: `[updateCardStmt, markUndoneStmt, unprogressStmt, …]`.
+   * 1 is taken from the counter of the pair of the card's note, never below 0, when no card of the note is outside
+   * state 'new' any more — the undone grade was the first of the word. Nothing changes when the word is still started.
    */
   unprogressStmt(userId: number, cardId: number): D1PreparedStatement {
     return this.db.prepare(
       `UPDATE user_progress SET started = MAX(0, started - 1)
        WHERE user_id = ?1
          AND (level, topic_no) = (SELECT COALESCE(n.level, 0), COALESCE(n.topic_no, 0) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.id = ?2 AND c.user_id = ?1)
-         AND NOT EXISTS (SELECT 1 FROM cards c JOIN cards o ON o.user_id = c.user_id AND o.note_id = c.note_id WHERE c.id = ?2 AND o.state != 'new')`,
+         AND NOT EXISTS (SELECT 1 FROM cards c JOIN cards o ON o.user_id = c.user_id AND o.note_id = c.note_id WHERE c.id = ?2 AND o.state != 'new')
+         AND changes() = 1`,
     ).bind(userId, cardId);
   }
   /** How many words the user has started in every pair (level, topic); own words are the pair (0, 0). Pairs with nothing started may be absent. */
@@ -992,7 +995,11 @@ export class Repo {
       learnedNow: r.learned_now === 1, streakBefore: r.streak_before as number, lastStudyDayBefore: (r.last_study_day_before as string) ?? null, undone: false,
     };
   }
-  markUndoneStmt(logId: number): D1PreparedStatement { return this.db.prepare("UPDATE review_log SET undone = 1 WHERE id = ?").bind(logId); }
+  /**
+   * Marks a grade as undone, once: a row is changed only while the grade is not undone yet. Of two undo writes for
+   * the same grade the second changes nothing here, and the statement guarded by this one (`unprogressStmt`) does not run.
+   */
+  markUndoneStmt(logId: number): D1PreparedStatement { return this.db.prepare("UPDATE review_log SET undone = 1 WHERE id = ? AND undone = 0").bind(logId); }
 
   /* sessions; the column sessions.stale of the first schema is no longer read or written */
   async getSession(userId: number): Promise<Session | null> {
