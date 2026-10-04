@@ -1,0 +1,38 @@
+name: kfu-specs
+# Research only: downloads the KFU level specifications (belem.tatar) and publishes them with their text to the
+# orphan branch `kfu-specs`. Internal use only: the documents carry no licence; never copy them into master.
+on:
+  push:
+    branches: [kfu-specs-fetch]
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
+      - name: Download and extract
+        run: |
+          mkdir out && cd out
+          for l in A1 A2 B1 B2 C1; do
+            if curl -sSfL --retry 3 -m 120 -A "Mozilla/5.0" -o "s_$l.pdf" "https://belem.tatar/static/pdf/s_$l.pdf"; then
+              pdfinfo "s_$l.pdf" > "s_$l.info.txt" || true
+              pdftotext "s_$l.pdf" "s_$l.txt" || echo "pdftotext failed $l" >> errors.txt
+              pdftotext -layout "s_$l.pdf" "s_$l.layout.txt" || true
+            else
+              echo "download failed $l" >> errors.txt
+            fi
+          done
+          ls -la > listing.txt
+      - name: Publish out/ to the kfu-specs branch
+        if: always()
+        run: |
+          cd out
+          git init -q -b kfu-specs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "kfu specs: $(date -u +%Y-%m-%d)"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" kfu-specs
