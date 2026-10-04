@@ -186,6 +186,63 @@ describe("the counters of started words (user_progress)", () => {
   });
 });
 
+describe("a catalog word the learner owns a copy of counts as started (ruling T6a)", () => {
+  it("adding an own note with the key of a catalog word adds 1 to the pair of that word, once, in the D1 call that adds the note", async () => {
+    await seedCatalog(env.DB, [{ level: 1, word: "Бер!", topic: 2 }, { level: 1, word: "ике", topic: 2 }, { level: 3, word: "өч", topic: 7 }]);
+    const { repo, user } = await seedLearner(env.DB, { now: T });
+    const other = await seedLearner(env.DB, { now: T, tgId: 2 });
+    const deck = await repo.customDeck(user.id, T);
+    const db = countingDb(env.DB);
+    // «бер» is the catalog's «Бер!» by its key; «үзем» is in no level.
+    await new Repo(db).insertNotes(deck, [note("бер"), note("үзем")]);
+    expect(db.calls).toBe(1);
+    expect(await repo.progress(user.id)).toEqual([{ level: 1, topicNo: 2, started: 1 }]);
+    expect(await repo.progress(other.user.id)).toEqual([]);
+    // The same word again — the note that is there, and a second copy in an AI deck — is the same catalog word.
+    await repo.insertNotes(deck, [note("Бер")]);
+    const ai = await repo.insertDeck({ slug: null, kind: "ai", titleRu: "🤖 т", titleTt: "🤖 т", levelNo: null, coveragePct: null, ownerId: user.id });
+    await repo.insertNotes(ai, [note("бер"), note("өч"), note("Өч?")]);
+    // «өч» came twice in one call: once.
+    expect(await repo.progress(user.id)).toEqual([{ level: 1, topicNo: 2, started: 1 }, { level: 3, topicNo: 7, started: 1 }]);
+    // Another learner's copy is theirs.
+    await repo.insertNotes(await repo.customDeck(other.user.id, T), [note("ике")]);
+    expect(await repo.progress(other.user.id)).toEqual([{ level: 1, topicNo: 2, started: 1 }]);
+    expect(await repo.progress(user.id)).toEqual([{ level: 1, topicNo: 2, started: 1 }, { level: 3, topicNo: 7, started: 1 }]);
+  });
+
+  it("a copy of a catalog word that is started already adds nothing; a copy of one that was only shown adds 1", async () => {
+    const ids = await seedCatalog(env.DB, [{ level: 1, word: "бер", topic: 2 }, { level: 1, word: "ике", topic: 2 }]);
+    const { repo, user } = await seedLearner(env.DB, { now: T });
+    await grade(repo, user, await newCard(repo, user, ids[0]!), newMem(T));
+    await newCard(repo, user, ids[1]!);
+    expect(await counters(user.id)).toEqual([{ level: 1, topic_no: 2, started: 1 }]);
+    const deck = await repo.customDeck(user.id, T);
+    await repo.insertNotes(deck, [note("бер")]);
+    expect(await counters(user.id)).toEqual([{ level: 1, topic_no: 2, started: 1 }]);
+    await repo.insertNotes(deck, [note("ике")]);
+    expect(await counters(user.id)).toEqual([{ level: 1, topic_no: 2, started: 2 }]);
+  });
+
+  it("the first grade of a catalog card whose word the learner owns a copy of adds 0 and still changes one row; its undo takes 0", async () => {
+    const ids = await seedCatalog(env.DB, [{ level: 1, word: "бер", topic: 2 }, { level: 1, word: "ике", topic: 2 }]);
+    const { repo, user } = await seedLearner(env.DB, { now: T, patch: { direction: "both" } });
+    // The card was on the screen before the learner typed the word.
+    const card = await newCard(repo, user, ids[0]!);
+    const [own] = await repo.insertNotes(await repo.customDeck(user.id, T), [note("бер")]);
+    expect(await counters(user.id)).toEqual([{ level: 1, topic_no: 2, started: 1 }]);
+    const res = await grade(repo, user, card, newMem(T), { sibling: true });
+    expect(res.map((r) => r.meta.changes)).toEqual([1, 1, 1, 1, 1, 1]);
+    expect(await counters(user.id)).toEqual([{ level: 1, topic_no: 2, started: 1 }]);
+    const back = await undo(repo, user, card.id);
+    expect(back.map((r) => r.meta.changes)).toEqual([1, 1, 0, 1]);
+    expect(await counters(user.id)).toEqual([{ level: 1, topic_no: 2, started: 1 }]);
+    // The own note itself counts under (0, 0) by its own card, as any own word; a word without a copy counts by its card.
+    await grade(repo, user, await newCard(repo, user, own!), newMem(T + MIN));
+    await grade(repo, user, await newCard(repo, user, ids[1]!), newMem(T + 2 * MIN));
+    expect(await counters(user.id)).toEqual([{ level: 0, topic_no: 0, started: 1 }, { level: 1, topic_no: 2, started: 2 }]);
+  });
+});
+
 describe("what the catalog holds and what was done today", () => {
   it("catalogTotals lists the pairs of level and topic with their sizes", async () => {
     const repo = (await seedLearner(env.DB, { now: T })).repo;

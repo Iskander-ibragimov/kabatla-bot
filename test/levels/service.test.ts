@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { Repo, type User } from "../../src/db/repo";
 import { ALL_POS } from "../../src/levels/scale";
 import { addAllPos, coverageOf, hub, setMode, setTopic, toggleLevel, togglePos, topicLines, unstartedIn } from "../../src/levels/service";
+import { cumulative } from "../../src/stats/service";
 import { countingDb } from "../helpers/countingDb";
 import { gradedMem } from "../helpers/review";
 import { note, recountProgress, seedCatalog, seedLearner, seedTopics } from "../helpers/seed";
@@ -109,6 +110,29 @@ describe("hub: what /levels shows", () => {
       [["A1", true, 0, 0, null], ["A2", false, 0, 0, null], ["B1", false, 0, 0, null], ["B2", false, 0, 0, null], ["C1", false, 0, 0, null]]);
     expect(h.topic).toBeNull();
     expect(h.own).toEqual([]);
+  });
+});
+
+describe("a catalog word the learner owns a copy of (ruling T6a)", () => {
+  it("counts as started: the level reads «N из N», its coverage shows, and no topic is left to name", async () => {
+    const ids = await catalog();
+    const { repo, user } = await seedLearner(env.DB, { now: T });
+    const a1 = [...ids["1:2"]!, ...ids["1:1"]!, ...ids["1:0"]!];
+    // Every word of A1 but the last of topic 2 is started; that one the learner typed, so the session will never give it.
+    await start(repo, user.id, a1.filter((id) => id !== ids["1:2"]![39]));
+    const before = await hub(repo, user);
+    expect(before.levels[0]).toMatchObject({ started: 47, total: 48 });
+    expect(before.topic).toMatchObject({ no: 2, started: 39, total: 40 });
+    expect(coverageOf(before.levels)).toBeNull();
+
+    await repo.insertNotes(await repo.customDeck(user.id, T), [note("с1т2х40")]);
+    const h = await hub(repo, user);
+    expect(h.levels[0]).toEqual({ no: 1, code: "A1", checked: true, total: 48, size: 500, started: 48, coveragePct: 45 });
+    expect(h.topic).toBeNull();
+    expect(coverageOf(h.levels)).toBe(45);
+    expect(unstartedIn(h.levels)).toBe(0);
+    expect(await cumulative(repo, user, T)).toMatchObject({ levels: [1], fresh: 0, coveragePct: 45 });
+    expect((await topicLines(repo, user)).map((l) => [l.no, l.started, l.total])).toEqual([[0, 5, 5], [1, 3, 3], [2, 40, 40]]);
   });
 });
 

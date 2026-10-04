@@ -4,7 +4,9 @@ import { type Rename, type SeedLevel, type SeedTopic, catalogToSql } from "../sr
 import { Repo } from "../src/db/repo";
 import { LEVELS } from "../src/levels/scale";
 import { newMem } from "../src/srs/fsrs";
+import { ReviewService } from "../src/review/service";
 import { gradedMem } from "./helpers/review";
+import { note, seedLearner } from "./helpers/seed";
 import { applySeed } from "./helpers/seedSql";
 
 const T = Date.UTC(2026, 9, 3, 6);
@@ -163,14 +165,66 @@ describe("catalog seed", () => {
     const own = await repo.customDeck(userId, T);
     const [ownId] = await repo.insertNotes(own, [{ word: "юл", transcription: null, pos: "n", translation: "мой путь", exampleTt: "", exampleRu: "", exampleSrc: "" }]);
     await repo.insertCard(userId, ownId!, "tt_ru", gradedMem(T));
-    // The first load after that brings the counters up: one row per pair of the learner.
+    // The first load after that brings the counters up: one row per pair of the learner. The own word «юл» is a
+    // copy of the word of A1: that word counts as started with «китап», and the own note under (0, 0) by its card.
+    expect(await progress()).toEqual([[userId, 1, 8, 1]]);
     expect((await applySeed(env.DB, sql)).changes).toBe(3);
-    expect(await progress()).toEqual([[userId, 0, 0, 1], [userId, 1, 8, 1], [userId, 2, 12, 1]]);
+    expect(await progress()).toEqual([[userId, 0, 0, 1], [userId, 1, 8, 2], [userId, 2, 12, 1]]);
     const before = { notes: await notes(), cards: await cards() };
 
     for (let i = 0; i < 2; i++) expect(await applySeed(env.DB, sql)).toEqual({ statements: first.statements, changes: 0, rowsWritten: 0 });
     expect({ notes: await notes(), cards: await cards() }).toEqual(before);
     expect(await version()).toBe("1");
+  });
+
+  it("counts a catalog word the learner owns a copy of as started, as the grades, the undos and the added words left it: a load writes nothing; a counter that lacks the copy is put right (ruling T6a)", async () => {
+    const sql = seed([A1(), A2()]);
+    await applySeed(env.DB, sql);
+    const { repo, user } = await seedLearner(env.DB, { now: T, patch: { levels: 0b11, newMode: "freq" } });
+    const at = (min: number) => new ReviewService(repo, T + min * 60_000);
+    const me = async () => (await repo.getUser(user.id))!;
+    // «китап» and «су» are graded; «юл» is graded and the grade is taken back.
+    const shown: string[] = [];
+    let s = await at(0).nextScreen(user);
+    for (let i = 1; i <= 3; i++) {
+      if (s.kind !== "card") throw new Error(s.kind);
+      shown.push(s.view.word);
+      s = await at(i).grade(await me(), s.view.cardId, s.view.reps, 3);
+    }
+    expect(shown).toEqual(["китап", "су", "юл"]);
+    await at(4).undo(await me());
+    expect(await progress()).toEqual([[user.id, 1, 0, 1], [user.id, 1, 8, 1]]);
+    // The learner types four words: «авыл» of A2 (never shown), «су» (started), «юл» (its card waits, never graded) and a word of their own.
+    const own = await repo.insertNotes(await repo.customDeck(user.id, T), [note("авыл"), note("су"), note("юл"), note("үзем")]);
+    expect(await progress()).toEqual([[user.id, 1, 0, 1], [user.id, 1, 8, 2], [user.id, 2, 0, 1]]);
+    // The card of «юл» that was on the screen is graded after all, and that grade is taken back too; an own word is graded.
+    const waiting = (await repo.getCardByNote(user.id, (await noteOf("юл")).id as number, "tt_ru"))!;
+    expect(waiting.mem.state).toBe("new");
+    await at(5).grade(await me(), waiting.id, waiting.mem.reps, 3);
+    expect(await progress()).toEqual([[user.id, 1, 0, 1], [user.id, 1, 8, 2], [user.id, 2, 0, 1]]);
+    await at(6).undo(await me());
+    await at(7).grade(await me(), await repo.ensureNewCard(user.id, own[3]!, "tt_ru", newMem(T)), 0, 3);
+    const counted = [[user.id, 0, 0, 1], [user.id, 1, 0, 1], [user.id, 1, 8, 2], [user.id, 2, 0, 1]];
+    expect(await progress()).toEqual(counted);
+
+    expect(await applySeed(env.DB, sql)).toMatchObject({ changes: 0, rowsWritten: 0 });
+    expect(await progress()).toEqual(counted);
+
+    // The counters as they were kept before owned copies were counted: by the cards alone.
+    await env.DB.batch([
+      env.DB.prepare("UPDATE user_progress SET started = 1 WHERE user_id = ? AND level = 1 AND topic_no = 8").bind(user.id),
+      env.DB.prepare("DELETE FROM user_progress WHERE user_id = ? AND level = 2").bind(user.id),
+    ]);
+    expect((await applySeed(env.DB, sql)).changes).toBe(2);
+    expect(await progress()).toEqual(counted);
+    expect(await applySeed(env.DB, sql)).toMatchObject({ changes: 0, rowsWritten: 0 });
+    // Another learner's copy of a word does not start it for this one, and a word owned in two decks is started once.
+    const other = await seedLearner(env.DB, { now: T, tgId: 2 });
+    await other.repo.insertNotes(await other.repo.customDeck(other.user.id, T), [note("көн")]);
+    const ai = await repo.insertDeck({ slug: null, kind: "ai", titleRu: "🤖 т", titleTt: "🤖 т", levelNo: null, coveragePct: null, ownerId: user.id });
+    await repo.insertNotes(ai, [note("авыл")]);
+    expect(await applySeed(env.DB, sql)).toMatchObject({ changes: 0, rowsWritten: 0 });
+    expect(await progress()).toEqual([...counted, [other.user.id, 2, 12, 1]]);
   });
 
   it("writes only the note whose translation changed, and bumps the version", async () => {
@@ -305,7 +359,7 @@ describe("catalog seed", () => {
     expect(await progress()).toEqual([[userId, 1, 0, 1], [userId, 2, 0, 1]]);
   });
 
-  it("leaves a learner's own copy of a catalog word alone, and counts own words under the pair (0, 0)", async () => {
+  it("leaves a learner's own copy of a catalog word alone, counts own words under the pair (0, 0), and counts the catalog word of the copy as started", async () => {
     const repo = new Repo(env.DB);
     const userId = await repo.insertUser({ tgId: 1, chatId: 1, lang: "ru", now: T });
     const own = await repo.customDeck(userId, T);
@@ -320,7 +374,9 @@ describe("catalog seed", () => {
 
     expect(await all(`SELECT * FROM notes WHERE deck_id = ${own} ORDER BY id`)).toEqual(ownBefore);
     expect((await notes()).filter((n) => n.word === "юл").map((n) => [n.slug, n.level, n.translation])).toEqual([[null, null, "мой путь"], ["a1", 1, "юл-ru"]]);
-    expect(await progress()).toEqual([[userId, 0, 0, 2]]);
+    // «юл» came into the catalog after the learner typed it: the word of A1 (topic 8) is started by that copy from the load on.
+    expect(await progress()).toEqual([[userId, 0, 0, 2], [userId, 1, 8, 1]]);
+    expect(await load([A1()], { renames: [{ oldWord: "бакча", newWord: "бакчалар" }] })).toMatchObject({ changes: 0, rowsWritten: 0 });
     expect(await all("SELECT total FROM decks WHERE id = " + own)).toEqual([{ total: 2 }]);
   });
 

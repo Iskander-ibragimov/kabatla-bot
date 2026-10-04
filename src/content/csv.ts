@@ -57,11 +57,20 @@ const same = (table: string, columns: readonly string[]): string => columns.map(
 const assign = (columns: readonly string[]): string => columns.map((c) => `${c} = excluded.${c}`).join(", ");
 
 /** The pair a note is counted under: a catalog note under its level and topic, a learner's own note under (0, 0). */
-const PAIR = "COALESCE(n.level, 0), COALESCE(n.topic_no, 0)";
-/** Every (learner, pair) with the number of words started there: a word is started when one of its cards has left the state `new`. */
-const STARTED =
-  `SELECT c.user_id AS user_id, COALESCE(n.level, 0) AS level, COALESCE(n.topic_no, 0) AS topic_no, COUNT(DISTINCT c.note_id) AS started ` +
-  `FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.state <> 'new' GROUP BY c.user_id, ${PAIR}`;
+/**
+ * Every (learner, note) where the note is started for the learner, with the pair (level, topic) of the note — (0, 0)
+ * for a learner's own note. A note is started when one of the learner's cards of it has left the state `new`; a
+ * catalog note also when the learner owns a note with its word key, in «Мои слова» or an AI deck: the session never
+ * gives such a word, the own one stands for it. UNION leaves each note of a learner once. The same definition as
+ * the statements that keep the counters between two loads (db/queue.ts).
+ */
+const STARTED_NOTES =
+  `SELECT c.user_id AS user_id, COALESCE(n.level, 0) AS level, COALESCE(n.topic_no, 0) AS topic_no, n.id AS note_id ` +
+  `FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.state <> 'new' ` +
+  `UNION SELECT od.owner_id, n.level, COALESCE(n.topic_no, 0), n.id ` +
+  `FROM decks od JOIN notes o ON o.deck_id = od.id JOIN notes n ON n.word_key = o.word_key AND n.level IS NOT NULL WHERE od.owner_id IS NOT NULL`;
+/** Every (learner, pair) with the number of words started there. */
+const STARTED = `SELECT s.user_id AS user_id, s.level AS level, s.topic_no AS topic_no, COUNT(*) AS started FROM (${STARTED_NOTES}) s GROUP BY s.user_id, s.level, s.topic_no`;
 
 /**
  * SQL that loads the catalog — every level file, the topics, the renames — one statement per line, in this order:
@@ -89,8 +98,8 @@ const STARTED =
  * dropped (`audio_file_id`, `audio_tries`) so that the voicing job says the new word. It does nothing when the catalog
  * already has a note under the new key or has none under the old one, so it is applied once.
  * The recounts bring `catalog_groups` (cards per level and topic) and `user_progress` (words a learner started per
- * level and topic) in line with the notes after a move; a counter that is already right is not written, one with
- * nothing behind it is deleted.
+ * level and topic; a catalog word the learner owns a copy of is started, see `STARTED_NOTES`) in line with the notes
+ * after a move; a counter that is already right is not written, one with nothing behind it is deleted.
  * `hash` identifies the content of the catalog files (the caller computes it). The catalog version goes up by one
  * when the stored hash differs — a read position of a learner that was stored under another version counts as reset
  * (spec §10) — and then the hash is stored.
@@ -182,7 +191,7 @@ export function catalogToSql(levels: SeedLevel[], topics: SeedTopic[], renames: 
     `INSERT INTO user_progress (user_id, level, topic_no, started) SELECT g.user_id, g.level, g.topic_no, g.started FROM (${STARTED}) g ` +
       `WHERE NOT EXISTS (SELECT 1 FROM user_progress p WHERE p.user_id = g.user_id AND p.level = g.level AND p.topic_no = g.topic_no AND p.started = g.started) ` +
       `ON CONFLICT (user_id, level, topic_no) DO UPDATE SET started = excluded.started;`,
-    `DELETE FROM user_progress WHERE (user_id, level, topic_no) NOT IN (SELECT c.user_id, ${PAIR} FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.state <> 'new');`,
+    `DELETE FROM user_progress WHERE (user_id, level, topic_no) NOT IN (SELECT s.user_id, s.level, s.topic_no FROM (${STARTED_NOTES}) s);`,
     `UPDATE meta SET value = value + 1 WHERE key = 'catalog_version' AND (SELECT value FROM meta WHERE key = 'catalog_hash') IS NOT ${sqlText(hash)};`,
     `UPDATE meta SET value = ${sqlText(hash)} WHERE key = 'catalog_hash' AND value IS NOT ${sqlText(hash)};`,
   );

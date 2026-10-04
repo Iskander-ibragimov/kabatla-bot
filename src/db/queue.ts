@@ -1,7 +1,13 @@
 /**
  * The session queue: what a learner repeats and which new cards come next, read in one D1 call (`readQueue`), and the
- * statements that keep the counters of started words in step with the grades (`progressStmt`, `unprogressStmt`).
- * `Repo` gives them out as its methods `queue`, `progressStmt` and `unprogressStmt`.
+ * statements that keep the counters of started words in step with it: with the grades (`progressStmt`,
+ * `unprogressStmt`) and with the words a learner adds (`ownedCopiesStmt`). `Repo` gives out `queue`, `progressStmt`
+ * and `unprogressStmt` as its methods and runs `ownedCopiesStmt` in `insertNotes`.
+ *
+ * What the counters count (`user_progress`, by level and topic). A catalog word is started for a learner when one of
+ * its cards has left state 'new', or when the learner owns a note with its word key («Мои слова», an AI deck): the
+ * queue never gives such a word (`ownsWord`), so it is not a word left in its level. Each catalog word counts once.
+ * An own note counts under the pair (0, 0), by its cards alone. The catalog seed counts the same (content/csv.ts).
  */
 import { STREAM_LIMIT, type Spans } from "../levels/order";
 import { type NewMode, tseqOf } from "../levels/scale";
@@ -311,8 +317,9 @@ function streamStmt(db: D1Database, userId: number, directions: Direction[], s: 
 /**
  * The counter of started words, a statement for the batch of a grade, placed after a guarded statement: it runs only
  * when that one changed a row (SQLite changes()). It adds 1 to the user's counter of the pair (level, topic) of the
- * note — (0, 0) for an own word — when this grade is the first of the word: the card was new (`wasNew`) and the
- * note has no other card outside state 'new'. Otherwise it adds 0, and still writes: whenever the guard passes it
+ * note — (0, 0) for an own word — when this grade starts the word: the card was new (`wasNew`), the note has no
+ * other card outside state 'new', and it is not a catalog word the user owns a copy of — that one is counted since
+ * the copy was made (`ownedCopiesStmt`). Otherwise it adds 0, and still writes: whenever the guard passes it
  * changes exactly one row, so the guarded statement that follows it runs as well.
  */
 export function progressStmt(db: D1Database, userId: number, noteId: number, cardId: number, wasNew: boolean): D1PreparedStatement {
@@ -320,6 +327,7 @@ export function progressStmt(db: D1Database, userId: number, noteId: number, car
     `INSERT INTO user_progress (user_id, level, topic_no, started)
      SELECT ?1, COALESCE(n.level, 0), COALESCE(n.topic_no, 0),
             ?4 AND NOT EXISTS (SELECT 1 FROM cards o WHERE o.user_id = ?1 AND o.note_id = n.id AND o.id != ?3 AND o.state != 'new')
+               AND NOT (n.level IS NOT NULL AND ${ownsWord("?1")})
      FROM notes n WHERE n.id = ?2 AND changes() = 1
      ON CONFLICT (user_id, level, topic_no) DO UPDATE SET started = started + excluded.started`,
   ).bind(userId, noteId, cardId, wasNew ? 1 : 0);
@@ -329,7 +337,8 @@ export function progressStmt(db: D1Database, userId: number, noteId: number, car
  * one changed a row (SQLite changes()), so one grade is taken back once however many undo writes arrive for it; the
  * statement that restores the card stands before both: `[updateCardStmt, markUndoneStmt, unprogressStmt, …]`.
  * 1 is taken from the counter of the pair of the card's note, never below 0, when no card of the note is outside
- * state 'new' any more — the undone grade was the first of the word. Nothing changes when the word is still started.
+ * state 'new' any more — the undone grade was the first of the word. Nothing changes when the word is still started:
+ * by another card, or, a catalog word, by a copy the user owns.
  */
 export function unprogressStmt(db: D1Database, userId: number, cardId: number): D1PreparedStatement {
   return db.prepare(
@@ -337,6 +346,26 @@ export function unprogressStmt(db: D1Database, userId: number, cardId: number): 
      WHERE user_id = ?1
        AND (level, topic_no) = (SELECT COALESCE(n.level, 0), COALESCE(n.topic_no, 0) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.id = ?2 AND c.user_id = ?1)
        AND NOT EXISTS (SELECT 1 FROM cards c JOIN cards o ON o.user_id = c.user_id AND o.note_id = c.note_id WHERE c.id = ?2 AND o.state != 'new')
+       AND NOT EXISTS (SELECT 1 FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.id = ?2 AND n.level IS NOT NULL AND ${ownsWord("?1")})
        AND changes() = 1`,
   ).bind(userId, cardId);
+}
+/**
+ * For the batch that adds notes with the word keys `keys` to deck `deckId`, placed before their INSERTs. When the
+ * deck is a learner's own, every catalog word among the keys that is not yet started for that learner — no card of
+ * it outside state 'new', and no own note with its key before this batch — becomes started by the copy: 1 is added
+ * to the learner's counter of its pair. Nothing is written for a deck of the catalog, for a word the catalog does
+ * not have, or for a word that is counted already. The word key is unique in the catalog, so a key is one word.
+ */
+export function ownedCopiesStmt(db: D1Database, deckId: number, keys: string[]): D1PreparedStatement {
+  return db.prepare(
+    `INSERT INTO user_progress (user_id, level, topic_no, started)
+     SELECT dk.owner_id, n.level, COALESCE(n.topic_no, 0), COUNT(*)
+     FROM decks dk CROSS JOIN json_each(?2) k CROSS JOIN notes n INDEXED BY idx_notes_catalog_key ON n.word_key = k.value
+     WHERE dk.id = ?1 AND dk.owner_id IS NOT NULL AND n.level IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = dk.owner_id AND c.note_id = n.id AND c.state != 'new')
+       AND NOT ${ownsWord("dk.owner_id")}
+     GROUP BY n.level, COALESCE(n.topic_no, 0)
+     ON CONFLICT (user_id, level, topic_no) DO UPDATE SET started = started + excluded.started`,
+  ).bind(deckId, JSON.stringify([...new Set(keys)]));
 }

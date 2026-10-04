@@ -159,17 +159,23 @@ export async function seedTopics(db: D1Database): Promise<void> {
 }
 
 /**
- * Sets the user's counters of started words (`user_progress`) to what the user's cards say, as the catalog seed
- * counts them: the notes with a card outside state 'new', by level and topic; own words are the pair (0, 0).
- * For fixtures that write cards straight into the table; a grade keeps the counters itself.
+ * Sets the user's counters of started words (`user_progress`) to what the catalog seed counts for that user: a
+ * note with a card outside state 'new', and a catalog note whose word the user owns a note of, each note once, by
+ * level and topic; own words are the pair (0, 0). For fixtures that write cards straight into the table; a grade
+ * and an added own word keep the counters themselves.
  */
 export async function recountProgress(db: D1Database, userId: number): Promise<void> {
   await db.batch([
     db.prepare("DELETE FROM user_progress WHERE user_id = ?").bind(userId),
     db.prepare(
       `INSERT INTO user_progress (user_id, level, topic_no, started)
-       SELECT c.user_id, COALESCE(n.level, 0), COALESCE(n.topic_no, 0), COUNT(DISTINCT c.note_id) FROM cards c JOIN notes n ON n.id = c.note_id
-       WHERE c.user_id = ? AND c.state <> 'new' GROUP BY 2, 3`,
+       SELECT ?1, s.level, s.topic_no, COUNT(*) FROM (
+         SELECT COALESCE(n.level, 0) AS level, COALESCE(n.topic_no, 0) AS topic_no, n.id FROM cards c JOIN notes n ON n.id = c.note_id
+         WHERE c.user_id = ?1 AND c.state <> 'new'
+         UNION
+         SELECT n.level, COALESCE(n.topic_no, 0), n.id FROM decks d JOIN notes o ON o.deck_id = d.id JOIN notes n ON n.word_key = o.word_key AND n.level IS NOT NULL
+         WHERE d.owner_id = ?1) s
+       GROUP BY s.level, s.topic_no`,
     ).bind(userId),
   ]);
 }

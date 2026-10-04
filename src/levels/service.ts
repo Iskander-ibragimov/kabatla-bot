@@ -29,7 +29,10 @@ type Scope = Pick<User, "id" | "levels" | "posGroups" | "newMode" | "topicNo">;
 
 const sum = <T>(rows: T[], n: (row: T) => number): number => rows.reduce((total, row) => total + n(row), 0);
 
-/** The five levels of the scale. The started words of a level count whatever is checked, and whatever their part of speech. */
+/**
+ * The five levels of the scale. The started words of a level count whatever is checked, and whatever their part of
+ * speech; a word the learner owns a copy of is started, as it is for the queue (see the counters in db/queue.ts).
+ */
 function levelLinesOf(d: Pick<LevelsData, "decks" | "progress">, levels: number): LevelLine[] {
   return LEVELS.map((l) => {
     const deck = d.decks.find((x) => x.level === l.no);

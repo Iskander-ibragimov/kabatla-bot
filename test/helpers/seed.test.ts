@@ -113,10 +113,13 @@ describe("seedCatalog and the new columns", () => {
     expect(await new Repo(env.DB).topicsList()).toEqual(TOPICS);
   });
 
-  it("recountProgress sets the counters of started words to what the cards say: a word once, own words under (0, 0), a card never graded not at all", async () => {
-    const ids = await seedCatalog(env.DB, [{ level: 1, word: "бер", topic: 6 }, { level: 1, word: "ике", topic: 6 }, { level: 2, word: "су", topic: 8 }, { level: 2, word: "юл", topic: 10 }]);
+  it("recountProgress sets the counters of started words to what the cards and the own words say: a word once, own words under (0, 0), a card never graded not at all, a catalog word the learner owns a copy of as started", async () => {
+    const ids = await seedCatalog(env.DB, [
+      { level: 1, word: "бер", topic: 6 }, { level: 1, word: "ике", topic: 6 }, { level: 2, word: "су", topic: 8 }, { level: 2, word: "юл", topic: 10 }, { level: 3, word: "көн", topic: 5 },
+    ]);
     const { repo, user } = await seedLearner(env.DB, { now: T });
-    const [own] = await repo.insertNotes(await repo.customDeck(user.id, T), [note("үзем")]);
+    // «көн» and «бер» are words of the catalog too: «көн» is started by the copy alone, «бер» by its cards and the copy, once.
+    const [own] = await repo.insertNotes(await repo.customDeck(user.id, T), [note("үзем"), note("көн"), note("бер")]);
     await repo.batch([
       repo.insertCardStmt(user.id, ids[0]!, "tt_ru", gradedMem(T)), repo.insertCardStmt(user.id, ids[0]!, "ru_tt", gradedMem(T)),
       repo.insertCardStmt(user.id, ids[1]!, "tt_ru", gradedMem(T)), repo.insertCardStmt(user.id, ids[2]!, "ru_tt", gradedMem(T)),
@@ -125,7 +128,9 @@ describe("seedCatalog and the new columns", () => {
     // What stood there before is replaced, and another learner's counters are left alone.
     await env.DB.prepare("INSERT INTO user_progress (user_id, level, topic_no, started) VALUES (?1, 5, 5, 9), (?1 + 1, 1, 6, 4)").bind(user.id).run();
     await recountProgress(env.DB, user.id);
-    expect(await repo.progress(user.id)).toEqual([{ level: 0, topicNo: 0, started: 1 }, { level: 1, topicNo: 6, started: 2 }, { level: 2, topicNo: 8, started: 1 }]);
+    expect(await repo.progress(user.id)).toEqual([
+      { level: 0, topicNo: 0, started: 1 }, { level: 1, topicNo: 6, started: 2 }, { level: 2, topicNo: 8, started: 1 }, { level: 3, topicNo: 5, started: 1 },
+    ]);
     expect(await repo.progress(user.id + 1)).toEqual([{ level: 1, topicNo: 6, started: 4 }]);
   });
 });

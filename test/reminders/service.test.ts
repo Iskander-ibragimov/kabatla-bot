@@ -185,6 +185,39 @@ describe("reminders tick", () => {
       expect(await pushes()).toEqual([ru.pushDaily(4, 2)]);
     });
 
+    it("a catalog word the learner owns a copy of is no new word of its level: with the rest started and the copy started, no push (ruling T6a)", async () => {
+      const ids = await catalog(3);
+      const { repo, user } = await learner();
+      await start(repo, user.id, ids.slice(0, 2));
+      const [own] = await repo.insertNotes(await repo.customDeck(user.id, local(30, 8, 0)), [note("сүз1х3")]);
+      // The copy itself is a new word, once: not once as an own word and once more as a word of A1.
+      expect(await pushes()).toEqual([ru.pushDaily(1, 1)]);
+      await start(repo, user.id, [own!]);
+      await dueAgain(repo, user.id);
+      expect(await pushes(local(30, 9, 2))).toEqual([]);
+    });
+
+    it("own words started Tatar → Russian are new words again, once each, for a learner who went over to Russian → Tatar or to both directions", async () => {
+      const ids = await catalog(2);
+      const { repo, user } = await learner();
+      const own = await repo.insertNotes(await repo.customDeck(user.id, local(30, 8, 0)), [note("рәхмәт"), note("зинһар"), note("әйе")]);
+      await start(repo, user.id, [...ids, ...own]);
+      expect(await pushes()).toEqual([]);
+      await dueAgain(repo, user.id, { direction: "ru_tt" });
+      expect(await pushes(local(30, 9, 2))).toEqual([ru.pushDaily(3, 1)]);
+      await dueAgain(repo, user.id, { direction: "both" });
+      expect(await pushes(local(30, 9, 3))).toEqual([ru.pushDaily(3, 1)]);
+      // The reverse card of one of them exists and waits: it is counted as that card, the other two as words never shown that way.
+      await repo.insertCard(user.id, own[0]!, "ru_tt", newMem(local(29, 12, 0)), "2026-09-29");
+      await dueAgain(repo, user.id);
+      expect(await pushes(local(30, 9, 4))).toEqual([ru.pushDaily(3, 1)]);
+      // Once every own word is started both ways nothing is new.
+      await repo.updateCardStmt((await repo.getCardByNote(user.id, own[0]!, "ru_tt"))!.id, gradedMem(local(29, 12, 0))).run();
+      for (const id of own.slice(1)) await repo.insertCard(user.id, id, "ru_tt", gradedMem(local(29, 12, 0)));
+      await dueAgain(repo, user.id);
+      expect(await pushes(local(30, 9, 5))).toEqual([]);
+    });
+
     it("takes no notice of the checked parts of speech nor of the chosen topic: the number may say more than the session gives (spec §6)", async () => {
       await seedCatalog(env.DB, [{ level: 1, word: "китап", topic: 2 }, { level: 1, word: "су", topic: 8 }, { level: 1, word: "юл", topic: 10 }]);
       // Numerals only, and the topic «Еда»: of the three nouns the session would give none.

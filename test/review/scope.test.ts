@@ -146,6 +146,20 @@ describe("new words by the learner's settings", () => {
     expect(words(await study(repo, user.id, now + 120_000, easy))).toEqual(["а1", "а3", "а5"]);
   });
 
+  it("with a narrowed set of parts of speech, words the learner owns a copy of are not words left in the level: the bot does not offer every part of speech for them (ruling T6a)", async () => {
+    const pos = ["num", "n", "v"];
+    await seedCatalog(env.DB, [...rows(1, "а", 3, (i) => ({ pos: pos[i]! })), ...rows(2, "б", 1)]);
+    const { repo, user } = await seedLearner(env.DB, { now, patch: { newMode: "freq", posGroups: 1 << 5 } });
+    // The noun and the verb of A1 are the learner's own words too; they are started there.
+    const deck = await repo.customDeck(user.id, now);
+    await repo.insertNotes(deck, [note("а2"), note("а3")]);
+    expect(words(await study(repo, user.id, now, easy))).toEqual(["а2", "а3", "а1"]);
+    // Nothing of A1 is left for any part of speech: the next thing to offer is A2, not the other parts of speech.
+    expect(emptyOf(await screenAt(repo, user.id, now + 60_000))).toEqual({ kind: "addLevel", level: 2 });
+    await repo.updateUser(user.id, { posGroups: 255 });
+    expect(emptyOf(await screenAt(repo, user.id, now + 120_000))).toEqual({ kind: "addLevel", level: 2 });
+  });
+
   it("every checked level is in work: the bot offers the lowest unchecked level that has cards, and says so when nothing is left anywhere", async () => {
     await seedCatalog(env.DB, [...rows(1, "а", 2), ...rows(2, "б", 1)]);
     const { repo, user } = await seedLearner(env.DB, { now });

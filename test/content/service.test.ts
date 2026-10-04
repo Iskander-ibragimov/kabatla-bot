@@ -7,13 +7,14 @@ import { ContentService, MAX_TYPED, typedTranslation } from "../../src/content/s
 import { transcribe } from "../../src/content/transcribe";
 import { consume, remaining } from "../../src/entitlements/service";
 import { ru } from "../../src/i18n/ru";
+import { hub, topicLines } from "../../src/levels/service";
 import { ReviewService } from "../../src/review/service";
 import { tt } from "../../src/i18n/tt";
 import { dayWindow } from "../../src/users/service";
 import { countingDb } from "../helpers/countingDb";
 import { type FakeFetch, card, client, fakeFetch, failingLlm, llmReturning, provider, userPrompt } from "../helpers/llm";
 import { gradedMem } from "../helpers/review";
-import { note, seedLevels, seedUser } from "../helpers/seed";
+import { note, seedCatalog, seedLearner, seedLevels, seedTopics, seedUser } from "../helpers/seed";
 
 const T = Date.UTC(2026, 8, 30, 6, 0);
 const STRESS = "́";
@@ -800,6 +801,82 @@ describe("content service: AI decks", () => {
     for (let i = 0; i < 2; i++) expect(await consume(repo, await fresh(repo, user), "gen", T)).toBe(true);
     expect((await service(repo, llmReturning([{ ...card("сүз"), translation: "junk" }])).generateDeck(await fresh(repo, user), "космос", 10)).kind).toBe("failed");
     expect((await fresh(repo, user)).gensCount).toBe(2);
+  });
+});
+
+describe("content service: an own copy of a catalog word counts that word as started (ruling T6a)", () => {
+  /** A1: «бәхет» and «шатлык» in topic 3, «китап» in topic 11; A2: «авыл» in topic 0. A learner with A1 checked who has «Мои слова» already. */
+  async function learnerWithCatalog() {
+    await seedTopics(env.DB);
+    const ids = await seedCatalog(env.DB, [
+      { level: 1, word: "бәхет", topic: 3 }, { level: 1, word: "шатлык", topic: 3 }, { level: 1, word: "китап", topic: 11 }, { level: 2, word: "авыл" },
+    ]);
+    const { repo, user } = await seedLearner(env.DB, { now: T });
+    await repo.customDeck(user.id, T);
+    return { repo, user, ids };
+  }
+  const a1 = async (repo: Repo, user: User) => { const [line] = (await hub(repo, user)).levels; return [line!.started, line!.total]; };
+
+  it("adding a catalog word of A1 moves the counter of its topic and the line of the level by 1, in the D1 calls the add made before", async () => {
+    const { repo, user } = await learnerWithCatalog();
+    expect(await a1(repo, user)).toEqual([0, 3]);
+    const r = await preview(service(repo, failingLlm()), user, "бәхет");
+    const db = countingDb(env.DB);
+    await service(new Repo(db), failingLlm()).confirmAdd(user, r.previewId);
+    // The preview, the deck, the notes with the counter, the preview deleted.
+    expect(db.calls).toBe(4);
+    expect(await repo.progress(user.id)).toEqual([{ level: 1, topicNo: 3, started: 1 }]);
+    expect(await a1(repo, user)).toEqual([1, 3]);
+    expect((await topicLines(repo, user)).map((l) => [l.no, l.started, l.total])).toEqual([[3, 1, 2], [11, 0, 1]]);
+    // A word of a level that is not checked counts in its own level.
+    const other = await preview(service(repo, failingLlm()), user, "авыл");
+    await service(repo, failingLlm()).confirmAdd(user, other.previewId);
+    expect(await repo.progress(user.id)).toEqual([{ level: 1, topicNo: 3, started: 1 }, { level: 2, topicNo: 0, started: 1 }]);
+    expect(await a1(repo, user)).toEqual([1, 3]);
+  });
+
+  it("adding a word the catalog does not have moves nothing", async () => {
+    const { repo, user } = await learnerWithCatalog();
+    const svc = service(repo, llmReturning([card("күбәләк", "бабочка")]));
+    const r = await preview(svc, user, "күбәләк");
+    await svc.confirmAdd(user, r.previewId);
+    expect((await ownNotes(user.id)).map((n) => n.word)).toEqual(["күбәләк"]);
+    expect(await repo.progress(user.id)).toEqual([]);
+    expect(await a1(repo, user)).toEqual([0, 3]);
+  });
+
+  it("adding a catalog word whose card is started already moves nothing", async () => {
+    const { repo, user } = await learnerWithCatalog();
+    const first = await new ReviewService(repo, T).nextScreen(user);
+    if (first.kind !== "card") throw new Error(first.kind);
+    await new ReviewService(repo, T).grade(user, first.view.cardId, 0, 3);
+    expect(await repo.progress(user.id)).toEqual([{ level: 1, topicNo: 3, started: 1 }]);
+    const svc = service(repo, failingLlm());
+    const r = await preview(svc, await fresh(repo, user), first.view.word);
+    await svc.confirmAdd(user, r.previewId);
+    expect((await ownNotes(user.id)).map((n) => n.word)).toEqual([first.view.word]);
+    expect(await repo.progress(user.id)).toEqual([{ level: 1, topicNo: 3, started: 1 }]);
+    expect(await a1(repo, user)).toEqual([1, 3]);
+  });
+
+  it("the other ways an own note is made count the same: a translation typed by hand, an AI deck", async () => {
+    const { repo, user } = await learnerWithCatalog();
+    // The bot waits for a translation of «китап»; the catalog has that word by the time it is typed.
+    await repo.updateUser(user.id, { pendingEdit: JSON.stringify({ manual: { word: "китап", url: null, at: T } }) });
+    const db = countingDb(env.DB);
+    expect(await service(new Repo(db), failingLlm()).completeManual(await fresh(repo, user), "книга")).toBe("китап");
+    expect(db.calls).toBe(3); // the deck, the note with the counter, the end of the wait
+    expect(await repo.progress(user.id)).toEqual([{ level: 1, topicNo: 11, started: 1 }]);
+    // An AI deck whose preview holds a catalog word (the catalog got it after the preview was made) and the word just added.
+    const drafts = ["шатлык", "китап", "сәяхәт"].map((word) => ({
+      word, transcription: null, pos: "n", translation: `${word}-ru`, exampleTt: "", exampleRu: "", exampleSrc: "ai", audioFileId: null, sourceUrl: null, ai: true,
+    }));
+    const previewId = await repo.insertPreview(user.id, "gen", { topic: "т", items: drafts }, T);
+    db.calls = 0;
+    await service(new Repo(db), failingLlm()).confirmDeck(user, previewId);
+    expect(db.calls).toBe(5); // the preview, the deck, the notes with the counter, the subscription, the preview deleted
+    expect(await repo.progress(user.id)).toEqual([{ level: 1, topicNo: 3, started: 1 }, { level: 1, topicNo: 11, started: 1 }]);
+    expect(await a1(repo, user)).toEqual([2, 3]);
   });
 });
 

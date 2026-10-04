@@ -1,6 +1,6 @@
 import { ALL_LEVELS, ALL_POS, LEVELS, type NewMode, levelBit, tseqOf } from "../levels/scale";
 import type { Mem } from "../srs/fsrs";
-import { type DayWindow, type NewScope, type Queue, progressStmt, readQueue, unprogressStmt } from "./queue";
+import { type DayWindow, type NewScope, type Queue, ownedCopiesStmt, progressStmt, readQueue, unprogressStmt } from "./queue";
 import { type Asked, CARD_COLS, type CardRow, type Direction, NEW_CARDS, type NoteFields, askedDirection, noteCols, noteFields, rowToCard } from "./sql";
 
 export type { CatalogNew, DayWindow, NewScope, Queue, StreamSeen } from "./queue";
@@ -339,10 +339,12 @@ export class Repo {
    * the simple `tseq = topic × TSEQ_BASE + seq`. The real guided order of a level, where basic and themed words
    * alternate, is defined by the catalog seed (content/csv.ts `catalogToSql`, levels/order.ts `guidedTseq`), not by
    * this method: it writes the learners' own words and the fixtures of tests.
+   * In the same D1 call, before the notes are written, a catalog word that becomes a copy in a learner's own deck is
+   * counted as started for that learner (`ownedCopiesStmt` in db/queue.ts).
    */
   async insertNotes(deckId: number, rows: NoteInput[]): Promise<number[]> {
     if (!rows.length) return [];
-    const stmts = rows.map((n) =>
+    const notes = rows.map((n) =>
       this.db.prepare(
         `INSERT INTO notes (deck_id, word, word_key, transcription, pos, translation, example_tt, example_ru, example_src, audio_file_id, source_url,
                             level, topic_no, seq, tseq)
@@ -352,9 +354,12 @@ export class Repo {
         n.level ?? null, n.topicNo ?? null, n.seq ?? null,
         n.level != null && n.topicNo != null && n.seq != null ? tseqOf(n.topicNo, n.seq) : null),
     );
-    stmts.push(this.db.prepare("UPDATE decks SET total = (SELECT COUNT(*) FROM notes WHERE deck_id = ?1) WHERE id = ?1").bind(deckId));
-    const res = await this.db.batch<{ id: number }>(stmts);
-    return res.slice(0, rows.length).map((r) => r.results[0]!.id);
+    const res = await this.db.batch<{ id: number }>([
+      ownedCopiesStmt(this.db, deckId, rows.map((n) => wordKey(n.word))),
+      ...notes,
+      this.db.prepare("UPDATE decks SET total = (SELECT COUNT(*) FROM notes WHERE deck_id = ?1) WHERE id = ?1").bind(deckId),
+    ]);
+    return res.slice(1, rows.length + 1).map((r) => r.results[0]!.id);
   }
   subscribeStmt(userId: number, deckId: number, now: number): D1PreparedStatement {
     return this.db.prepare("INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) VALUES (?, ?, ?)").bind(userId, deckId, now);
