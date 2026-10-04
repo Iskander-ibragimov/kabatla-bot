@@ -1,5 +1,5 @@
 import { PREVIEW_TTL_MS } from "../content/service";
-import { type Asked, type Lang, type Repo, deckHasNew, newInTail } from "../db/repo";
+import { type Asked, type Lang, type Repo, deckHasUnshown, newCardRows, unshownInTail } from "../db/repo";
 import { dict } from "../i18n";
 import { claim, completeMany, fail } from "../jobs/queue";
 import { LAST_LEVEL } from "../review/service";
@@ -23,16 +23,19 @@ const MOST_NEW = 20;
 /** The directions the user learns. A reminder comes before the day's first review, so no card counts as buried today. */
 const ASKED: Asked = { today: "''", tt: "(u.direction != 'ru_tt')", ru: "(u.direction != 'tt_ru')" };
 /**
- * The new words waiting in the open decks, counted up to MOST_NEW per deck: in the own decks that have any, and in
- * the lowest open level that has any — the decks the session takes new words from (`Repo.candidateCards`).
+ * The new cards waiting in the open decks, an estimate that is zero only when there are none. Two kinds are counted:
+ * the cards that exist in state 'new' — with both directions, the other card of a word that was graded, which waits
+ * for its day, in whatever deck it is — up to MOST_NEW; and the words that were never shown in a direction the user
+ * asks for, up to MOST_NEW per deck, in the own decks that have any and in the lowest open level that has any — the
+ * decks the session takes new words from (`Repo.candidateCards`).
  * Every open deck is asked through its last note, and only the decks that are counted through their last MOST_NEW
  * notes, so the cost does not grow with the size of the open levels. The window function keeps the list of decks
  * from being built twice.
  */
-const NEW_IN_OPEN_DECKS = `(SELECT COALESCE(SUM(${newInTail("u.id", "t", ASKED, MOST_NEW)}), 0) FROM (
+const NEW_IN_OPEN_DECKS = `(${newCardRows("u.id", ASKED, MOST_NEW)} + (SELECT COALESCE(SUM(${unshownInTail("u.id", "t", ASKED, MOST_NEW)}), 0) FROM (
     SELECT dk.id, dk.level_no, MIN(dk.level_no) OVER () AS lowest FROM user_decks ud JOIN decks dk ON dk.id = ud.deck_id
-    WHERE ud.user_id = u.id AND ${deckHasNew("u.id", "dk", ASKED)}) t
-  WHERE t.level_no IS NULL OR t.level_no = t.lowest)`;
+    WHERE ud.user_id = u.id AND ${deckHasUnshown("u.id", "dk", ASKED)}) t
+  WHERE t.level_no IS NULL OR t.level_no = t.lowest))`;
 /**
  * The words of the level a tap on «Учить» would open: levels open lazily, in the review session, once the open ones have
  * no unseen words. That level is the user's current one when its deck was never opened, else the next level the catalog

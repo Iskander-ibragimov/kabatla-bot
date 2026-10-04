@@ -141,6 +141,28 @@ describe("reminders tick", () => {
       expect(await pushes()).toEqual([ru.pushDaily(2, 1)]);
     });
 
+    it("is reminded about a reverse card that was hidden on the day the rest of its level was asked: the session will give it", async () => {
+      // «оба». Three words, all asked Tatar → Russian. Two were asked Russian → Tatar too, the last word of the level
+      // among them; the reverse card of «китап» was hidden that day and still waits. Nothing is above level 1.
+      const { repo, user, noteIds } = await finishedLevel1(3, { direction: "both" });
+      for (const id of noteIds.slice(1)) await repo.insertCard(user.id, id, "ru_tt", gradedMem(local(29, 12, 0)));
+      await repo.insertCard(user.id, noteIds[0]!, "ru_tt", newMem(local(28, 12, 0)), "2026-09-28");
+      expect(await pushes()).toEqual([ru.pushDaily(1, 1)]);
+      // A learner who asks for Tatar → Russian only has nothing new: the card that waits is of the other direction.
+      await repo.updateUser(user.id, { direction: "tt_ru", nextDailyAt: local(30, 9, 0) });
+      expect(await pushes(local(30, 9, 2))).toEqual([]);
+    });
+
+    it("with both directions counts the reverse cards that wait and the words never shown, each once", async () => {
+      // Four words: two were asked Tatar → Russian yesterday, so their reverse cards wait; two were never shown.
+      const { repo, user, noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 4, patch: { direction: "both" } });
+      for (const id of noteIds.slice(0, 2)) {
+        await repo.insertCard(user.id, id, "tt_ru", gradedMem(local(29, 12, 0)));
+        await repo.insertCard(user.id, id, "ru_tt", newMem(local(29, 12, 0)), "2026-09-29");
+      }
+      expect(await pushes()).toEqual([ru.pushDaily(4, 2)]);
+    });
+
     it("counts own words and the lowest open level that has new words, not the levels above it", async () => {
       const { repo, user } = await seedUser(env.DB, { now: local(30, 8, 0), words: 3, patch: { newPerDay: 20 } });
       const l2 = (await seedLevels(env.DB, { 2: Array.from({ length: 9 }, (_, i) => `сүз${i + 1}`) }))[2]!;

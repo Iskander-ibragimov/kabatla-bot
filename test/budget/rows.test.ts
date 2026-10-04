@@ -6,6 +6,7 @@ import { harness } from "../helpers/botHarness";
 import { fakeTelegram } from "../helpers/fakeTelegram";
 import { readingDb } from "../helpers/readingDb";
 import { gradedMem } from "../helpers/review";
+import { newMem } from "../../src/srs/fsrs";
 import { note, seedLevels } from "../helpers/seed";
 
 const MIN = 60_000;
@@ -15,38 +16,78 @@ const now = Date.UTC(2026, 8, 30, 7, 0);
 const LEVELS = 20;
 const PER_LEVEL = 100;
 
-/** The whole catalog: 20 levels of 100 words. Returns the note ids by level number, in the order of the level. */
-async function fullCatalog(): Promise<Record<number, number[]>> {
+/** The catalog, 100 words a level: all 20 levels, or the levels `from`…`to`. Returns the note ids by level number, in the order of the level. */
+async function fullCatalog(from = 1, to = LEVELS): Promise<Record<number, number[]>> {
   const levels: Record<number, string[]> = {};
-  for (let l = 1; l <= LEVELS; l++) levels[l] = Array.from({ length: PER_LEVEL }, (_, i) => `сүз${l}х${i + 1}`);
-  const decks = await seedLevels(env.DB, levels, Object.fromEntries(Array.from({ length: LEVELS }, (_, i) => [i + 1, 30 + 3 * i])));
+  for (let l = from; l <= to; l++) levels[l] = Array.from({ length: PER_LEVEL }, (_, i) => `сүз${l}х${i + 1}`);
+  const decks = await seedLevels(env.DB, levels, Object.fromEntries(Object.keys(levels).map((l) => [l, 27 + 3 * Number(l)])));
   const ids: Record<number, number[]> = {};
-  for (let l = 1; l <= LEVELS; l++) {
+  for (let l = from; l <= to; l++) {
     ids[l] = (await env.DB.prepare("SELECT id FROM notes WHERE deck_id = ? ORDER BY id").bind(decks[l]).all<{ id: number }>()).results.map((r) => r.id);
   }
-  expect(Object.values(ids).flat()).toHaveLength(LEVELS * PER_LEVEL);
+  expect(Object.values(ids).flat()).toHaveLength((to - from + 1) * PER_LEVEL);
   return ids;
 }
 
-const directionsOf = (d: DirectionSetting): Direction[] => (d === "both" ? ["tt_ru", "ru_tt"] : [d]);
+const BOTH: Direction[] = ["tt_ru", "ru_tt"];
+const directionsOf = (d: DirectionSetting): Direction[] => (d === "both" ? BOTH : [d]);
+
+const ownWords = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => note(`үзем${from + i}`));
+
+type Progress = "in order" | "none" | "scattered" | "stragglers" | "switched";
 
 /**
  * A learner (Telegram id 42) on level `level` with the levels 1…`level` open, ten own words, and a reminder that is due.
  * `progress: "in order"` — the levels below are finished, half of the current one and half of the own words are started,
  * twenty of the started cards are due today. `progress: "none"` — the levels were opened and nothing was started.
+ *
+ * Three more shapes, for the direction «оба» only, where the cards of a level are not started in the order of its words:
+ * `"scattered"` — as "in order", but in the current level and in the own deck every third started word and the ten
+ * started last were asked Tatar → Russian only: their reverse cards wait in state 'new', hidden on an earlier day.
+ * `"stragglers"` — every word of every open level and every own word is started in both directions, the last word of
+ * each deck included, except twelve words spread over the lowest, the middle and the current level and one own word,
+ * whose reverse cards were hidden on the days the rest was asked and still wait in state 'new'.
+ * `"switched"` — the learner learned everything Tatar → Russian and then switched to «оба»: every word of every open
+ * level is started in one direction, and the repetitions since the switch have created the reverse card of every
+ * word in state 'new'; the own words are finished in both directions.
  */
-async function learner(catalog: Record<number, number[]>, level: number, direction: DirectionSetting, progress: "in order" | "none") {
+async function learner(catalog: Record<number, number[]>, level: number, direction: DirectionSetting, progress: Progress, existing?: { id: number; own: number[] }) {
   const repo = new Repo(env.DB);
-  const id = await repo.insertUser({ tgId: 42, chatId: 42, lang: "ru", now });
+  const id = existing?.id ?? (await repo.insertUser({ tgId: 42, chatId: 42, lang: "ru", now }));
   await repo.updateUser(id, { onboardingStep: null, tzOffsetMin: 180, level, direction, newPerDay: 20, nextDailyAt: now - 60 * MIN, nextEveningAt: now + 9 * 60 * MIN });
   await env.DB.prepare("INSERT INTO user_decks (user_id, deck_id, added_at) SELECT ?1, id, ?2 FROM decks WHERE level_no <= ?3").bind(id, now, level).run();
-  const own = await repo.insertNotes(await repo.customDeck(id, now), Array.from({ length: 10 }, (_, i) => note(`үзем${i + 1}`)));
+  const own = existing?.own ?? (await repo.insertNotes(await repo.customDeck(id, now), ownWords(1, 10)));
+  const below = Array.from({ length: level - 1 }, (_, i) => catalog[i + 1]!).flat();
+  const current = catalog[level]!;
+  /** A card that was graded yesterday; the first twenty of a shape are due today. */
+  const graded = (noteId: number, d: Direction, due: boolean) => repo.insertCardStmt(id, noteId, d, { ...gradedMem(now - DAY), ...(due ? { due: now - MIN } : {}) });
+  /** The reverse card of a word whose other card was graded on an earlier day: never graded itself, hidden on that day. */
+  const waiting = (noteId: number) => repo.insertCardStmt(id, noteId, "ru_tt", newMem(now - 2 * DAY), "2026-09-28");
+  const cards: D1PreparedStatement[] = [];
   if (progress === "in order") {
-    const started = [...own.slice(0, 5), ...Array.from({ length: level - 1 }, (_, i) => catalog[i + 1]!).flat(), ...catalog[level]!.slice(0, PER_LEVEL / 2)];
-    const cards = started.flatMap((noteId, i) => directionsOf(direction).map((d) =>
-      repo.insertCardStmt(id, noteId, d, { ...gradedMem(now - DAY), ...(i < 20 ? { due: now - MIN } : {}) })));
-    for (let i = 0; i < cards.length; i += 100) await repo.batch(cards.slice(i, i + 100));
+    [...own.slice(0, 5), ...below, ...current.slice(0, PER_LEVEL / 2)].forEach((noteId, i) => directionsOf(direction).forEach((d) => cards.push(graded(noteId, d, i < 20))));
+  } else if (progress === "scattered") {
+    below.forEach((noteId, i) => BOTH.forEach((d) => cards.push(graded(noteId, d, i < 20))));
+    const half = (deck: number[], started: number) => deck.slice(0, started).forEach((noteId, i) => {
+      cards.push(graded(noteId, "tt_ru", false));
+      cards.push(i % 3 === 0 || i >= started - 10 ? waiting(noteId) : graded(noteId, "ru_tt", false));
+    });
+    half(own, 5);
+    half(current, PER_LEVEL / 2);
+  } else if (progress === "stragglers") {
+    // Twelve level words in all: the same places in each of the (up to three) levels, more places when the levels are fewer.
+    const levels = [...new Set([1, Math.ceil(level / 2), level])];
+    const places = [7, 31, 58, 90, 3, 19, 44, 45, 46, 61, 77, 83].slice(0, 12 / levels.length);
+    const left = new Set([own[3]!, ...levels.flatMap((l) => places.map((i) => catalog[l]![i]!))]);
+    [...own, ...below, ...current].forEach((noteId, i) => {
+      cards.push(graded(noteId, "tt_ru", i < 20));
+      cards.push(left.has(noteId) ? waiting(noteId) : graded(noteId, "ru_tt", false));
+    });
+  } else if (progress === "switched") {
+    own.forEach((noteId) => BOTH.forEach((d) => cards.push(graded(noteId, d, false))));
+    [...below, ...current].forEach((noteId, i) => { cards.push(graded(noteId, "tt_ru", i < 20)); cards.push(waiting(noteId)); });
   }
+  for (let i = 0; i < cards.length; i += 100) await repo.batch(cards.slice(i, i + 100));
   return id;
 }
 
@@ -88,22 +129,50 @@ async function reminderRows(): Promise<number> {
 const BUDGET = { grade: 2500, levels: 2500, reminderPerUser: 300 } as const;
 
 describe("D1 rows read with the whole catalog loaded (ruling F4)", () => {
+  /** The six grades, /levels and the reminder of the learner in the database: each within its budget. */
+  async function expectWithinBudget() {
+    const reminder = await reminderRows();
+    const levels = await levelsRows();
+    const grades = await gradeRows(6);
+    expect(Math.max(...grades)).toBeLessThanOrEqual(BUDGET.grade);
+    expect(levels).toBeLessThanOrEqual(BUDGET.levels);
+    expect(reminder).toBeLessThanOrEqual(BUDGET.reminderPerUser);
+  }
+  const shapes: [DirectionSetting, Progress][] = [
+    ["tt_ru", "in order"], ["tt_ru", "none"], ["both", "in order"], ["both", "none"],
+    ["both", "scattered"], ["both", "stragglers"], ["both", "switched"],
+  ];
   for (const level of [1, 5, 20]) {
-    for (const direction of ["tt_ru", "both"] as const) {
-      for (const progress of ["in order", "none"] as const) {
-        it(`level ${level}, direction ${direction}, progress ${progress}: a grade, /levels and the reminder stay within the budget`, async () => {
-          const catalog = await fullCatalog();
-          await learner(catalog, level, direction, progress);
-          const reminder = await reminderRows();
-          const levels = await levelsRows();
-          const grades = await gradeRows(6);
-          expect(Math.max(...grades)).toBeLessThanOrEqual(BUDGET.grade);
-          expect(levels).toBeLessThanOrEqual(BUDGET.levels);
-          expect(reminder).toBeLessThanOrEqual(BUDGET.reminderPerUser);
-        });
-      }
+    for (const [direction, progress] of shapes) {
+      it(`level ${level}, direction ${direction}, progress ${progress}: a grade, /levels and the reminder stay within the budget`, async () => {
+        const catalog = await fullCatalog();
+        const id = await learner(catalog, level, direction, progress);
+        await expectWithinBudget();
+        if (progress !== "stragglers") return;
+        // The budget is met by giving the cards that wait, not by passing them over: new cards were graded, and they
+        // can only be those thirteen — no word of the open levels is untouched, and no further level was opened.
+        const asked = await env.DB.prepare("SELECT COUNT(*) AS n FROM review_log WHERE user_id = ? AND was_new = 1").bind(id).first<{ n: number }>();
+        expect(asked!.n).toBeGreaterThanOrEqual(2);
+        expect((await env.DB.prepare("SELECT level FROM users WHERE id = ?").bind(id).first<{ level: number }>())!.level).toBe(level);
+      });
     }
   }
+
+  it("level 20, direction both, progress switched, own words typed before and after the upper levels were published: the same budget", async () => {
+    // The ids of the own words enclose the notes of the levels 11…20, with a thousand cards in state 'new' among them:
+    // the queue must not read those cards to learn that the own deck, finished in both directions, has nothing new.
+    const lower = await fullCatalog(1, 10);
+    const repo = new Repo(env.DB);
+    const id = await repo.insertUser({ tgId: 42, chatId: 42, lang: "ru", now });
+    const deck = await repo.customDeck(id, now);
+    const early = await repo.insertNotes(deck, ownWords(1, 5));
+    const upper = await fullCatalog(11, 20);
+    const late = await repo.insertNotes(deck, ownWords(6, 10));
+    expect(Math.min(...upper[11]!)).toBeGreaterThan(Math.max(...early));
+    expect(Math.min(...late)).toBeGreaterThan(Math.max(...upper[20]!));
+    await learner({ ...lower, ...upper }, 20, "both", "switched", { id, own: [...early, ...late] });
+    await expectWithinBudget();
+  });
 });
 
 describe("D1 rows read by a tick with nobody due", () => {

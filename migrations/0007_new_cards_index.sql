@@ -1,0 +1,14 @@
+-- One index for the session queue with the direction «оба» (both directions per word). Nothing but the index is
+-- created: no row of any table changes.
+--
+-- idx_cards_user_new: the cards of one user that were never graded (state 'new'), by note. A partial index: it holds
+-- only those cards, so it stays small (a card leaves it with its first grade) and a repetition never writes to it.
+--
+-- Why. A grade of one card of a word hides the word's other card until tomorrow, so with «оба» the cards of a level
+-- are not started in the order of its words: a hidden card is passed over and later words are given. Such a card
+-- always exists as a row in state 'new' (the grade that hides it creates it). The queue (`Repo.candidateCards`) and
+-- the daily reminder (src/reminders/service.ts) find these cards here instead of reading every note of every open deck:
+--   … FROM cards f INDEXED BY idx_cards_user_new
+--     WHERE f.user_id = ? AND f.state = 'new' AND f.note_id BETWEEN <first note of the deck> AND <last note of the deck>
+-- and `… WHERE f.user_id = ? AND f.note_id = ? AND f.direction = ? AND f.state = 'new'` for one card.
+CREATE INDEX IF NOT EXISTS idx_cards_user_new ON cards(user_id, note_id, direction) WHERE state = 'new';
