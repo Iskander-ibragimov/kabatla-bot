@@ -120,3 +120,20 @@ describe("D1 rows read by a tick with nobody due", () => {
     expect(await env.DB.prepare("SELECT (SELECT COUNT(*) FROM previews) AS p, (SELECT COUNT(*) FROM jobs) AS j").first()).toEqual({ p: 300, j: 300 });
   });
 });
+
+describe("D1 rows read by an undo", () => {
+  it("finds the last grade without reading the history: the newest row that is not undone, by time and then by id", async () => {
+    const repo = new Repo(env.DB);
+    const id = await repo.insertUser({ tgId: 42, chatId: 42, lang: "ru", now });
+    const log = (cardId: number, reviewedAt: number, undone = 0) => env.DB.prepare(
+      "INSERT INTO review_log (card_id, user_id, rating, state_before, interval_before_days, interval_after_ms, reviewed_at, undone) VALUES (?, ?, 3, ?, 0, 0, ?, ?)",
+    ).bind(cardId, id, JSON.stringify(gradedMem(now)), reviewedAt, undone);
+    const history = Array.from({ length: 300 }, (_, i) => log(i + 1, now - (300 - i) * MIN));
+    for (let i = 0; i < 300; i += 100) await env.DB.batch(history.slice(i, i + 100));
+    // Two grades in the same millisecond, then one that was undone already.
+    await env.DB.batch([log(901, now), log(902, now), log(903, now + 1, 1)]);
+    const db = readingDb(env.DB);
+    expect((await new Repo(db).lastReviewLog(id))!.cardId).toBe(902);
+    expect(db.rowsRead).toBeLessThanOrEqual(10);
+  });
+});

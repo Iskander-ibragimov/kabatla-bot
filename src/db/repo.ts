@@ -627,8 +627,9 @@ export class Repo {
     ).bind(l.cardId, l.userId, l.rating, JSON.stringify(l.stateBefore), l.intervalBeforeDays, l.intervalAfterMs, l.reviewedAt,
       l.wasNew ? 1 : 0, l.learnedNow ? 1 : 0, l.streakBefore, l.lastStudyDayBefore);
   }
+  /** The last grade of the user that was not undone. Read backwards through idx_log_user_time, so it stops at the first such row instead of reading the history. */
   async lastReviewLog(userId: number): Promise<ReviewLogRow | null> {
-    const r = await this.db.prepare("SELECT * FROM review_log WHERE user_id = ? AND undone = 0 ORDER BY id DESC LIMIT 1").bind(userId).first<Record<string, unknown>>();
+    const r = await this.db.prepare("SELECT * FROM review_log WHERE user_id = ? AND undone = 0 ORDER BY reviewed_at DESC, id DESC LIMIT 1").bind(userId).first<Record<string, unknown>>();
     if (!r) return null;
     return {
       id: r.id as number, cardId: r.card_id as number, userId: r.user_id as number, rating: r.rating as number,
