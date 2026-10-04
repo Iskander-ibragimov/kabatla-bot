@@ -21,6 +21,18 @@ describe("audio", () => {
     expect((await repo.getSession(user.id))!.lastVoiceMessageId).toBe(101);
   });
 
+  it("does not play a note the user cannot see: another learner's own word", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const other = await seedUser(env.DB, { now: T, words: 1, tgId: 2 });
+    const [secret] = await repo.insertNotes(await repo.customDeck(other.user.id, T), [{ word: "серсүз", transcription: null, pos: "", translation: "тайна", exampleTt: "", exampleRu: "", audioFileId: "SECRET" }]);
+    const tg = fakeTelegram();
+    expect(await playVoice(repo, tg, user, secret!)).toBe(false);
+    expect(tg.calls).toHaveLength(0);
+    // Its owner hears it.
+    expect(await playVoice(repo, tg, other.user, secret!)).toBe(true);
+    expect(tg.of("sendVoice").map((c) => [c.payload.chat_id, c.payload.voice])).toEqual([[2, "SECRET"]]);
+  });
+
   it("voice button without audio does nothing", async () => {
     const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
     const tg = fakeTelegram();

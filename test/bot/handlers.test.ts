@@ -211,6 +211,44 @@ describe("bot handlers", () => {
     expect((await repo.getSession(u.id))!.lastVoiceMessageId).toBeNull();
   });
 
+  describe("🔊", () => {
+    const setAudio = (noteId: number, fileId: string) => env.DB.prepare("UPDATE notes SET audio_file_id = ? WHERE id = ?").bind(fileId, noteId).run();
+    const answers = (h: ReturnType<typeof harness>) => h.tg.of("answerCallbackQuery").map((c) => c.payload.text);
+
+    it("sends the voice of a word the learner can see", async () => {
+      const { h, repo, cardMsg } = await startSession();
+      const id = (await env.DB.prepare("SELECT id FROM notes WHERE word = 'китап'").first<{ id: number }>())!.id;
+      await setAudio(id, "VOICE-KITAP");
+      await h.press(`v:${id}`, cardMsg);
+      expect(h.tg.of("sendVoice").map((c) => [c.payload.chat_id, c.payload.voice])).toEqual([[42, "VOICE-KITAP"]]);
+      expect(answers(h)).toEqual([undefined]);
+      void repo;
+    });
+
+    it("does not play another learner's own word, a word of a level that is not open, or a note that does not exist: the tap is answered like a stale button", async () => {
+      const { h, repo, cardMsg } = await startSession();
+      const other = await repo.insertUser({ tgId: 77, chatId: 77, lang: "ru", now: T });
+      const [secret] = await repo.insertNotes(await repo.customDeck(other, T), [{ word: "серсүз", transcription: null, pos: "", translation: "тайна", exampleTt: "", exampleRu: "", audioFileId: "VOICE-SECRET" }]);
+      const closed = (await env.DB.prepare("SELECT id FROM notes WHERE word = 'авыл'").first<{ id: number }>())!.id; // level 2, not open
+      await setAudio(closed, "VOICE-AVYL");
+      await h.press(`v:${secret}`, cardMsg);
+      await h.press(`v:${closed}`, cardMsg);
+      await h.press("v:999999", cardMsg);
+      expect(h.tg.of("sendVoice")).toEqual([]);
+      expect(answers(h)).toEqual([ru.staleButton, ru.staleButton, ru.staleButton]);
+      expect(JSON.stringify(h.tg.calls)).not.toContain("VOICE-SECRET");
+      expect((await repo.getSession((await repo.getUserByTg(42))!.id))!.lastVoiceMessageId).toBeNull();
+    });
+
+    it("a word without a voice is answered the same way", async () => {
+      const { h, cardMsg } = await startSession();
+      const id = (await env.DB.prepare("SELECT id FROM notes WHERE word = 'китап'").first<{ id: number }>())!.id;
+      await h.press(`v:${id}`, cardMsg);
+      expect(h.tg.of("sendVoice")).toEqual([]);
+      expect(answers(h)).toEqual([ru.staleButton]);
+    });
+  });
+
   it("a note stored with fields longer than a message is still sent as a card, also under the line about a new level", async () => {
     await seedUser(env.DB, { now: T, level: 1, words: 1, tgId: 42 });
     await seedLevels(env.DB, { 2: ["авыл"] }, { 1: 31 });

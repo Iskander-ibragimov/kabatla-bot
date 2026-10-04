@@ -1,7 +1,7 @@
 import { Bot, type Context, GrammyError } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
 import { isAdmin, adminStatsText } from "../admin/service";
-import { playVoice } from "../content/audio";
+import { playVoice, sendVoice } from "../content/audio";
 import { LlmClient } from "../content/llm";
 import { ContentService, MAX_TYPED, typedTranslation } from "../content/service";
 import type { Repo, User } from "../db/repo";
@@ -162,7 +162,13 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     // The report is already stored; an unreachable admin must not turn into an error for the user.
     await ctx.api.sendMessage(config.adminTgId, text, HTML).catch((e) => console.error("report notification failed", e));
   });
-  c.callbackQuery(/^v:(\d+)$/, async (ctx) => { await toast(ctx); await playVoice(repo, tg, ctx.user, Number(ctx.match[1])); });
+  c.callbackQuery(/^v:(\d+)$/, async (ctx) => {
+    // The same rule as for ⚑: the id comes from the button, so the note is read as this user may see it.
+    const note = await repo.visibleNote(ctx.user.id, Number(ctx.match[1]));
+    if (!note?.audioFileId) return toast(ctx, dict(ctx.user.lang).staleButton);
+    await toast(ctx);
+    await sendVoice(repo, tg, ctx.user, note.audioFileId);
+  });
 
   /* levels */
   const levels = async (ctx: Ctx) => renderLevels(await levelsView(repo, ctx.user), ctx.user.lang);
