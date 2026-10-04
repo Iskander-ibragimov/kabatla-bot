@@ -39,11 +39,6 @@ export async function fail(db: D1Database, id: number, error: string, now: numbe
   ).bind(error.slice(0, 500), now, MAX_ATTEMPTS, id).run();
 }
 
-/** Re-run later without counting as a failure (e.g. Telegram 429). */
-export async function reschedule(db: D1Database, id: number, runAt: number): Promise<void> {
-  await db.prepare("UPDATE jobs SET run_at = ?, locked_at = NULL WHERE id = ?").bind(runAt, id).run();
-}
-
 export async function completeMany(db: D1Database, ids: number[], now: number): Promise<void> {
   if (!ids.length) return;
   await db.prepare("UPDATE jobs SET done_at = ?, locked_at = NULL WHERE id IN (SELECT value FROM json_each(?))").bind(now, JSON.stringify(ids)).run();

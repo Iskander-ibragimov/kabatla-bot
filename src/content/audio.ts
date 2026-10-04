@@ -10,7 +10,7 @@ export async function sendVoice(repo: Repo, tg: TgApi, user: User, fileId: strin
   const msg = await tg.call<TgMessage>("sendVoice", { chat_id: user.chatId, voice: fileId, disable_notification: true });
   await repo.saveSession({
     userId: user.id, chatId: user.chatId, messageId: session?.messageId ?? null, cardId: session?.cardId ?? null,
-    stale: session?.stale ?? false, lastVoiceMessageId: msg.message_id,
+    lastVoiceMessageId: msg.message_id,
   });
 }
 

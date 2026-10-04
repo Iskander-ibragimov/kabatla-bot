@@ -9,9 +9,8 @@ const T = Date.UTC(2026, 8, 30, 6);
 describe("audio", () => {
   it("voice button sends by file id and deletes the previous voice", async () => {
     const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 2 });
-    await repo.setNoteAudio(noteIds[0]!, "FILE0");
-    await repo.setNoteAudio(noteIds[1]!, "FILE1");
-    await repo.saveSession({ userId: user.id, chatId: 1, messageId: 50, cardId: null, stale: false, lastVoiceMessageId: null });
+    await env.DB.batch(["FILE0", "FILE1"].map((file, i) => env.DB.prepare("UPDATE notes SET audio_file_id = ? WHERE id = ?").bind(file, noteIds[i])));
+    await repo.saveSession({ userId: user.id, chatId: 1, messageId: 50, cardId: null, lastVoiceMessageId: null });
     const tg = fakeTelegram();
     const first = await playVoice(repo, tg, user, noteIds[0]!);
     expect(first).toBe(true);

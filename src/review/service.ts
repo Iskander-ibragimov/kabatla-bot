@@ -67,7 +67,7 @@ export class ReviewService {
   async nextScreen(user: User, feedback: Feedback | null = null): Promise<Screen> {
     const w = dayWindow(user.tzOffsetMin, this.now);
     const opts = { ...w, directions: directionsOf(user) };
-    let c = await this.repo.candidateCards(user.id, this.now, opts);
+    let c = await this.repo.candidateCards(user.id, opts);
     let levelUp: LevelUp | null = null;
     // The open decks have no unseen words and today's limit is not spent: a level is opened in the same D1 call that
     // re-reads the queue. The first read already tells whether there is a level to open, so the second call is made
@@ -76,12 +76,12 @@ export class ReviewService {
       if (c.currentLevelClosed) {
         // The deck of the current level exists but was never opened (the learner finished onboarding before it was
         // published): that deck is opened, the level stays, and nothing is announced — no level was finished.
-        c = await this.repo.candidateCards(user.id, this.now, opts, [this.repo.openCurrentLevelStmt(user.id, this.now)]);
+        c = await this.repo.candidateCards(user.id, opts, [this.repo.openCurrentLevelStmt(user.id, this.now)]);
       } else if (c.nextLevelExists) {
         // The next level the catalog has is opened. Only the call whose UPDATE moved users.level gets the new level back
         // and announces it (double taps, stale `user`).
         const from = user.level;
-        const reread = await this.repo.candidateCards(user.id, this.now, opts, this.repo.openLevelStmts(user.id, from, LAST_LEVEL, this.now));
+        const reread = await this.repo.candidateCards(user.id, opts, this.repo.openLevelStmts(user.id, from, LAST_LEVEL, this.now));
         const [moved, , finished] = reread.pre;
         const opened = moved!.results[0]?.level as number | undefined;
         const deck = finished!.results[0] as { coverage_pct: number | null; total: number } | undefined;
@@ -159,7 +159,7 @@ export class ReviewService {
     const intervals = {} as Record<Rating, string>;
     for (const g of [1, 2, 3, 4] as Rating[]) intervals[g] = formatInterval(pv[g] - this.now, user.lang);
     const w = dayWindow(user.tzOffsetMin, this.now);
-    const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user) });
+    const c = await this.repo.candidateCards(user.id, { ...w, directions: directionsOf(user) });
     const newLeft = newLeftOf(user, c.counts);
     return { kind: "card", view: toView(card), intervals, feedback: null, canUndo: false, levelUp: null,
       counts: { n: Math.min(newLeft, c.counts.newAvailable), l: c.counts.learning, r: c.counts.review } };

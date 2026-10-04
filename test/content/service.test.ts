@@ -59,7 +59,7 @@ describe("content service: own words", () => {
       exampleSrc: "ai", audioFileId: null, sourceUrl: "https://example.com/a", ai: true,
     }]);
     expect(await svc.confirmAdd(user, r.previewId)).toEqual({ words: ["рәхмәт"] });
-    const hit = await repo.findNoteForUser(user.id, "Рәхмәт");
+    const hit = (await repo.findNotesForUser(user.id, ["Рәхмәт"])).get("рәхмәт");
     expect(hit).toMatchObject({
       transcription: transcribe("рәхмәт"), exampleTt: "Бу рәхмәт.", exampleSrc: "ai", sourceUrl: "https://example.com/a", audioFileId: null,
       deckTitleRu: "Мои слова", deckTitleTt: "Минем сүзләр",
@@ -202,7 +202,7 @@ describe("content service: own words", () => {
     await svc.confirmAdd(user, r.previewId);
     expect((await ownNotes(user.id)).map((n) => n.word)).toEqual(["Хәлләр ничек?"]);
     await repo.subscribe(user.id, (await repo.getDeckBySlug("l05"))!.id, T);
-    const c = await repo.candidateCards(user.id, T, { ...dayWindow(180, T), directions: ["tt_ru"] });
+    const c = await repo.candidateCards(user.id, { ...dayWindow(180, T), directions: ["tt_ru"] });
     expect(c.newNotes.filter((n) => n.word === "Хәлләр ничек?")).toHaveLength(1);
   });
 
@@ -229,7 +229,7 @@ describe("content service: own words", () => {
     const r = await preview(svc, user, "бәхет");
     await svc.confirmAdd(user, r.previewId);
     await repo.subscribe(user.id, l5, T);
-    const c = await repo.candidateCards(user.id, T, { ...dayWindow(180, T), directions: ["tt_ru"] });
+    const c = await repo.candidateCards(user.id, { ...dayWindow(180, T), directions: ["tt_ru"] });
     expect(c.newNotes.filter((n) => n.word === "бәхет").length).toBe(1);
     // The own copy comes first; then the lowest level that has new words, which is level 1.
     expect(c.newNotes.map((n) => n.word)).toEqual(["бәхет", "китап"]);
@@ -237,7 +237,7 @@ describe("content service: own words", () => {
     // Once level 1 is done, level 5 gives only its other word.
     const kitap = c.newNotes.find((n) => n.word === "китап")!;
     await repo.insertCard(user.id, kitap.noteId, "tt_ru", gradedMem(T));
-    const next = await repo.candidateCards(user.id, T, { ...dayWindow(180, T), directions: ["tt_ru"] });
+    const next = await repo.candidateCards(user.id, { ...dayWindow(180, T), directions: ["tt_ru"] });
     expect(next.newNotes.map((n) => n.word)).toEqual(["бәхет", "шатлык"]);
     expect(next.counts.newAvailable).toBe(2);
     // Typed again, it is a word the user already learns: the own copy, which is the one that is shown, gets the link.
@@ -736,12 +736,12 @@ describe("content service: AI decks", () => {
     const d = await svc.confirmDeck(user, r.previewId);
     expect(d.count).toBe(12);
     expect(await repo.userDeckIds(user.id)).toContain(d.deckId);
-    expect(await repo.getDeck(d.deckId)).toMatchObject({ kind: "ai", titleRu: "🤖 собеседование в IT", titleTt: "🤖 собеседование в IT", levelNo: null, coveragePct: null, total: 12 });
+    expect((await repo.ownDecks(user.id)).find((deck) => deck.id === d.deckId)).toMatchObject({ kind: "ai", titleRu: "🤖 собеседование в IT", titleTt: "🤖 собеседование в IT", levelNo: null, coveragePct: null, total: 12 });
     const { results } = await env.DB.prepare("SELECT word, transcription, example_src, audio_file_id FROM notes WHERE deck_id = ? ORDER BY id").bind(d.deckId).all<Record<string, string | null>>();
     expect(results).toHaveLength(12);
     expect(results[0]).toEqual({ word: "сүза", transcription: "сүза́", example_src: "ai", audio_file_id: null });
     for (const n of results) expect(n).toEqual({ word: n.word, transcription: transcribe(n.word!), example_src: "ai", audio_file_id: null });
-    expect(await repo.findNoteForUser(user.id, "сүзг")).toMatchObject({ translation: "слово 3", exampleTt: "Бу сүзг." });
+    expect((await repo.findNotesForUser(user.id, ["сүзг"])).get("сүзг")).toMatchObject({ translation: "слово 3", exampleTt: "Бу сүзг." });
     expect(await jobsCount()).toBe(0);
     await expect(svc.confirmDeck(user, r.previewId)).rejects.toThrow();
   });

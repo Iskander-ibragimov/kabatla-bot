@@ -19,7 +19,7 @@ describe("admin", () => {
 
   it("warns the admin once when D1 writes pass 80%", async () => {
     const repo = new Repo(env.DB);
-    await repo.bumpUsageStmt("2026-09-30", 1000, 81_000).run();
+    await env.DB.prepare("INSERT INTO usage_daily (day, reviews, rows_written_est, requests) VALUES ('2026-09-30', 1000, 81000, 0)").run();
     const tg = fakeTelegram();
     expect(await checkUsage(repo, tg, 999, T)).toBe(true);
     expect(await checkUsage(repo, tg, 999, T)).toBe(false);

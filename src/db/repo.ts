@@ -64,7 +64,7 @@ export interface Candidates { learning: CardRow[]; review: CardRow[]; newNotes: 
 /** One level of the catalog as a user sees it; `seen` counts the notes that were started or are skipped as copies of own words, in an open level; 0 for a closed one. */
 export interface LevelRow { levelNo: number; total: number; coveragePct: number | null; open: boolean; seen: number }
 export interface DayWindow { dayStartMs: number; dayEndMs: number; today: string; directions: Direction[]; limitEach?: number }
-export interface Session { userId: number; chatId: number; messageId: number | null; cardId: number | null; stale: boolean; lastVoiceMessageId: number | null }
+export interface Session { userId: number; chatId: number; messageId: number | null; cardId: number | null; lastVoiceMessageId: number | null }
 export interface DeckRow {
   id: number; slug: string | null; ownerId: number | null; kind: "catalog" | "ai" | "custom";
   titleRu: string; titleTt: string; levelNo: number | null; coveragePct: number | null; total: number;
@@ -253,10 +253,6 @@ export class Repo {
     const r = await this.db.prepare("SELECT * FROM decks WHERE slug = ?").bind(slug).first<Record<string, unknown>>();
     return r ? this.rowToDeck(r) : null;
   }
-  async getDeck(id: number): Promise<DeckRow | null> {
-    const r = await this.db.prepare("SELECT * FROM decks WHERE id = ?").bind(id).first<Record<string, unknown>>();
-    return r ? this.rowToDeck(r) : null;
-  }
   /** The decks a user owns: «Мои слова» and the AI decks. */
   async ownDecks(userId: number): Promise<DeckRow[]> {
     const { results } = await this.db.prepare("SELECT * FROM decks WHERE owner_id = ? ORDER BY id").bind(userId).all<Record<string, unknown>>();
@@ -364,17 +360,8 @@ export class Repo {
     const { results } = await this.db.prepare("SELECT deck_id FROM user_decks WHERE user_id = ? ORDER BY added_at, deck_id").bind(userId).all<{ deck_id: number }>();
     return results.map((r) => r.deck_id);
   }
-  /** A note with this word in any deck the user is subscribed to. */
-  async findNoteForUser(userId: number, word: string): Promise<(NoteRow & { deckTitleRu: string; deckTitleTt: string }) | null> {
-    const r = await this.db.prepare(
-      `SELECT n.id, n.deck_id, ${noteCols("?1")}, d.title_ru, d.title_tt FROM notes n
-       JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ?1 JOIN decks d ON d.id = n.deck_id
-       WHERE n.word_key = ?2 LIMIT 1`,
-    ).bind(userId, wordKey(word)).first<Record<string, unknown>>();
-    return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, deckTitleRu: r.title_ru as string, deckTitleTt: r.title_tt as string } : null;
-  }
   /**
-   * Batch version of findNoteForUser: one D1 call for many words, keyed by wordKey.
+   * The notes with these words in the decks the user is subscribed to: one D1 call for many words, keyed by wordKey.
    * When a word is both in a deck the user owns and in an open level, the own note wins: the queue shows that one and skips the level's.
    * `owned` is true for a note in a deck of the user's own; a level note is shared by every learner.
    */
@@ -410,11 +397,6 @@ export class Repo {
     }
     return out;
   }
-  /** The note as nobody in particular reads it: for its voice. Its link is not given; `visibleNote` reads a note for a user. */
-  async getNote(id: number): Promise<NoteRow | null> {
-    const r = await this.db.prepare(`SELECT n.id, n.deck_id, ${noteCols(null)} FROM notes n WHERE n.id = ?`).bind(id).first<Record<string, unknown>>();
-    return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number } : null;
-  }
   /** The note when the user can see it: it is in one of their decks or they have a card for it. */
   async visibleNote(userId: number, noteId: number): Promise<NoteRow | null> {
     const r = await this.db.prepare(
@@ -445,9 +427,6 @@ export class Repo {
     return this.db.prepare(
       "UPDATE notes SET source_url = ?1 WHERE id = ?2 AND source_url IS NULL AND deck_id IN (SELECT id FROM decks WHERE owner_id = ?3)",
     ).bind(url, noteId, userId);
-  }
-  async setNoteAudio(noteId: number, fileId: string): Promise<void> {
-    await this.db.prepare("UPDATE notes SET audio_file_id = ? WHERE id = ?").bind(fileId, noteId).run();
   }
 
   /* cards */
@@ -506,13 +485,6 @@ export class Repo {
     ).bind(userId, noteId, direction, m.due).first<{ id: number }>();
     return r!.id;
   }
-  /** Hide the other-direction card of a note until tomorrow, creating it as new if needed. */
-  siblingBuryStmt(userId: number, noteId: number, siblingDir: Direction, day: string, now: number): D1PreparedStatement {
-    return this.db.prepare(
-      `INSERT INTO cards (user_id, note_id, direction, state, due, scheduled_days, reps, lapses, buried_day) VALUES (?, ?, ?, 'new', ?, 0, 0, 0, ?)
-       ON CONFLICT (user_id, note_id, direction) DO UPDATE SET buried_day = excluded.buried_day WHERE cards.state NOT IN ('learning','relearning')`,
-    ).bind(userId, noteId, siblingDir, now, day);
-  }
   /** Today's activity and cumulative totals by stage for one display direction. */
   async summary(userId: number, dayStartMs: number, direction: Direction): Promise<{ reviewsToday: number; learnedToday: number; learned: number; known: number; learning: number; new: number }> {
     const r = await this.db.prepare(
@@ -551,7 +523,7 @@ export class Repo {
    * it are finished and the levels above it wait for their turn. So `newNotes` are the next new cards, but not all
    * of them when the level in work is near its end and another open level follows.
    */
-  async candidateCards(userId: number, now: number, w: DayWindow, pre: D1PreparedStatement[] = []): Promise<Candidates & { pre: D1Result<Record<string, unknown>>[]; currentLevelClosed: boolean; nextLevelExists: boolean }> {
+  async candidateCards(userId: number, w: DayWindow, pre: D1PreparedStatement[] = []): Promise<Candidates & { pre: D1Result<Record<string, unknown>>[]; currentLevelClosed: boolean; nextLevelExists: boolean }> {
     const lim = w.limitEach ?? 50;
     const dirs = JSON.stringify(w.directions);
     const inDirs = "c.direction IN (SELECT value FROM json_each(?))";
@@ -599,7 +571,6 @@ export class Repo {
       newNotes,
       counts: { learning: c.learning as number, review: c.review as number, newAvailable: newNotes.length, newDoneToday: c.new_done_today as number, easyNewToday: c.easy_new_today as number },
     };
-    void now;
   }
 
   /** Cumulative numbers for /stats in one D1 call; `coveragePct` is the coverage of the nearest level the catalog has below the user's current one. */
@@ -623,13 +594,6 @@ export class Repo {
   }
 
   /* review log */
-  insertLogStmt(l: Omit<ReviewLogRow, "id" | "undone">): D1PreparedStatement {
-    return this.db.prepare(
-      `INSERT INTO review_log (card_id, user_id, rating, state_before, interval_before_days, interval_after_ms, reviewed_at, was_new, learned_now, streak_before, last_study_day_before)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(l.cardId, l.userId, l.rating, JSON.stringify(l.stateBefore), l.intervalBeforeDays, l.intervalAfterMs, l.reviewedAt,
-      l.wasNew ? 1 : 0, l.learnedNow ? 1 : 0, l.streakBefore, l.lastStudyDayBefore);
-  }
   /** The last grade of the user that was not undone. Read backwards through idx_log_user_time, so it stops at the first such row instead of reading the history. */
   async lastReviewLog(userId: number): Promise<ReviewLogRow | null> {
     const r = await this.db.prepare("SELECT * FROM review_log WHERE user_id = ? AND undone = 0 ORDER BY reviewed_at DESC, id DESC LIMIT 1").bind(userId).first<Record<string, unknown>>();
@@ -643,25 +607,25 @@ export class Repo {
   }
   markUndoneStmt(logId: number): D1PreparedStatement { return this.db.prepare("UPDATE review_log SET undone = 1 WHERE id = ?").bind(logId); }
 
-  /* sessions */
+  /* sessions; the column sessions.stale of the first schema is no longer read or written */
   async getSession(userId: number): Promise<Session | null> {
     const r = await this.db.prepare("SELECT * FROM sessions WHERE user_id = ?").bind(userId).first<Record<string, unknown>>();
     return r ? { userId, chatId: r.chat_id as number, messageId: (r.message_id as number) ?? null, cardId: (r.card_id as number) ?? null,
-      stale: r.stale === 1, lastVoiceMessageId: (r.last_voice_message_id as number) ?? null } : null;
+      lastVoiceMessageId: (r.last_voice_message_id as number) ?? null } : null;
   }
   saveSessionStmt(s: Session): D1PreparedStatement {
     return this.db.prepare(
-      `INSERT INTO sessions (user_id, chat_id, message_id, card_id, stale, last_voice_message_id) VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO sessions (user_id, chat_id, message_id, card_id, last_voice_message_id) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT (user_id) DO UPDATE SET chat_id = excluded.chat_id, message_id = excluded.message_id, card_id = excluded.card_id,
-       stale = excluded.stale, last_voice_message_id = excluded.last_voice_message_id`,
-    ).bind(s.userId, s.chatId, s.messageId, s.cardId, s.stale ? 1 : 0, s.lastVoiceMessageId);
+       last_voice_message_id = excluded.last_voice_message_id`,
+    ).bind(s.userId, s.chatId, s.messageId, s.cardId, s.lastVoiceMessageId);
   }
   async saveSession(s: Session): Promise<void> { await this.saveSessionStmt(s).run(); }
   /** Points the session at a message/card without touching the voice message id. */
   async setSessionMessage(userId: number, chatId: number, messageId: number, cardId: number | null): Promise<void> {
     await this.db.prepare(
       `INSERT INTO sessions (user_id, chat_id, message_id, card_id) VALUES (?, ?, ?, ?)
-       ON CONFLICT (user_id) DO UPDATE SET chat_id = excluded.chat_id, message_id = excluded.message_id, card_id = excluded.card_id, stale = 0`,
+       ON CONFLICT (user_id) DO UPDATE SET chat_id = excluded.chat_id, message_id = excluded.message_id, card_id = excluded.card_id`,
     ).bind(userId, chatId, messageId, cardId).run();
   }
   /** Moves the session to a freshly sent message and forgets the old voice message; returns that voice id so it can be deleted. One D1 call. */
@@ -670,13 +634,10 @@ export class Repo {
       this.db.prepare("SELECT last_voice_message_id FROM sessions WHERE user_id = ?").bind(userId),
       this.db.prepare(
         `INSERT INTO sessions (user_id, chat_id, message_id, card_id) VALUES (?, ?, ?, ?)
-         ON CONFLICT (user_id) DO UPDATE SET chat_id = excluded.chat_id, message_id = excluded.message_id, card_id = excluded.card_id, stale = 0, last_voice_message_id = NULL`,
+         ON CONFLICT (user_id) DO UPDATE SET chat_id = excluded.chat_id, message_id = excluded.message_id, card_id = excluded.card_id, last_voice_message_id = NULL`,
       ).bind(userId, chatId, messageId, cardId),
     ]);
     return prev?.results[0]?.last_voice_message_id ?? null;
-  }
-  async markSessionStale(userId: number): Promise<void> {
-    await this.db.prepare("UPDATE sessions SET stale = 1 WHERE user_id = ?").bind(userId).run();
   }
 
   /* previews */
@@ -711,13 +672,5 @@ export class Repo {
     const id = await this.insertDeck({ slug: null, kind: "custom", titleRu: "Мои слова", titleTt: "Минем сүзләр", levelNo: null, coveragePct: null, ownerId: userId });
     await this.subscribe(userId, id, now);
     return id;
-  }
-
-  /* usage */
-  bumpUsageStmt(day: string, reviews: number, rows: number): D1PreparedStatement {
-    return this.db.prepare(
-      `INSERT INTO usage_daily (day, reviews, rows_written_est, requests) VALUES (?, ?, ?, 0)
-       ON CONFLICT (day) DO UPDATE SET reviews = reviews + excluded.reviews, rows_written_est = rows_written_est + excluded.rows_written_est`,
-    ).bind(day, reviews, rows);
   }
 }

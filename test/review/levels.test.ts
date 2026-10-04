@@ -456,8 +456,8 @@ describe("levels", () => {
 
   describe("which decks the queue reads: the own decks and the lowest open level that has new words", () => {
     const window = (t = now) => ({ dayStartMs: t - 5 * 3_600_000, dayEndMs: t + 19 * 3_600_000, today: new Date(t).toISOString().slice(0, 10) });
-    const queue = async (repo: Repo, userId: number, directions: ("tt_ru" | "ru_tt")[] = ["tt_ru"], t = now) =>
-      (await repo.candidateCards(userId, t, { ...window(t), directions })).newNotes.map((n) => [n.word, n.direction]);
+    const queue = async (repo: Repo, userId: number, directions: ("tt_ru" | "ru_tt")[] = ["tt_ru"]) =>
+      (await repo.candidateCards(userId, { ...window(), directions })).newNotes.map((n) => [n.word, n.direction]);
 
     it("a level whose last word the learner owns a copy of is finished once its other words are started", async () => {
       const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 2 }); // китап, вакыт
@@ -534,16 +534,16 @@ describe("levels", () => {
 
     it("counts as new what the list holds: zero only when no open deck has a new card today", async () => {
       const { repo, user, noteIds } = await seedUser(env.DB, { now, level: 1, words: 3 });
-      const c = await repo.candidateCards(user.id, now, { ...window(), directions: ["tt_ru", "ru_tt"] });
+      const c = await repo.candidateCards(user.id, { ...window(), directions: ["tt_ru", "ru_tt"] });
       expect(c.newNotes).toHaveLength(6);
       expect(c.counts.newAvailable).toBe(6);
       for (const id of noteIds) await repo.insertCard(user.id, id, "tt_ru", gradedMem(now));
-      const none = await repo.candidateCards(user.id, now, { ...window(), directions: ["tt_ru"] });
+      const none = await repo.candidateCards(user.id, { ...window(), directions: ["tt_ru"] });
       expect(none.newNotes).toEqual([]);
       expect(none.counts.newAvailable).toBe(0);
       expect(none.nextLevelExists).toBe(false);
       await seedLevels(env.DB, { 2: ["авыл"] });
-      expect((await repo.candidateCards(user.id, now, { ...window(), directions: ["tt_ru"] })).nextLevelExists).toBe(true);
+      expect((await repo.candidateCards(user.id, { ...window(), directions: ["tt_ru"] })).nextLevelExists).toBe(true);
     });
   });
 

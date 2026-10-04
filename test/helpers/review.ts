@@ -16,3 +16,10 @@ export async function gradeShown(repo: Repo, user: Pick<User, "id">, s: Screen, 
   const c = asCard(s);
   return new ReviewService(repo, now).grade((await repo.getUser(user.id))!, c.view.cardId, c.view.reps, rating);
 }
+
+/** A row of review_log as a grade writes it, for tests that need a history without grading: not undone, the streak fields at their defaults. */
+export function logStmt(db: D1Database, l: { cardId: number; userId: number; rating: Rating; stateBefore: Mem; intervalBeforeDays: number; intervalAfterMs: number; reviewedAt: number; wasNew: boolean }): D1PreparedStatement {
+  return db.prepare(
+    "INSERT INTO review_log (card_id, user_id, rating, state_before, interval_before_days, interval_after_ms, reviewed_at, was_new) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  ).bind(l.cardId, l.userId, l.rating, JSON.stringify(l.stateBefore), l.intervalBeforeDays, l.intervalAfterMs, l.reviewedAt, l.wasNew ? 1 : 0);
+}

@@ -206,7 +206,7 @@ describe("bot handlers", () => {
 
   it("the voice message of the previous card is removed with it", async () => {
     const { h, repo, u, cardMsg, grade } = await startSession();
-    await repo.saveSession({ userId: u.id, chatId: 42, messageId: cardMsg, cardId: null, stale: false, lastVoiceMessageId: 77 });
+    await repo.saveSession({ userId: u.id, chatId: 42, messageId: cardMsg, cardId: null, lastVoiceMessageId: 77 });
     await h.press(grade, cardMsg);
     expect(h.tg.of("deleteMessage").map((c) => c.payload.message_id).sort()).toEqual([77, cardMsg].sort());
     expect((await repo.getSession(u.id))!.lastVoiceMessageId).toBeNull();

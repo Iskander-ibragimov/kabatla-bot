@@ -7,7 +7,7 @@ import { newMem } from "../../src/srs/fsrs";
 import { countingDb } from "../helpers/countingDb";
 import { fakeTelegram } from "../helpers/fakeTelegram";
 import { ru } from "../../src/i18n/ru";
-import { gradedMem } from "../helpers/review";
+import { gradedMem, logStmt } from "../helpers/review";
 import { note, seedLevels, seedUser } from "../helpers/seed";
 
 const MIN = 60_000;
@@ -94,9 +94,9 @@ describe("reminders tick", () => {
       await seedLevels(env.DB, { 2: ["авыл", "су"] });
       // Both words were first graded this morning, after the 04:00 day boundary.
       const mem = gradedMem(local(30, 6, 0));
-      await repo.batch(noteIds.map((id, i) => repo.insertLogStmt({
+      await repo.batch(noteIds.map((_, i) => logStmt(env.DB, {
         cardId: i + 1, userId: user.id, rating: 3, stateBefore: newMem(local(30, 6, 0)), intervalBeforeDays: 0, intervalAfterMs: mem.due - local(30, 6, 0),
-        reviewedAt: local(30, 6, 0), wasNew: true, learnedNow: false, streakBefore: 0, lastStudyDayBefore: null,
+        reviewedAt: local(30, 6, 0), wasNew: true,
       })));
       expect(await pushes()).toEqual([]);
     });
@@ -300,8 +300,7 @@ describe("reminders tick", () => {
     expect(await run(db, tg, local(30, 9, 1))).toEqual({ sent: 0 });
     expect(tg.calls).toEqual([]);
     expect(db.calls).toBeLessThanOrEqual(10);
-    expect(await repo.getNote(noteIds[0]!)).toMatchObject({ audioFileId: null });
-    expect(await env.DB.prepare("SELECT audio_tries FROM notes WHERE id = ?").bind(noteIds[0]).first()).toEqual({ audio_tries: 0 });
+    expect(await env.DB.prepare("SELECT audio_file_id, audio_tries FROM notes WHERE id = ?").bind(noteIds[0]).first()).toEqual({ audio_file_id: null, audio_tries: 0 });
     // The job is closed, not retried every minute: voicing happens in GitHub Actions, the tick only clears the queue.
     const job = await env.DB.prepare("SELECT attempts, error, done_at FROM jobs").first<{ attempts: number; error: string | null; done_at: number | null }>();
     expect(job).toEqual({ attempts: 0, error: null, done_at: local(30, 9, 1) });

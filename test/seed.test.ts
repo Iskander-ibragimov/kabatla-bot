@@ -133,7 +133,7 @@ describe("catalog seed", () => {
     const sql = csvToSql(meta1, [row("китап"), row("су")]);
     await applySeed(env.DB, sql);
     const [kitap] = await notes();
-    await new Repo(env.DB).setNoteAudio(kitap!.id as number, "VOICE1");
+    await env.DB.prepare("UPDATE notes SET audio_file_id = 'VOICE1' WHERE id = ?").bind(kitap!.id).run();
 
     expect(await applySeed(env.DB, sql)).toMatchObject({ changes: 0, rowsWritten: 0 });
     expect((await notes()).map((n) => n.audio_file_id)).toEqual(["VOICE1", null]);

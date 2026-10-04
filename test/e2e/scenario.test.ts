@@ -74,7 +74,6 @@ describe("first day and next day", () => {
       await h.press(g[2]!, 900);
     }
     expect(await maxDays()).toBeGreaterThan(before);
-    void sessionMsg;
   });
 
   it("Tatar interface: onboarding → 100 words of the level → level-up with coverage → a level 2 card", async () => {
