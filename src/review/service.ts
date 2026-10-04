@@ -1,6 +1,8 @@
-import { type CardRow, type Direction, LAST_LEVEL, type NewNote, type Repo, type User } from "../db/repo";
+import type { CardRow, Direction, NewNote, NewScope, Queue, Repo, User } from "../db/repo";
+import { type EmptyReason, emptyReason, mergeStreams, nextSpans, readSpans, scopeKey, writeSpans } from "../levels/order";
+import { LEVELS, levelsOf, posCodesOf } from "../levels/scale";
 import { type Mem, type Rating, formatInterval, grade as fsrsGrade, memoryDays, newMem, preview, stage } from "../srs/fsrs";
-import { dayWindow, localDay } from "../users/service";
+import { type Window, dayWindow, localDay } from "../users/service";
 import { pick } from "./pick";
 
 /** View-model types shared with the bot layer (kept here so services never import the bot). */
@@ -10,25 +12,21 @@ export interface CardView {
   hasAudio: boolean; sourceUrl: string | null; mem: Mem;
 }
 export interface Feedback { word: string; kind: "grow" | "step" | "lapse" | "first"; beforeDays: number; afterMs: number; keptDays?: number }
+/** `n`: the new cards still to come today; while a level has a word to give it is what is left of the day's limit. */
 export interface Counts { n: number; l: number; r: number }
-export interface DaySummary {
-  reviewsToday: number; learnedToday: number;
-  totals: { learned: number; known: number; learning: number; new: number };
-  nextLearningInMs: number | null; streak: number;
-}
-/**
- * The level that has just been opened, not always `from + 1`: a catalog may have gaps. `to` is null when level 20 is
- * finished and nothing is left to open. `total`: how many words level `from` has; null when the catalog has no deck of it.
- */
-export interface LevelUp { from: number; to: number | null; coveragePct: number | null; total: number | null }
+export interface DaySummary { reviewsToday: number; learnedToday: number; nextLearningInMs: number | null; streak: number }
+export type { EmptyReason };
 export type Screen =
-  | { kind: "card"; view: CardView; counts: Counts; intervals: Record<Rating, string>; feedback: Feedback | null; canUndo: boolean; levelUp: LevelUp | null }
-  | { kind: "done"; summary: DaySummary; feedback: Feedback | null; levelUp: LevelUp | null }
+  | { kind: "card"; view: CardView; counts: Counts; intervals: Record<Rating, string>; feedback: Feedback | null; canUndo: boolean }
+  /**
+   * The session is over for now. `empty`: why no new word came although the day's limit is not spent, and what to
+   * offer the learner; null when new words are not allowed any more today.
+   */
+  | { kind: "done"; summary: DaySummary; feedback: Feedback | null; empty: EmptyReason | null }
   | { kind: "stale" }
   | { kind: "noundo" }
+  /** The user has no card at all and there is no new word to give. */
   | { kind: "nothing" };
-
-export { LAST_LEVEL };
 
 /** At most this many new words per day may be graded Easy on first sight; after that no new words are offered. */
 export const EASY_NEW_CAP = 200;
@@ -37,12 +35,37 @@ export const EASY_NEW_CAP = 200;
 export const newLeftOf = (user: Pick<User, "newPerDay">, c: { newDoneToday: number; easyNewToday: number }): number =>
   c.easyNewToday >= EASY_NEW_CAP ? 0 : Math.max(0, user.newPerDay - c.newDoneToday);
 
-/** D1 rows written per grade, index updates included (card, log, user, usage). */
-const ROWS_PER_REVIEW = 8;
+/** D1 rows written per grade, index updates included (card, log, user, usage, the counter of started words). */
+const ROWS_PER_REVIEW = 9;
 
 export const directionsOf = (u: Pick<User, "direction">): Direction[] =>
   u.direction === "both" ? ["tt_ru", "ru_tt"] : [u.direction];
 export const displayDirection = (u: Pick<User, "direction">): Direction => (u.direction === "ru_tt" ? "ru_tt" : "tt_ru");
+
+/** The settings of a user that decide which catalog words come as new ones. */
+type ScopeSettings = Pick<User, "levels" | "posGroups" | "newMode" | "topicNo" | "direction" | "newCursors">;
+
+/**
+ * Which catalog words may come as new ones for a user: the checked levels and parts of speech, the order and the
+ * chosen topic, with the read positions of the levels. The positions count only when they were stored for exactly
+ * these settings (`scopeKey`); otherwise there are none, and the levels are read from their beginning.
+ */
+export function newScopeOf(user: ScopeSettings): NewScope {
+  const stored = readSpans(user.newCursors, scopeKey(user));
+  return { levels: levelsOf(user.levels), posCodes: posCodesOf(user.posGroups), mode: user.newMode, topicNo: user.topicNo, spans: stored.spans, spansVersion: stored.version };
+}
+
+/**
+ * One read of the queue. `fresh`: the new cards in the order they are given — own words, then the cards of catalog
+ * words that exist and were never graded, then the heads of the checked levels in the order of the mode.
+ * `streamed`: a level gave a word, so more new words lie behind the ones listed. `cursors`: the read positions after
+ * this read, as stored on the user's row; `moved`: they are worth storing.
+ */
+interface QueueRead { q: Queue; fresh: NewNote[]; streamed: boolean; cursors: string; moved: boolean }
+
+/** Sums `n` over the pairs of each level A1…C1; the pair of own words (level 0) is no level. */
+const byLevel = (pairs: { level: number; n: number }[]): Record<number, number> =>
+  Object.fromEntries(LEVELS.map((l) => [l.no, pairs.reduce((sum, p) => (p.level === l.no ? sum + p.n : sum), 0)]));
 
 function toView(row: CardRow | (NewNote & { id: number; mem: Mem })): CardView {
   return {
@@ -64,42 +87,67 @@ function feedbackOf(word: string, before: Mem, after: Mem, now: number): Feedbac
 export class ReviewService {
   constructor(private readonly repo: Repo, private readonly now: number) {}
 
+  /**
+   * Reads the queue for the user's settings without writing anything. Positions stored for another catalog version
+   * were not used by the read, so what this read saw replaces them whatever it is; otherwise the positions are worth
+   * storing when one of them moved far enough (`nextSpans`).
+   */
+  private async readQueue(user: User, w: Window): Promise<QueueRead> {
+    const scope = newScopeOf(user);
+    const q = await this.repo.queue(user.id, { ...w, directions: directionsOf(user) }, scope);
+    const stream = mergeStreams(Object.values(q.streams).map((level) => level ?? []), user.newMode);
+    const reset = q.catalogVersion !== scope.spansVersion;
+    const next = nextSpans(reset ? {} : scope.spans, q.seen);
+    return {
+      q, fresh: [...q.ownNew, ...q.newRows, ...stream], streamed: stream.length > 0,
+      cursors: writeSpans(scopeKey(user), q.catalogVersion, next.spans), moved: reset || next.save,
+    };
+  }
+
+  /**
+   * The queue of a session: one read, and the read positions are stored when they moved (one more D1 call, only then).
+   * In the guided order a chosen topic that has no word left is cleared: the queue is read once more without it, and
+   * the choice and the positions of that second read are written together.
+   */
+  private async sessionQueue(user: User, w: Window): Promise<QueueRead> {
+    const read = await this.readQueue(user, w);
+    if (user.newMode === "guided" && user.topicNo != null && !read.streamed) {
+      const onward = await this.readQueue({ ...user, topicNo: null }, w);
+      await this.repo.endTopic(user.id, user.topicNo, onward.cursors);
+      return onward;
+    }
+    if (read.moved) await this.repo.updateUser(user.id, { newCursors: read.cursors });
+    return read;
+  }
+
+  /** The counters of a card screen. While a level has a word to give, the new cards to come are not counted: they are as many as the day still allows. */
+  private countsOf(user: User, { q, streamed }: QueueRead): Counts {
+    const candidates = streamed ? Infinity : q.ownNew.length + q.newRows.length;
+    return { n: Math.min(newLeftOf(user, q.counts), candidates), l: q.counts.learning, r: q.counts.review };
+  }
+
   async nextScreen(user: User, feedback: Feedback | null = null): Promise<Screen> {
     const w = dayWindow(user.tzOffsetMin, this.now);
-    const opts = { ...w, directions: directionsOf(user) };
-    let c = await this.repo.candidateCards(user.id, opts);
-    let levelUp: LevelUp | null = null;
-    // The open decks have no unseen words and today's limit is not spent: a level is opened in the same D1 call that
-    // re-reads the queue. The first read already tells whether there is a level to open, so the second call is made
-    // only at the moment of a transition, not on every screen of a learner who is waiting for the next level.
-    if (c.counts.newAvailable === 0 && newLeftOf(user, c.counts) > 0 && user.level <= LAST_LEVEL) {
-      if (c.currentLevelClosed) {
-        // The deck of the current level exists but was never opened (the learner finished onboarding before it was
-        // published): that deck is opened, the level stays, and nothing is announced — no level was finished.
-        c = await this.repo.candidateCards(user.id, opts, [this.repo.openCurrentLevelStmt(user.id, this.now)]);
-      } else if (c.nextLevelExists) {
-        // The next level the catalog has is opened. Only the call whose UPDATE moved users.level gets the new level back
-        // and announces it (double taps, stale `user`).
-        const from = user.level;
-        const reread = await this.repo.candidateCards(user.id, opts, this.repo.openLevelStmts(user.id, from, LAST_LEVEL, this.now));
-        const [moved, , finished] = reread.pre;
-        const opened = moved!.results[0]?.level as number | undefined;
-        const deck = finished!.results[0] as { coverage_pct: number | null; total: number } | undefined;
-        if (opened != null) levelUp = { from, to: opened <= LAST_LEVEL ? opened : null, coveragePct: deck?.coverage_pct ?? null, total: deck?.total ?? null };
-        c = reread;
-      }
-    }
-    const newLeft = newLeftOf(user, c.counts);
-    const p = pick(c, newLeft, this.now, user.mixCounter);
-    const counts: Counts = { n: Math.min(newLeft, c.counts.newAvailable), l: c.counts.learning, r: c.counts.review };
+    const read = await this.sessionQueue(user, w);
+    const { q, fresh } = read;
+    const newLeft = newLeftOf(user, q.counts);
+    const p = pick({ learning: q.learning, review: q.review, newNotes: fresh }, newLeft, this.now, user.mixCounter);
     if (!p) {
-      const s = await this.repo.summary(user.id, w.dayStartMs, displayDirection(user));
-      const totals = { learned: s.learned, known: s.known, learning: s.learning, new: s.new };
-      if (!feedback && !levelUp && Object.values(totals).every((x) => x === 0)) return { kind: "nothing" };
-      const nextDue = c.learning.length ? Math.min(...c.learning.map((x) => x.mem.due)) : null;
+      if (!q.hasCards && !feedback && !fresh.length) return { kind: "nothing" };
+      // Why there is no new word is said only when one could still be given today; then the counters are read with the day's log.
+      const noNew = newLeft > 0 && !fresh.length;
+      const end = await this.repo.dayEnd(user.id, w.dayStartMs, noNew);
+      const empty = noNew
+        ? emptyReason({
+          mode: user.newMode, levels: user.levels, posGroups: user.posGroups,
+          totals: byLevel(end.totals.map((t) => ({ level: t.level, n: t.total }))),
+          started: byLevel(end.progress.map((s) => ({ level: s.level, n: s.started }))),
+        })
+        : null;
+      const nextDue = q.learning.length ? Math.min(...q.learning.map((x) => x.mem.due)) : null;
       return {
-        kind: "done", feedback, levelUp,
-        summary: { reviewsToday: s.reviewsToday, learnedToday: s.learnedToday, totals, streak: user.streak,
+        kind: "done", feedback, empty,
+        summary: { reviewsToday: end.reviewsToday, learnedToday: end.learnedToday, streak: user.streak,
           nextLearningInMs: nextDue == null ? null : Math.max(0, nextDue - this.now) },
       };
     }
@@ -112,7 +160,7 @@ export class ReviewService {
     const pv = preview(row.mem, this.now, user.retention);
     const intervals = { 1: 0, 2: 0, 3: 0, 4: 0 } as Record<Rating, string | number>;
     for (const g of [1, 2, 3, 4] as Rating[]) intervals[g] = formatInterval(pv[g] - this.now, user.lang);
-    return { kind: "card", view: toView(row), counts, intervals: intervals as Record<Rating, string>, feedback, canUndo: feedback != null, levelUp };
+    return { kind: "card", view: toView(row), counts: this.countsOf(user, read), intervals: intervals as Record<Rating, string>, feedback, canUndo: feedback != null };
   }
 
   async grade(user: User, cardId: number, reps: number, rating: Rating): Promise<Screen> {
@@ -133,6 +181,8 @@ export class ReviewService {
       }),
       this.repo.guardedUserStmt(user.id, { streak, lastStudyDay: today, lastReviewAt: this.now, mixCounter: user.mixCounter + 1 }),
       this.repo.guardedUsageStmt(new Date(this.now).toISOString().slice(0, 10), 1, ROWS_PER_REVIEW),
+      // The counter of started words changes exactly one row whenever the grade was applied, so the statement after it is still guarded.
+      this.repo.progressStmt(user.id, card.noteId, card.id, before.state === "new"),
     ];
     if (user.direction === "both") {
       const sibling: Direction = card.direction === "tt_ru" ? "ru_tt" : "tt_ru";
@@ -144,13 +194,18 @@ export class ReviewService {
     return this.nextScreen(updated, feedbackOf(card.word, before, after, this.now));
   }
 
-  /** Restores the last graded card (one level, like Anki’s undo). */
+  /**
+   * Restores the last graded card (one level, like Anki’s undo). The word is taken back from the counter of started
+   * words when the grade had started it; that statement stands right after the mark of the undone grade, which guards
+   * it: a second undo of the same grade takes nothing.
+   */
   async undo(user: User): Promise<Screen> {
     const log = await this.repo.lastReviewLog(user.id);
     if (!log) return { kind: "noundo" };
     await this.repo.batch([
       this.repo.updateCardStmt(log.cardId, log.stateBefore),
       this.repo.markUndoneStmt(log.id),
+      this.repo.unprogressStmt(user.id, log.cardId),
       this.repo.updateUserStmt(user.id, { streak: log.streakBefore, lastStudyDay: log.lastStudyDayBefore }),
     ]);
     const card = await this.repo.getCard(user.id, log.cardId);
@@ -158,10 +213,8 @@ export class ReviewService {
     const pv = preview(card.mem, this.now, user.retention);
     const intervals = {} as Record<Rating, string>;
     for (const g of [1, 2, 3, 4] as Rating[]) intervals[g] = formatInterval(pv[g] - this.now, user.lang);
-    const w = dayWindow(user.tzOffsetMin, this.now);
-    const c = await this.repo.candidateCards(user.id, { ...w, directions: directionsOf(user) });
-    const newLeft = newLeftOf(user, c.counts);
-    return { kind: "card", view: toView(card), intervals, feedback: null, canUndo: false, levelUp: null,
-      counts: { n: Math.min(newLeft, c.counts.newAvailable), l: c.counts.learning, r: c.counts.review } };
+    // The queue is read for the counters alone: nothing of it is stored.
+    const read = await this.readQueue(user, dayWindow(user.tzOffsetMin, this.now));
+    return { kind: "card", view: toView(card), intervals, feedback: null, canUndo: false, counts: this.countsOf(user, read) };
   }
 }

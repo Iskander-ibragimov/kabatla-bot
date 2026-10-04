@@ -1,10 +1,11 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { type DayWindow, type Direction, type DirectionSetting, type NewScope, type Queue, Repo } from "../../src/db/repo";
-import { CURSOR_STEP, type Spans, guidedTseq, mergeStreams, nextSpans } from "../../src/levels/order";
+import { CURSOR_STEP, type Spans, mergeStreams, nextSpans } from "../../src/levels/order";
 import { LEVELS, type NewMode } from "../../src/levels/scale";
-import { type Mem, newMem } from "../../src/srs/fsrs";
+import { newMem } from "../../src/srs/fsrs";
 import { dayWindow } from "../../src/users/service";
+import { type CardSeed, type CatalogNote, type Numerals, bulkCards, bulkCatalog, numeralsAt } from "../helpers/catalog";
 import { readingDb } from "../helpers/readingDb";
 import { gradedMem } from "../helpers/review";
 import { note, seedLearner } from "../helpers/seed";
@@ -13,38 +14,19 @@ const MIN = 60_000;
 const DAY = 86_400_000;
 /** 10:00 at UTC+3. */
 const now = Date.UTC(2026, 8, 30, 7, 0);
-const TOPICS = 21;
-const POS = ["n", "v", "adj", "adv", "pron", "num", "post", "part", "conj", "intj", "phr"];
 const ALL_LEVELS = LEVELS.map((l) => l.no as number);
 const BOTH: Direction[] = ["tt_ru", "ru_tt"];
 
-interface CatalogNote { id: number; level: number; topicNo: number; seq: number; tseq: number; pos: string }
-
 /**
- * The whole catalog, 3 850 notes in the five levels at their sizes, loaded with one statement a level. In every level
- * the topics 0…20 and the eleven part-of-speech codes follow one another note by note, so every topic holds every code.
- * The guided order is the one the catalog seed gives (`guidedTseq`): the basic words (topic 0, one note in 21) stand
- * among the themed ones at the beginning of the level.
+ * The whole catalog, 3 850 notes in the five levels at their sizes (test/helpers/catalog.ts `bulkCatalog`). In every
+ * level the topics 0…20 and the eleven part-of-speech codes follow one another note by note, so every topic holds every
+ * code. The guided order is the one the catalog seed gives (`guidedTseq`): the basic words (topic 0, one note in 21)
+ * stand among the themed ones at the beginning of the level.
  * `numerals`: how many of the notes are numerals. `even`: one in 11, like every other code. `rare`: one in 55 (70 in
  * the catalog), a small part of speech. `sparse`: three a level, at a tenth, a half and nine tenths of it, far apart.
  */
-type Numerals = "even" | "rare" | "sparse";
 async function fullCatalog(numerals: Numerals): Promise<CatalogNote[]> {
-  const posAt = (i: number, size: number) =>
-    numerals === "even" ? POS[i % POS.length]!
-      : (numerals === "rare" ? i % 55 === 5 : [0.1, 0.5, 0.9].some((part) => i === Math.floor(size * part))) ? "num" : POS[i % 5]!;
-  const repo = new Repo(env.DB);
-  for (const lv of LEVELS) {
-    const deckId = await repo.insertDeck({ slug: lv.slug, kind: "catalog", titleRu: lv.code, titleTt: lv.code, levelNo: lv.no, coveragePct: null, ownerId: null });
-    const tseq = guidedTseq(Array.from({ length: lv.size }, (_, i) => ({ topicNo: i % TOPICS, seq: i + 1 })));
-    const rows = Array.from({ length: lv.size }, (_, i) => ({ w: `сүз${lv.no}х${i + 1}`, p: posAt(i, lv.size), t: i % TOPICS, s: i + 1, q: tseq[i]! }));
-    await env.DB.prepare(
-      `INSERT INTO notes (deck_id, word, word_key, pos, translation, example_tt, example_ru, example_src, level, topic_no, seq, tseq)
-       SELECT ?1, j.value ->> 'w', j.value ->> 'w', j.value ->> 'p', (j.value ->> 'w') || '-ru', (j.value ->> 'w') || '.', (j.value ->> 'w') || '-ru.', 'own',
-              ?2, j.value ->> 't', j.value ->> 's', j.value ->> 'q' FROM json_each(?3) j ORDER BY j.key`,
-    ).bind(deckId, lv.no, JSON.stringify(rows)).run();
-  }
-  const { results } = await env.DB.prepare("SELECT id, level, topic_no AS topicNo, seq, tseq, pos FROM notes WHERE level IS NOT NULL ORDER BY level, seq").all<CatalogNote>();
+  const results = await bulkCatalog(env.DB, { pos: numeralsAt(numerals) });
   expect(results.map((n) => n.level).filter((l) => l === 1)).toHaveLength(500);
   expect(results).toHaveLength(3850);
   return results;
@@ -59,19 +41,6 @@ interface Case { where: Where; mode: NewMode; pos: PosScope; direction: Directio
 const inPos = (c: Case) => (n: CatalogNote) => c.pos === "all" || n.pos === "num";
 const directionsOf = (d: DirectionSetting): Direction[] => (d === "both" ? BOTH : [d]);
 const ordOf = (mode: NewMode) => (n: CatalogNote) => (mode === "freq" ? n.seq : n.tseq);
-
-type CardSeed = [noteId: number, direction: Direction, mem: Mem, buriedDay: string | null];
-/** Cards written straight into the table, two thousand to a statement. */
-async function insertCards(userId: number, rows: CardSeed[]) {
-  const json = rows.map(([n, d, m, b]) => ({ n, d, st: m.state, sp: m.step, sb: m.stability, df: m.difficulty, du: m.due, lr: m.lastReview, sd: m.scheduledDays, rp: m.reps, lp: m.lapses, b }));
-  for (let i = 0; i < json.length; i += 2000) {
-    await env.DB.prepare(
-      `INSERT INTO cards (user_id, note_id, direction, state, step, stability, difficulty, due, last_review, scheduled_days, reps, lapses, buried_day)
-       SELECT ?1, j.value ->> 'n', j.value ->> 'd', j.value ->> 'st', j.value ->> 'sp', j.value ->> 'sb', j.value ->> 'df', j.value ->> 'du', j.value ->> 'lr',
-              j.value ->> 'sd', j.value ->> 'rp', j.value ->> 'lp', j.value ->> 'b' FROM json_each(?2) j`,
-    ).bind(userId, JSON.stringify(json.slice(i, i + 2000))).run();
-  }
-}
 
 /**
  * A learner (Telegram id 42) with all five levels in the scope and ten own words, subscribed to the five level decks in
@@ -108,7 +77,7 @@ async function learner(catalog: CatalogNote[], c: Case) {
     }
   });
   if (c.where !== "start") own.slice(0, 5).forEach((id) => directions.forEach((d) => cards.push([id, d, yesterday, null])));
-  await insertCards(user.id, cards);
+  await bulkCards(env.DB, user.id, cards);
   const startedIds = new Set(started.map((n) => n.id));
   // `topic`: the topic of the case, or the topic in work — that of the next themed word; the fifth for a learner at the start.
   const topicNo = c.mode !== "topic" ? null : c.topicNo ?? (c.where === "start" ? 5 : order.find((n) => !startedIds.has(n.id) && inPos(c)(n) && inTopic(n))!.topicNo);
@@ -151,7 +120,7 @@ async function reads(catalog: CatalogNote[], c: Case) {
   const yesterday = gradedMem(now - DAY);
   let todo = l.todo;
   const start = async (notes: CatalogNote[]) => {
-    await insertCards(l.userId, notes.flatMap((n) => l.w.directions.map((d): CardSeed => [n.id, d, yesterday, null])));
+    await bulkCards(env.DB, l.userId, notes.flatMap((n) => l.w.directions.map((d): CardSeed => [n.id, d, yesterday, null])));
     const gone = new Set(notes.map((n) => n.id));
     todo = todo.filter((n) => !gone.has(n.id));
   };

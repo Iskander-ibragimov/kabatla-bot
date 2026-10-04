@@ -1,7 +1,6 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { renderLevels } from "../../src/bot/screens";
-import { renderLevelUp } from "../../src/bot/views";
 import { Repo } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
@@ -169,51 +168,22 @@ describe("/levels", () => {
   });
 });
 
-describe("level-up line", () => {
-  it("the card after the transition starts with the line about the level", async () => {
-    await seedUser(env.DB, { now: T, level: 1, words: 2, tgId: 42 });
+describe("the bot opens no level by itself", () => {
+  it("when the checked level has no word left the session ends with no line about a level; nothing is opened or checked", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 2, tgId: 42 });
     await seedLevels(env.DB, { 2: ["авыл", "су"] }, { 1: 31 });
     const h = harness(env.DB, { now: T });
     await h.text("/learn");
-    expect(h.lastText().startsWith("🔵 2 · 🔴 0 · 🟢 0\n<b>китап</b>")).toBe(true);
+    expect(h.lastText().startsWith("🔵 10 · 🔴 0 · 🟢 0\n<b>китап</b>")).toBe(true);
     await h.press(easyButton(h), h.tg.lastMessageId());
-    expect(h.lastText().startsWith("🔵 1 · 🔴 0 · 🟢 0\n<b>вакыт</b>")).toBe(true);
+    expect(h.lastText().startsWith("🔵 10 · 🔴 0 · 🟢 0\n<b>вакыт</b>")).toBe(true);
     await h.press(easyButton(h), h.tg.lastMessageId());
-    // Level 1 of this test has two words, and the line names that number.
-    const line = "Все 2 слова уровня 1 в работе. Открываю уровень 2. Пройденные слова покрывают ≈31% обычного текста.";
-    expect(h.lastText().startsWith(`${line}\n\n🔵 2 · 🔴 0 · 🟢 0\n<b>авыл</b>`)).toBe(true);
-    // The line is said once: the next card is plain again.
-    await h.press(easyButton(h), h.tg.lastMessageId());
-    expect(h.lastText().startsWith("🔵 1 · 🔴 0 · 🟢 0\n<b>су</b>")).toBe(true);
-  });
-
-  it("after level 20 the done screen starts with the congratulation", async () => {
-    await seedUser(env.DB, { now: T, level: 20, words: 1, tgId: 42 });
-    await seedLevels(env.DB, {}, { 20: 80 });
-    const h = harness(env.DB, { now: T });
-    await h.text("/learn");
-    await h.press(easyButton(h), h.tg.lastMessageId());
-    const line = "Все 2 000 слов в работе! 🎉 Дальше — повторения по расписанию. Свои слова можно добавлять в любой момент.";
-    expect(h.lastText().startsWith(`${line} Пройденные слова покрывают ≈80% обычного текста.\n\n${ru.doneTitle}`)).toBe(true);
+    // Level 2 has words, and the screen that ends the session knows why no new word came; it is shown without that reason for now.
+    expect(h.lastText()).toBe([ru.doneTitle, ru.doneToday(2, 0), ru.streak(1)].join("\n"));
+    expect(await repo.getUser(user.id)).toMatchObject({ level: 1, levels: 1 });
+    expect(await repo.userDeckIds(user.id)).toHaveLength(1);
     await h.text("/learn");
     expect(h.lastText().startsWith(ru.doneTitle)).toBe(true);
-  });
-
-  it("renderLevelUp picks the transition or the congratulation and leaves out unknown coverage", () => {
-    expect(renderLevelUp({ from: 3, to: 4, coveragePct: 54, total: 100 }, "ru")).toBe("Все 100 слов уровня 3 в работе. Открываю уровень 4. Пройденные слова покрывают ≈54% обычного текста.");
-    expect(renderLevelUp({ from: 3, to: 4, coveragePct: null, total: 100 }, "ru")).toBe("Все 100 слов уровня 3 в работе. Открываю уровень 4.");
-    // The number is the level's own: a level that got a 101st word says so.
-    expect(renderLevelUp({ from: 3, to: 4, coveragePct: null, total: 101 }, "ru")).toBe("Все 101 слово уровня 3 в работе. Открываю уровень 4.");
-    expect(renderLevelUp({ from: 3, to: 4, coveragePct: null, total: 101 }, "tt")).toBe(tt.levelUp(3, 4, null, 101));
-    // A level whose deck the catalog does not have (a gap) has no words to speak of.
-    expect(renderLevelUp({ from: 3, to: 5, coveragePct: null, total: null }, "ru")).toBe("Открываю уровень 5.");
-    expect(renderLevelUp({ from: 20, to: null, coveragePct: null, total: 100 }, "ru")).toBe("Все 2 000 слов в работе! 🎉 Дальше — повторения по расписанию. Свои слова можно добавлять в любой момент.");
-    expect(renderLevelUp({ from: 5, to: 6, coveragePct: 61, total: 100 }, "tt")).toBe(tt.levelUp(5, 6, 61, 100));
-    expect(renderLevelUp({ from: 20, to: null, coveragePct: 80, total: 100 }, "tt")).toBe(tt.levelsDone(80));
-    expect(tt.levelUp(5, 6, 61, 100)).toContain("5 нче дәрәҗә");
-    expect(tt.levelUp(5, 6, 61, 100)).toContain("6 нчы дәрәҗә");
-    expect(tt.levelUp(5, 6, 61, 100)).toContain("≈61%");
-    expect(tt.levelUp(5, 6, null, 100)).not.toContain("≈");
   });
 });
 

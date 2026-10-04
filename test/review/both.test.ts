@@ -1,11 +1,14 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { type Direction, Repo } from "../../src/db/repo";
-import { ReviewService, directionsOf } from "../../src/review/service";
+import type { Direction, DirectionSetting, Repo } from "../../src/db/repo";
+import { mergeStreams } from "../../src/levels/order";
+import { levelBit, levelsOf } from "../../src/levels/scale";
+import { ReviewService, directionsOf, newScopeOf } from "../../src/review/service";
 import { type Rating, newMem } from "../../src/srs/fsrs";
 import { dayWindow, localDay } from "../../src/users/service";
+import { bulkCatalog } from "../helpers/catalog";
 import { gradedMem } from "../helpers/review";
-import { note, seedLevels, seedUser } from "../helpers/seed";
+import { note, seedCatalog, seedGuidedOrder, seedLearner } from "../helpers/seed";
 import { type Shown, allNewCards, seeded, study } from "../helpers/sim";
 
 const DAY = 86_400_000;
@@ -18,12 +21,16 @@ const BOTH: Direction[] = ["tt_ru", "ru_tt"];
 /** The cards of a sitting as text: «китап tt_ru new» for a card shown as new, «китап tt_ru» for a repetition. */
 const cards = (shown: Shown[]) => shown.map((c) => `${c.word} ${c.direction}${c.fresh ? " new" : ""}`);
 const fresh = (shown: Shown[]) => shown.filter((c) => c.fresh).map((c) => `${c.word} ${c.direction}`);
-const levelOf = async (repo: Repo, userId: number) => (await repo.getUser(userId))!.level;
+/** A1: китап, вакыт, авыл (and су with `four`); A2: су, юл when asked for. */
+const seedWords = (o: { four?: boolean; a2?: boolean } = {}) => seedCatalog(env.DB, [
+  ...["китап", "вакыт", "авыл", ...(o.four ? ["су"] : [])].map((word) => ({ level: 1, word })),
+  ...(o.a2 ? ["су", "юл"].map((word) => ({ level: 2, word })) : []),
+]);
 
-describe("both directions: a card that was hidden for a day is given later, and a level ends only when none is left", () => {
+describe("both directions: a card that was hidden for a day is given later", () => {
   it("the reverse card of a word that was repeated on the day the rest of its level was asked in reverse comes the next day", async () => {
-    // The reviewer's reproduction. A level of three words, direction «оба».
-    const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 3, patch: { direction: "both" } }); // китап, вакыт, авыл
+    await seedWords();
+    const { repo, user } = await seedLearner(env.DB, { now, patch: { direction: "both" } });
     // Day 1: «китап» is graded «Снова» and then learned, the other two «Легко». The reverse cards are hidden until tomorrow.
     const first = await study(repo, user.id, day(1), { rate: (v, nth) => (v.word === "китап" ? (nth === 0 ? 1 : 3) : 4) });
     expect(cards(first)).toEqual(["китап tt_ru new", "вакыт tt_ru new", "авыл tt_ru new", "китап tt_ru", "китап tt_ru"]);
@@ -41,39 +48,38 @@ describe("both directions: a card that was hidden for a day is given later, and 
     expect(asked!.n).toBe(6);
   });
 
-  it("the reverse cards a level still has for today come before the words of the next level; a card hidden for today does not hold the next level back", async () => {
-    const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 3, patch: { direction: "both" } }); // китап, вакыт, авыл
-    await seedLevels(env.DB, { 2: ["су", "юл"] }, { 1: 31 });
-    // Day 1: every word of level 1 is asked Tatar → Russian. The reverse cards are hidden until tomorrow, level 1 has
-    // nothing more for today, so level 2 opens the same day (ruling T8a); the learner leaves at its first word.
-    // «авыл», the last word of level 1, was graded «Хорошо» and is still on a learning step.
+  it("the reverse cards the started words have for today come before the words of the next checked level; a card hidden for today does not hold that level back", async () => {
+    await seedWords({ a2: true });
+    const { repo, user } = await seedLearner(env.DB, { now, patch: { direction: "both", levels: levelBit(1) | levelBit(2) } });
+    // Day 1: every word of A1 is asked Tatar → Russian. The reverse cards are hidden until tomorrow, A1 has nothing
+    // more for today, so A2 goes on the same day; the learner leaves at its first word, which has been shown.
+    // «авыл», the last word of A1, was graded «Хорошо» and is still on a learning step.
     const first = await study(repo, user.id, day(1), { rate: (v) => (v.word === "авыл" ? 3 : 4), leaveAt: (v) => v.word === "су" });
     expect(cards(first)).toEqual(["китап tt_ru new", "вакыт tt_ru new", "авыл tt_ru new"]);
-    expect(await levelOf(repo, user.id)).toBe(2);
-    // Day 2: «авыл» is repeated first, which hides its reverse card for the day. Level 1 still has two reverse cards
-    // for today: they come before the words of level 2. Then level 2 goes on — the hidden card of «авыл» does not stop it.
+    // Day 2: «авыл» is repeated first, which hides its reverse card for the day. A1 still has two reverse cards for
+    // today: they come before the words of A2. Then A2 goes on — the hidden card of «авыл» does not stop it.
     const second = await study(repo, user.id, day(2), { rate: () => 4 });
     expect(cards(second)).toEqual(["авыл tt_ru", "китап ru_tt new", "вакыт ru_tt new", "су tt_ru new", "юл tt_ru new"]);
-    expect(second.every((c) => c.levelUp === null)).toBe(true);
-    // Day 3: the card that was hidden comes first, before the reverse cards of level 2.
+    // Day 3: the card that was hidden comes first, before the reverse cards of A2.
     expect(cards(await study(repo, user.id, day(3), { rate: () => 4 }))).toEqual(["авыл ru_tt new", "су ru_tt new", "юл ru_tt new"]);
     expect(cards(await study(repo, user.id, day(4), { rate: () => 4 }))).toEqual([]);
+    expect((await repo.getUser(user.id))!.levels).toBe(levelBit(1) | levelBit(2));
   });
 
-  it("a level is not finished for opening the next one while it has a new card for today, and is finished when all it has left is hidden until tomorrow", async () => {
-    const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 3, patch: { direction: "both" } }); // китап, вакыт, авыл
-    // Day 1: the three words are asked Tatar → Russian; «авыл» stays on a learning step. No level 2 yet.
-    await study(repo, user.id, day(1), { rate: (v) => (v.word === "авыл" ? 3 : 4), waitForSteps: false });
-    expect(await levelOf(repo, user.id)).toBe(1);
-    await seedLevels(env.DB, { 2: ["су", "юл"] }, { 1: 31 });
-    // Day 2: «авыл» is repeated and hidden. Level 2 must not open before the two reverse cards level 1 has for today are asked.
+  it("a level checked on a later day: the reverse cards the started words have for today come first, then its words", async () => {
+    await seedWords({ a2: true });
+    const { repo, user } = await seedLearner(env.DB, { now, patch: { direction: "both" } });
+    // Day 1, A1 alone: the three words are asked Tatar → Russian; «авыл» stays on a learning step. No word of A2 comes.
+    const first = await study(repo, user.id, day(1), { rate: (v) => (v.word === "авыл" ? 3 : 4), waitForSteps: false });
+    expect(cards(first)).toEqual(["китап tt_ru new", "вакыт tt_ru new", "авыл tt_ru new"]);
+    await repo.updateUser(user.id, { levels: levelBit(1) | levelBit(2) });
     const second = await study(repo, user.id, day(2), { rate: () => 4 });
     expect(cards(second)).toEqual(["авыл tt_ru", "китап ru_tt new", "вакыт ru_tt new", "су tt_ru new", "юл tt_ru new"]);
-    expect(second.map((c) => c.levelUp?.to ?? null)).toEqual([null, null, null, 2, null]);
   });
 
   it("after a switch from one direction to both, the other direction of every word already learned is asked, a word repeated that day included", async () => {
-    const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 4 }); // китап, вакыт, авыл, су; Tatar → Russian only
+    await seedWords({ four: true });
+    const { repo, user } = await seedLearner(env.DB, { now }); // Tatar → Russian only
     // Day 1: the four words are learned in one direction; «вакыт» is left on a learning step.
     const first = await study(repo, user.id, day(1), { rate: (v) => (v.word === "вакыт" ? 3 : 4), waitForSteps: false });
     expect(cards(first)).toEqual(["китап tt_ru new", "вакыт tt_ru new", "авыл tt_ru new", "су tt_ru new"]);
@@ -86,7 +92,8 @@ describe("both directions: a card that was hidden for a day is given later, and 
   });
 
   it("after a switch from both directions to one, a card of that direction that was hidden earlier is still asked", async () => {
-    const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 3, patch: { direction: "both" } });
+    await seedWords();
+    const { repo, user } = await seedLearner(env.DB, { now, patch: { direction: "both" } });
     await study(repo, user.id, day(1), { rate: (v, nth) => (v.word === "китап" ? (nth === 0 ? 1 : 3) : 4) });
     await repo.updateUser(user.id, { mixCounter: 0 });
     expect(fresh(await study(repo, user.id, day(5), { rate: () => 3 }))).toEqual(["вакыт ru_tt", "авыл ru_tt"]);
@@ -96,7 +103,8 @@ describe("both directions: a card that was hidden for a day is given later, and 
   });
 
   it("a word whose grade was taken back and that was left for later is asked the next day, whatever came after it", async () => {
-    const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 3, patch: { direction: "both" } });
+    await seedWords();
+    const { repo, user } = await seedLearner(env.DB, { now, patch: { direction: "both" } });
     // «китап» is graded and the grade is taken back; the learner presses «Учить» again instead of grading it anew.
     // Its other card was hidden for the day by the grade, so the word waits until tomorrow with both cards new.
     const svc = new ReviewService(repo, day(1));
@@ -110,37 +118,78 @@ describe("both directions: a card that was hidden for a day is given later, and 
   });
 });
 
+describe("a learner who switches to both directions after 300 words", () => {
+  for (const mode of ["guided", "freq"] as const) {
+    it(`${mode}: the reverse cards of the started words come in the order of the mode`, { timeout: 60_000 }, async () => {
+      // A1 and A2, 200 words each, in every topic. The first 300 words of the order of the mode are started Tatar → Russian.
+      const catalog = await bulkCatalog(env.DB, { sizes: { 1: 200, 2: 200 } });
+      const { repo, user } = await seedLearner(env.DB, { now, patch: { levels: levelBit(1) | levelBit(2), newMode: mode, newPerDay: 20 } });
+      const order = mergeStreams([catalog], mode);
+      const started = order.slice(0, 300);
+      const stmts = started.map((n) => repo.insertCardStmt(user.id, n.id, "tt_ru", gradedMem(day(0))));
+      for (let i = 0; i < stmts.length; i += 100) await repo.batch(stmts.slice(i, i + 100));
+      // The orders differ: by frequency all of A1 comes before A2, by topic the two levels take turns.
+      expect(new Set(started.slice(0, 40).map((n) => n.level)).size).toBe(mode === "freq" ? 1 : 2);
+
+      await repo.updateUser(user.id, { direction: "both" });
+      const asked: string[] = [];
+      for (const d of [1, 2]) asked.push(...fresh(await study(repo, user.id, day(d), { rate: () => 3 })));
+      expect(asked).toEqual(started.slice(0, 40).map((n) => `${n.word} ru_tt`));
+      // No word that was not started has been touched: the reverse cards of the started words stand before it.
+      const untouched = await env.DB.prepare("SELECT COUNT(DISTINCT note_id) AS n FROM cards WHERE user_id = ?").bind(user.id).first<{ n: number }>();
+      expect(untouched!.n).toBe(300);
+    });
+  }
+});
+
 /** A simulated learner makes a few hundred grades; on a slow machine that is more than the default five seconds. */
 const SIMULATION_MS = 120_000;
 
-/** Four levels of six words. */
-const SMALL_LEVELS = Object.fromEntries([1, 2, 3, 4].map((l) => [l, Array.from({ length: 6 }, (_, i) => `сүз${l}х${i + 1}`)]));
+/** Four levels of six words: three themed topics and the basic words, nouns, verbs, an adjective and numerals in every level. */
+const SMALL_TOPICS = [1, 0, 2, 1, 0, 3];
+const SMALL_POS = ["n", "v", "num", "n", "adj", "num"];
+const smallLevel = (level: number, from = 0, to = 6) =>
+  Array.from({ length: to - from }, (_, i) => ({ level, word: `сүз${level}х${from + i + 1}`, topic: SMALL_TOPICS[(from + i) % 6]!, pos: SMALL_POS[(from + i) % 6]! }));
+async function seedSmallLevels() {
+  await seedCatalog(env.DB, [1, 2, 3, 4].flatMap((level) => smallLevel(level)));
+  await seedGuidedOrder(env.DB);
+}
+const FOUR_LEVELS = levelBit(1) | levelBit(2) | levelBit(3) | levelBit(4);
 
 /** A random grade: «Снова» 15 %, «Трудно» 10 %, «Хорошо» 45 %, «Легко» 30 %. */
 const randomGrade = (r: () => number): Rating => { const x = r(); return x < 0.15 ? 1 : x < 0.25 ? 2 : x < 0.7 ? 3 : 4; };
 
-describe("both directions: learners with days off and random grades (a simulation)", () => {
+describe("both directions: learners with days off, random grades and changing settings (a simulation)", () => {
   for (const seed of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
     it(`learner ${seed}: every new card is the first one of the documented order, none is asked twice as new, and in the end every word was asked in both directions`, { timeout: SIMULATION_MS }, async () => {
       const r = seeded(seed);
-      await seedLevels(env.DB, { 1: SMALL_LEVELS[1]! });
-      const { repo, user } = await seedUser(env.DB, { now, level: 1, patch: { direction: "both", newPerDay: seed % 2 ? 5 : 10 } });
-      await seedLevels(env.DB, { 2: SMALL_LEVELS[2]!, 3: SMALL_LEVELS[3]!, 4: SMALL_LEVELS[4]! });
+      await seedSmallLevels();
+      // The order: guided, by frequency, or guided with a chosen topic (which is cleared when its words run out).
+      const { repo, user } = await seedLearner(env.DB, {
+        now, patch: { direction: "both", newPerDay: seed % 2 ? 5 : 10, levels: FOUR_LEVELS, newMode: seed % 3 === 1 ? "freq" : "guided", topicNo: seed % 3 === 2 ? 2 : null },
+      });
       const askedNew = new Map<string, number>();
       const sitting = (start: number, rate: () => Rating) => study(repo, user.id, start, {
         rate,
         onCard: async (s, at) => {
           if (s.view.mem.state !== "new") return;
           // The new card on screen is the first of all the new cards the learner has today, in the documented order.
-          const all = await allNewCards(env.DB, user.id, localDay(TZ, at), BOTH);
+          const all = await allNewCards(env.DB, user.id, localDay(TZ, at));
           expect([s.view.noteId, s.view.direction]).toEqual([all[0]?.noteId, all[0]?.direction]);
           const key = `${s.view.noteId}:${s.view.direction}`;
           askedNew.set(key, (askedNew.get(key) ?? 0) + 1);
         },
       });
-      // Thirty days: three days in ten are days off; own words are added on day 8 by every second learner.
+      // Thirty days: three days in ten are days off; own words are added on day 8 by every second learner; the
+      // learners change what is checked: a level is unchecked for a while, the parts of speech are narrowed, a topic is chosen.
       for (let d = 1; d <= 30; d++) {
         if (d === 8 && seed % 2 === 0) await repo.insertNotes(await repo.customDeck(user.id, day(d)), [note("үзем1"), note("үзем2"), note("үзем3")]);
+        if (d === 5 && seed % 5 === 0) await repo.updateUser(user.id, { levels: FOUR_LEVELS & ~levelBit(1) });
+        if (d === 12 && seed % 5 === 0) await repo.updateUser(user.id, { levels: FOUR_LEVELS });
+        if (d === 6 && seed % 4 === 1) await repo.updateUser(user.id, { posGroups: 1 << 5 });
+        if (d === 14 && seed % 4 === 1) await repo.updateUser(user.id, { posGroups: 255 });
+        if (d === 10 && seed % 3 === 0) await repo.updateUser(user.id, { newMode: "topic", topicNo: 3 });
+        if (d === 18 && seed % 3 === 0) await repo.updateUser(user.id, { newMode: "guided", topicNo: 1 });
         if (r() < 0.3) continue;
         await repo.updateUser(user.id, { mixCounter: Math.floor(r() * 4) });
         await sitting(day(d), () => randomGrade(r));
@@ -150,9 +199,9 @@ describe("both directions: learners with days off and random grades (a simulatio
       for (let d = 31; d <= 90 && quiet < 2; d++) quiet = fresh(await sitting(day(d), () => (r() < 0.5 ? 3 : 4))).length ? 0 : quiet + 1;
       expect(quiet).toBe(2);
 
-      const notes = (await env.DB.prepare("SELECT n.id FROM notes n WHERE n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?)").bind(user.id).all<{ id: number }>()).results;
+      const notes = (await env.DB.prepare("SELECT n.id FROM notes n JOIN decks dk ON dk.id = n.deck_id WHERE n.level IS NOT NULL OR dk.owner_id = ?").bind(user.id).all<{ id: number }>()).results;
       expect(notes).toHaveLength(seed % 2 === 0 ? 27 : 24);
-      // Every word of every open deck was asked as new exactly once in each direction …
+      // Every word of every checked level and every own word was asked as new exactly once in each direction …
       const expected = notes.flatMap((n) => BOTH.map((d) => `${n.id}:${d}`)).sort();
       expect([...askedNew.keys()].sort()).toEqual(expected);
       expect([...askedNew.values()].every((n) => n === 1)).toBe(true);
@@ -161,78 +210,118 @@ describe("both directions: learners with days off and random grades (a simulatio
       expect(left!.n).toBe(0);
       const firsts = await env.DB.prepare("SELECT COUNT(*) AS n, COUNT(DISTINCT card_id) AS cards FROM review_log WHERE user_id = ? AND was_new = 1").bind(user.id).first<{ n: number; cards: number }>();
       expect(firsts).toEqual({ n: expected.length, cards: expected.length });
-      expect(await levelOf(repo, user.id)).toBe(4);
+      // The counters of started words agree with the cards: every word of the four levels, and the own words under (0, 0).
+      const counted = (await repo.progress(user.id)).reduce((sum, p) => sum + p.started, 0);
+      expect(counted).toBe(notes.length);
+      // The bot checked no level and chose no topic by itself; the topic of the guided order was cleared when it ran out.
+      expect((await repo.getUser(user.id))!).toMatchObject({ levels: FOUR_LEVELS, topicNo: null });
     });
   }
 });
 
-describe("the list of new cards the queue reads (Repo.candidateCards)", () => {
-  /** What the queue must list: the new cards of the own decks and of the lowest open level that has any today, in order, and their number. */
-  async function expectQueueMatches(repo: Repo, userId: number, at: number, directions: Direction[]) {
+describe("what the queue reads (Repo.queue) against a plain read of every note and card", () => {
+  const name = (c: { word: string; direction: Direction }) => `${c.word} ${c.direction}`;
+  /**
+   * What one read of the queue must hold, for the learner's settings and the read positions stored on the row:
+   * `ownNew` — the new cards of the own decks, `newRows` — the catalog cards that exist and were never graded, and for
+   * every checked level the cards of its first word that has none yet. `directions` replaces the asked directions;
+   * positions stored for other directions do not count then.
+   */
+  async function expectQueueMatches(repo: Repo, userId: number, at: number, directions?: Direction[]) {
+    const user = (await repo.getUser(userId))!;
     const w = dayWindow(TZ, at);
-    const all = await allNewCards(env.DB, userId, w.today, directions);
-    const lowest = all.find((c) => c.levelNo !== null)?.levelNo ?? null;
-    const want = all.filter((c) => c.levelNo === null || c.levelNo === lowest).slice(0, 50).map((c) => `${c.word} ${c.direction}`);
-    const c = await repo.candidateCards(userId, { ...w, directions });
-    expect(c.newNotes.map((n) => `${n.word} ${n.direction}`)).toEqual(want);
-    expect(c.counts.newAvailable).toBe(want.length);
+    const asked = directions ?? directionsOf(user);
+    const setting: DirectionSetting = asked.length === 2 ? "both" : asked[0]!;
+    const all = await allNewCards(env.DB, userId, w.today, asked);
+    const q = await repo.queue(userId, { ...w, directions: asked }, newScopeOf({ ...user, direction: setting }));
+    expect(q.ownNew.map(name)).toEqual(all.filter((c) => c.from === "own").slice(0, 50).map(name));
+    // One read takes twenty of these cards; a word whose two cards stand at the cut may be cut either way.
+    const rows = all.filter((c) => c.from === "row").map(name);
+    if (rows.length <= 20) expect(q.newRows.map(name)).toEqual(rows);
+    else expect(q.newRows.map(name).slice(0, 19)).toEqual(rows.slice(0, 19));
+    const stream = all.filter((c) => c.from === "stream");
+    const levels = user.newMode === "topic" && user.topicNo === null ? [] : levelsOf(user.levels);
+    expect(Object.keys(q.streams).map(Number)).toEqual(levels);
+    for (const level of levels) {
+      const head = stream.find((c) => c.level === level);
+      expect(q.streams[level]!.map(name), `level ${level}`).toEqual(stream.filter((c) => c.noteId === head?.noteId).map(name));
+    }
+    const merged = mergeStreams(Object.values(q.streams).map((s) => s ?? []), user.newMode);
+    expect(merged.slice(0, 1).map(name)).toEqual(stream.slice(0, 1).map(name));
   }
 
-  it("a card that waits in a deck whose notes enclose the notes of another deck is found, however many cards wait between them", async () => {
+  it("a card that waits in an own deck whose notes enclose the notes of a level is found, however many cards wait between them", async () => {
     // Two own words are typed, then a level of sixty words appears, then two more own words: the ids of the own
     // deck enclose the level. Direction «оба»; every word is started Tatar → Russian. The reverse cards of the level
     // wait in state 'new' — sixty of them between the own notes — and so does the reverse card of the last own word.
-    const repo = new Repo(env.DB);
-    const id = await repo.insertUser({ tgId: 1, chatId: 1, lang: "ru", now });
-    await repo.updateUser(id, { onboardingStep: null, tzOffsetMin: TZ, level: 1, direction: "both" });
+    const { repo, user } = await seedLearner(env.DB, { now, patch: { direction: "both" } });
+    const id = user.id;
     const deck = await repo.customDeck(id, now);
     const early = await repo.insertNotes(deck, [note("үзем1"), note("үзем2")]);
-    const l1 = (await seedLevels(env.DB, { 1: Array.from({ length: 60 }, (_, i) => `сүз${i + 1}`) }))[1]!;
-    await repo.subscribe(id, l1, now);
+    const level = (await bulkCatalog(env.DB, { sizes: { 1: 60 } })).map((n) => n.id);
     const late = await repo.insertNotes(deck, [note("үзем3"), note("үзем4")]);
-    const level = (await env.DB.prepare("SELECT id FROM notes WHERE deck_id = ? ORDER BY id").bind(l1).all<{ id: number }>()).results.map((r) => r.id);
+    expect(Math.min(...level)).toBeGreaterThan(Math.max(...early));
+    expect(Math.min(...late)).toBeGreaterThan(Math.max(...level));
     const stmts: D1PreparedStatement[] = [];
     for (const n of [...early, ...level, ...late]) stmts.push(repo.insertCardStmt(id, n, "tt_ru", gradedMem(day(-1))));
     for (const n of [...early, late[0]!]) stmts.push(repo.insertCardStmt(id, n, "ru_tt", gradedMem(day(-1))));
     for (const n of [...level, late[1]!]) stmts.push(repo.insertCardStmt(id, n, "ru_tt", newMem(day(-1)), "2026-09-27"));
     for (let i = 0; i < stmts.length; i += 50) await repo.batch(stmts.slice(i, i + 50));
 
-    const list = async () => (await repo.candidateCards(id, { ...dayWindow(TZ, now), directions: BOTH })).newNotes.map((n) => `${n.word} ${n.direction}`);
-    expect((await list()).slice(0, 3)).toEqual(["үзем4 ru_tt", "сүз1 ru_tt", "сүз2 ru_tt"]);
+    const read = async (at = now) => {
+      const q = await repo.queue(id, { ...dayWindow(TZ, at), directions: BOTH }, newScopeOf((await repo.getUser(id))!));
+      return { own: q.ownNew.map(name), rows: q.newRows.map(name) };
+    };
+    expect((await read()).own).toEqual(["үзем4 ru_tt"]);
+    expect((await read()).rows.slice(0, 2)).toEqual(["сүз1х1 ru_tt", "сүз1х2 ru_tt"]);
     await expectQueueMatches(repo, id, now, BOTH);
     // The own word is repeated today: its reverse card is hidden until tomorrow, the level goes on.
     await env.DB.prepare("UPDATE cards SET buried_day = ? WHERE user_id = ? AND note_id = ? AND direction = 'ru_tt'").bind(dayWindow(TZ, now).today, id, late[1]!).run();
-    expect((await list()).slice(0, 2)).toEqual(["сүз1 ru_tt", "сүз2 ru_tt"]);
+    expect((await read()).own).toEqual([]);
+    expect((await read()).rows.slice(0, 2)).toEqual(["сүз1х1 ru_tt", "сүз1х2 ru_tt"]);
     await expectQueueMatches(repo, id, now, BOTH);
     await expectQueueMatches(repo, id, now + DAY, BOTH);
     // The level is asked in reverse to its last word but one; the own deck and the level each have one card left.
     await env.DB.prepare("UPDATE cards SET state = 'review', reps = 1 WHERE user_id = ? AND direction = 'ru_tt' AND note_id IN (SELECT value FROM json_each(?))").bind(id, JSON.stringify(level.filter((_, i) => i !== 58))).run();
-    expect(await list()).toEqual(["сүз59 ru_tt"]);
+    expect(await read()).toEqual({ own: [], rows: ["сүз1х59 ru_tt"] });
     await expectQueueMatches(repo, id, now + DAY, BOTH);
-    expect((await repo.candidateCards(id, { ...dayWindow(TZ, now + DAY), directions: BOTH })).newNotes.map((n) => n.word)).toEqual(["үзем4", "сүз59"]);
+    expect(await read(now + DAY)).toEqual({ own: ["үзем4 ru_tt"], rows: ["сүз1х59 ru_tt"] });
   });
 
   for (const seed of [11, 12, 13, 14]) {
-    it(`learner ${seed}: after every grade, undo and change of direction the list is what a plain read of every open deck gives`, { timeout: SIMULATION_MS }, async () => {
+    it(`learner ${seed}: after every grade, undo and change of the settings the queue holds what a plain read gives`, { timeout: SIMULATION_MS }, async () => {
       const r = seeded(seed);
-      await seedLevels(env.DB, { 1: SMALL_LEVELS[1]! });
-      const { repo, user } = await seedUser(env.DB, { now, level: 1, patch: { direction: seed % 3 === 0 ? "tt_ru" : "both", newPerDay: 5 } });
-      await seedLevels(env.DB, { 2: SMALL_LEVELS[2]!, 3: SMALL_LEVELS[3]!, 4: SMALL_LEVELS[4]! });
+      const oneOf = <T>(list: readonly T[]): T => list[Math.floor(r() * list.length)]!;
+      await seedSmallLevels();
+      const { repo, user } = await seedLearner(env.DB, { now, patch: { direction: seed % 3 === 0 ? "tt_ru" : "both", newPerDay: 5, levels: FOUR_LEVELS } });
       const me = async () => (await repo.getUser(user.id))!;
+      /** The learner changes one of the settings that decide the new words. */
+      const changeSettings = async () => {
+        const x = r();
+        if (x < 0.3) await repo.updateUser(user.id, { direction: oneOf(["tt_ru", "ru_tt", "both", "both"] as const) });
+        else if (x < 0.5) await repo.updateUser(user.id, { levels: oneOf([FOUR_LEVELS, levelBit(1), levelBit(2) | levelBit(4), FOUR_LEVELS & ~levelBit(1), levelBit(3)]) });
+        else if (x < 0.65) await repo.updateUser(user.id, { posGroups: oneOf([255, 255, 1 << 5, (1 << 0) | (1 << 1)]) });
+        else if (x < 0.85) await repo.updateUser(user.id, { newMode: oneOf(["guided", "freq", "topic"] as const) });
+        else await repo.updateUser(user.id, { topicNo: oneOf([null, 0, 1, 2, 3]) });
+      };
       for (let d = 1; d <= 40; d++) {
         // Own words on day 6, two of them words of the levels 3 and 4 (the last word of level 4), which the levels then skip;
-        // more own words on day 25; a word added to level 1 on day 18, when the levels above it are in work.
+        // more own words on day 25; on day 18 the catalog is loaded again with a new word in level 1: the version moves.
         if (d === 6) await repo.insertNotes(await repo.customDeck(user.id, day(d)), [note("үзем1"), note("сүз3х2"), note("үзем2"), note("сүз4х6"), note("үзем3")]);
-        if (d === 18) await seedLevels(env.DB, { 1: ["сүз1х7"] });
+        if (d === 18) {
+          await seedCatalog(env.DB, smallLevel(1, 6, 7));
+          await seedGuidedOrder(env.DB);
+          await env.DB.prepare("UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'catalog_version'").run();
+        }
         if (d === 25) await repo.insertNotes(await repo.customDeck(user.id, day(d)), [note("үзем4"), note("үзем5")]);
-        // Now and then the learner changes the direction, sometimes in the middle of a day (below).
-        if (r() < 0.12) await repo.updateUser(user.id, { direction: (["tt_ru", "ru_tt", "both", "both"] as const)[Math.floor(r() * 4)]! });
+        // Now and then the learner changes a setting, sometimes in the middle of a day (below).
+        if (r() < 0.2) await changeSettings();
         if (r() < 0.25) continue;
         let at = day(d);
         await repo.updateUser(user.id, { mixCounter: Math.floor(r() * 4) });
         let s = await new ReviewService(repo, at).nextScreen(await me());
         for (let n = 0; n < 60 && s.kind === "card"; n++) {
-          await expectQueueMatches(repo, user.id, at, directionsOf(await me()));
+          await expectQueueMatches(repo, user.id, at);
           at += 5000;
           s = await new ReviewService(repo, at).grade(await me(), s.view.cardId, s.view.reps, randomGrade(r));
           const x = r();
@@ -240,13 +329,13 @@ describe("the list of new cards the queue reads (Repo.candidateCards)", () => {
             // The grade is taken back; half of the time the learner then presses «Учить» instead of grading the card again.
             s = await new ReviewService(repo, at).undo(await me());
             if (r() < 0.5) s = await new ReviewService(repo, at).nextScreen(await me());
-          } else if (x < 0.11) {
-            await repo.updateUser(user.id, { direction: (["tt_ru", "ru_tt", "both"] as const)[Math.floor(r() * 3)]! });
+          } else if (x < 0.13) {
+            await changeSettings();
             s = await new ReviewService(repo, at).nextScreen(await me());
           }
         }
-        await expectQueueMatches(repo, user.id, at, directionsOf(await me()));
-        // The list in each of the three settings, whatever the learner has chosen.
+        await expectQueueMatches(repo, user.id, at);
+        // The lists in each of the three directions, whatever the learner has chosen.
         for (const dirs of [["tt_ru"], ["ru_tt"], BOTH] as Direction[][]) await expectQueueMatches(repo, user.id, at, dirs);
       }
     });

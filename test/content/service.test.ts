@@ -36,6 +36,14 @@ async function catalogLinks() {
   ).all<{ word: string; source_url: string | null }>();
   return results;
 }
+/**
+ * The new words the session queue has for the learner (Tatar → Russian) with these levels checked: the own words, then
+ * the next word of each level.
+ */
+async function newWords(repo: Repo, userId: number, levels: number[]): Promise<string[]> {
+  const q = await repo.queue(userId, { ...dayWindow(180, T), directions: ["tt_ru"] }, { levels, posCodes: null, mode: "freq", topicNo: null, spans: {}, spansVersion: 0 });
+  return [...q.ownNew, ...levels.flatMap((level) => q.streams[level] ?? [])].map((n) => n.word);
+}
 const jobsCount = async () => (await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs").first<{ n: number }>())!.n;
 /** The preview after a translation was typed for it; throws when the text was not applied. */
 const edit = async (svc: ContentService, user: User, text: string) => {
@@ -198,12 +206,10 @@ describe("content service: own words", () => {
       exampleSrc: "own", audioFileId: null, sourceUrl: null, ai: false,
     }]);
     expect(llm.urls).toEqual([]);
-    // The copy keeps the catalog spelling, and the level word is not shown again when level 5 opens.
+    // The copy keeps the catalog spelling, and the level word is not shown again when level 5 is checked.
     await svc.confirmAdd(user, r.previewId);
     expect((await ownNotes(user.id)).map((n) => n.word)).toEqual(["Хәлләр ничек?"]);
-    await repo.subscribe(user.id, (await repo.getDeckBySlug("l05"))!.id, T);
-    const c = await repo.candidateCards(user.id, { ...dayWindow(180, T), directions: ["tt_ru"] });
-    expect(c.newNotes.filter((n) => n.word === "Хәлләр ничек?")).toHaveLength(1);
+    expect((await newWords(repo, user.id, [1, 5])).filter((word) => word === "Хәлләр ничек?")).toHaveLength(1);
   });
 
   it("copies the catalog card with its voice into My words under the user's link, in the catalog spelling", async () => {
@@ -222,24 +228,18 @@ describe("content service: own words", () => {
     expect(await jobsCount()).toBe(0);
   });
 
-  it("does not show the word twice when its level opens later", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 1 }); // l01: китап
+  it("does not show the word twice when its level is checked later", async () => {
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, level: 1, words: 1 }); // l01: китап
     const l5 = (await seedLevels(env.DB, { 5: ["бәхет", "шатлык"] }))[5]!;
     const svc = service(repo, failingLlm());
     const r = await preview(svc, user, "бәхет");
     await svc.confirmAdd(user, r.previewId);
     await repo.subscribe(user.id, l5, T);
-    const c = await repo.candidateCards(user.id, { ...dayWindow(180, T), directions: ["tt_ru"] });
-    expect(c.newNotes.filter((n) => n.word === "бәхет").length).toBe(1);
-    // The own copy comes first; then the lowest level that has new words, which is level 1.
-    expect(c.newNotes.map((n) => n.word)).toEqual(["бәхет", "китап"]);
-    expect(c.counts.newAvailable).toBe(2);
-    // Once level 1 is done, level 5 gives only its other word.
-    const kitap = c.newNotes.find((n) => n.word === "китап")!;
-    await repo.insertCard(user.id, kitap.noteId, "tt_ru", gradedMem(T));
-    const next = await repo.candidateCards(user.id, { ...dayWindow(180, T), directions: ["tt_ru"] });
-    expect(next.newNotes.map((n) => n.word)).toEqual(["бәхет", "шатлык"]);
-    expect(next.counts.newAvailable).toBe(2);
+    // The own copy comes first; then the next word of each checked level: level 5 gives its other word, not «бәхет».
+    expect(await newWords(repo, user.id, [1, 5])).toEqual(["бәхет", "китап", "шатлык"]);
+    // Once level 1 is done, level 5 still gives only its other word.
+    await repo.insertCard(user.id, noteIds[0]!, "tt_ru", gradedMem(T));
+    expect(await newWords(repo, user.id, [1, 5])).toEqual(["бәхет", "шатлык"]);
     // Typed again, it is a word the user already learns: the own copy, which is the one that is shown, gets the link.
     expect(await svc.prepareAdd(user, "бәхет https://example.com/x", [])).toEqual(
       { kind: "duplicates-only", duplicates: [{ word: "бәхет", deckTitle: "Мои слова", linkAdded: true }] });

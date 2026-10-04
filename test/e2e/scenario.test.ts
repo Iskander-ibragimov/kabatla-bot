@@ -49,7 +49,7 @@ describe("first day and next day", () => {
       await h.press(g[2]!, sessionMsg);
     }
     expect(h.lastText()).toMatch(/Сегодня: \d+ повт\./);
-    expect(h.lastText()).toContain("Всего:");
+    expect(h.lastText()).not.toContain("Всего:");
 
     const repo = new Repo(env.DB);
     const u = (await repo.getUserByTg(42))!;
@@ -76,7 +76,7 @@ describe("first day and next day", () => {
     expect(await maxDays()).toBeGreaterThan(before);
   });
 
-  it("Tatar interface: onboarding → 100 words of the level → level-up with coverage → a level 2 card", async () => {
+  it("Tatar interface: onboarding → 100 words of the level → the session ends; level 2 is not opened", async () => {
     const words100 = Array.from({ length: 100 }, (_, i) => `сүз${i + 1}`);
     await seedLevels(env.DB, { 1: words100, 2: ["авыл"] }, { 1: 31 });
     const db = countingDb(env.DB);
@@ -114,17 +114,16 @@ describe("first day and next day", () => {
       expect(easy.text.startsWith(`${tt.easy} `)).toBe(true);
       await press(easy.callback_data);
     }
-    expect(h.lastText()).toContain(tt.levelUp(1, 2, 31, 100));
-    expect(h.lastText().startsWith(`${tt.levelUp(1, 2, 31, 100)}\n\n🔵 1 · 🔴 0 · 🟢 0\n<b>авыл</b>`)).toBe(true);
-    expect(h.lastText()).toContain("авыл");
-    expect(tt.levelUp(1, 2, 31, 100)).toContain("≈31%");
+    // Every word of the checked level is in work: the session ends, in Tatar, and the bot opens nothing by itself.
+    expect(h.lastText()).toBe([tt.doneTitle, tt.doneToday(100, 0), tt.streak(1)].join("\n"));
+    expect(h.lastText()).not.toContain("авыл");
     expect(maxTelegramCallsPerUpdate).toBeLessThanOrEqual(3);
     expect(maxD1CallsPerUpdate).toBeLessThanOrEqual(8);
 
     const repo = new Repo(env.DB);
     const u = (await repo.getUserByTg(42))!;
-    expect(u).toMatchObject({ lang: "tt", level: 2, newPerDay: 20, onboardingStep: null });
-    expect(await repo.userDeckIds(u.id)).toEqual([(await repo.getDeckBySlug("l01"))!.id, (await repo.getDeckBySlug("l02"))!.id]);
+    expect(u).toMatchObject({ lang: "tt", level: 1, levels: 1, newPerDay: 20, onboardingStep: null });
+    expect(await repo.userDeckIds(u.id)).toEqual([(await repo.getDeckBySlug("l01"))!.id]);
     const log = await env.DB.prepare("SELECT COUNT(*) AS n, SUM(was_new) AS fresh, MIN(rating) AS lo FROM review_log WHERE user_id = ?").bind(u.id).first<{ n: number; fresh: number; lo: number }>();
     expect(log).toEqual({ n: 100, fresh: 100, lo: 4 });
   });

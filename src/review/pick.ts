@@ -1,5 +1,7 @@
-import type { Candidates, CardRow, NewNote } from "../db/repo";
+import type { CardRow, NewNote } from "../db/repo";
 
+/** What a card is picked from: the cards on a learning step and the reviews due today, each by due time, and the new cards in the order they are to be given. */
+export interface Candidates { learning: CardRow[]; review: CardRow[]; newNotes: NewNote[] }
 export type Pick = { kind: "card"; card: CardRow } | { kind: "new"; note: NewNote };
 const LEARN_AHEAD_MS = 60_000;
 

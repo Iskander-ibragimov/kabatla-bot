@@ -1,7 +1,8 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import type { Direction, Repo, User } from "../../src/db/repo";
+import { type Direction, Repo, type User } from "../../src/db/repo";
 import { type Mem, newMem } from "../../src/srs/fsrs";
+import { countingDb } from "../helpers/countingDb";
 import { gradedMem, logStmt } from "../helpers/review";
 import { note, seedCatalog, seedLearner } from "../helpers/seed";
 
@@ -195,16 +196,26 @@ describe("what the catalog holds and what was done today", () => {
     ]);
   });
 
-  it("todayLog counts the grades of today that were not undone, and the words learned today", async () => {
+  it("dayEnd counts the grades of today that were not undone and the words learned today, and reads the counters only when asked, all in one D1 call", async () => {
     const { repo, user } = await seedLearner(env.DB, { now: T });
     const other = await seedLearner(env.DB, { now: T, tgId: 2 });
     const dayStart = T - 6 * 60 * MIN;
-    expect(await repo.todayLog(user.id, dayStart)).toEqual({ reviewsToday: 0, learnedToday: 0 });
+    expect(await repo.dayEnd(user.id, dayStart, true)).toEqual({ reviewsToday: 0, learnedToday: 0, progress: [], totals: [] });
     const log = (userId: number, reviewedAt: number) =>
       logStmt(env.DB, { cardId: 1, userId, rating: 3, stateBefore: newMem(T), intervalBeforeDays: 0, intervalAfterMs: MIN, reviewedAt, wasNew: false });
     await repo.batch([log(user.id, dayStart), log(user.id, T - 3 * MIN), log(user.id, T - 2 * MIN), log(user.id, T - MIN), log(user.id, dayStart - 1), log(other.user.id, T)]);
     await env.DB.prepare("UPDATE review_log SET learned_now = 1 WHERE user_id = ? AND reviewed_at IN (?, ?, ?)").bind(user.id, T - 3 * MIN, T - MIN, dayStart - 1).run();
     await env.DB.prepare("UPDATE review_log SET undone = 1 WHERE user_id = ? AND reviewed_at = ?").bind(user.id, T - MIN).run();
-    expect(await repo.todayLog(user.id, dayStart)).toEqual({ reviewsToday: 3, learnedToday: 1 });
+    expect(await repo.dayEnd(user.id, dayStart, false)).toEqual({ reviewsToday: 3, learnedToday: 1, progress: [], totals: [] });
+    // With the counters: the pairs the learner started words in and the sizes of the catalog, as `progress` and `catalogTotals` give them.
+    const [id] = await seedCatalog(env.DB, [{ level: 1, word: "бер", topic: 2 }, { level: 2, word: "ике", topic: 0 }]);
+    await grade(repo, user, await newCard(repo, user, id!), newMem(T));
+    const db = countingDb(env.DB);
+    expect(await new Repo(db).dayEnd(user.id, dayStart, true)).toEqual({
+      reviewsToday: 4, learnedToday: 1, progress: await repo.progress(user.id), totals: await repo.catalogTotals(),
+    });
+    expect(db.calls).toBe(1);
+    expect(await repo.progress(user.id)).toEqual([{ level: 1, topicNo: 2, started: 1 }]);
+    expect(await repo.catalogTotals()).toHaveLength(2);
   });
 });

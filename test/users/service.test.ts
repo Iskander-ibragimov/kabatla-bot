@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Repo } from "../../src/db/repo";
+import { levelBit } from "../../src/levels/scale";
 import { PLACEMENT, placementLevel } from "../../src/users/placement";
 import { advanceOnboarding, getOrCreate, levelSlug, langFromTelegram, nextOccurrence, offsetFromReported, setSetting, startOnboarding } from "../../src/users/service";
 import { seedLevels } from "../helpers/seed";
@@ -75,6 +76,8 @@ describe("users", () => {
     expect(await step("180")).toEqual({ kind: "finished", remindAt: "09:00", tzOffsetMin: 180, level: 4 });
     expect(await repo.userDeckIds(user.id)).toEqual([deckIds[4]]);
     expect(user).toMatchObject({ onboardingStep: null, onboardingData: null, level: 4, newPerDay: 10 });
+    // Until the onboarding asks for the levels: the start level is the one checked level, so the session gives its words.
+    expect(user.levels).toBe(levelBit(4));
   });
 
   /** A user on the time-zone step who was placed at `level`. */
@@ -83,6 +86,22 @@ describe("users", () => {
     await repo.updateUser(user.id, { onboardingStep: "tz", level });
     return (await repo.getUser(user.id))!;
   }
+
+  it("the finish checks the start level on the scale A1–C1, and C1 for a start level above it (until the onboarding asks for the levels)", async () => {
+    const repo = new Repo(env.DB);
+    await seedLevels(env.DB, { 2: ["ике"], 9: ["тугыз"] });
+    for (const [tgId, placed, level, levels] of [[31, 2, 2, levelBit(2)], [32, 12, 9, levelBit(5)]] as const) {
+      const user = await placedAt(repo, tgId, placed);
+      expect(user.levels).toBe(levelBit(1));
+      await advanceOnboarding(repo, user, "180", T);
+      expect(await repo.getUser(user.id)).toMatchObject({ level, levels });
+    }
+    // An answer that finishes nothing checks nothing.
+    const late = await placedAt(repo, 33, 2);
+    await repo.updateUser(late.id, { onboardingStep: null });
+    expect(await advanceOnboarding(repo, late, "180", T)).toEqual({ kind: "stale" });
+    expect((await repo.getUser(late.id))!.levels).toBe(levelBit(1));
+  });
 
   describe("start level on an incomplete catalog (ruling T16b)", () => {
     it("starts at the highest existing level not above the placed one", async () => {

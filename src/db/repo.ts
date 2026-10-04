@@ -73,9 +73,6 @@ export interface NoteRow extends NoteFields { id: number; deckId: number }
 export interface UserNote extends NoteRow { deckTitleRu: string; deckTitleTt: string; owned: boolean }
 export interface CardRow extends NoteFields { id: number; noteId: number; direction: Direction; mem: Mem; buriedDay: string | null }
 export interface NewNote extends NoteFields { noteId: number; direction: Direction }
-/** `newAvailable`: how many new cards the queue found, as many as `newNotes` holds: zero means the open decks have none for today. */
-export interface QueueCounts { learning: number; review: number; newAvailable: number; newDoneToday: number; easyNewToday: number }
-export interface Candidates { learning: CardRow[]; review: CardRow[]; newNotes: NewNote[]; counts: QueueCounts }
 /**
  * Which catalog words may come as new ones: the checked levels, the card codes of the checked part-of-speech groups
  * (null: all), the order, the chosen topic, and the read positions per level (`Span`) with the catalog version they
@@ -98,6 +95,10 @@ export interface Queue {
   counts: { learning: number; review: number; newDoneToday: number; easyNewToday: number };
   catalogVersion: number; hasCards: boolean;
 }
+/** The words a user has started in one pair (level, topic); own words are the pair (0, 0). */
+export interface PairStarted { level: number; topicNo: number; started: number }
+/** The cards the catalog has in one pair (level, topic). */
+export interface PairTotal { level: number; topicNo: number; total: number }
 /** One level of the catalog as a user sees it; `seen` counts the notes that were started or are skipped as copies of own words, in an open level; 0 for a closed one. */
 export interface LevelRow { levelNo: number; total: number; coveragePct: number | null; open: boolean; seen: number }
 export interface DayWindow { dayStartMs: number; dayEndMs: number; today: string; directions: Direction[]; limitEach?: number }
@@ -259,46 +260,38 @@ export const unshownInTail = (user: string, deck: string, a: Asked, limit: numbe
  */
 export const newCardRows = (user: string, a: Asked, limit: number) =>
   `(SELECT COUNT(*) FROM (SELECT 1 FROM ${NEW_CARDS} WHERE f.user_id = ${user} AND f.state = 'new' AND ${askedDirection("f", a)} LIMIT ${Math.trunc(limit)}))`;
-/** Subscribes user ?1 to the deck of the level the user is on now, at time ?2; nothing when the catalog has no such deck or the user is past the last level. */
-const OPEN_CURRENT_LEVEL =
-  `INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) SELECT u.id, d.id, ?2 FROM users u JOIN decks d ON d.level_no = u.level AND d.level_no <= ${LAST_LEVEL} WHERE u.id = ?1`;
 /** A card `c` with its note `n`; the viewer of the note is the user the card belongs to. */
 const CARD_COLS = `c.id, c.note_id, c.direction, c.state, c.step, c.stability, c.difficulty, c.due, c.last_review, c.scheduled_days, c.reps, c.lapses, c.buried_day, ${noteCols("c.user_id")}`;
 
 /**
- * The new cards of the user's decks for today, a statement of its own: one row per note, with `seen_tt` and `seen_ru`
- * telling which of its directions are started. `ownOnly`: only the decks that have an owner («Мои слова» and the AI
- * decks); otherwise every deck the user is subscribed to, the own ones first and then the levels by number.
+ * The new cards of the decks the user owns («Мои слова» and the AI decks) for today, a statement of its own: one row
+ * per note, in the order of the note ids, with `seen_tt` and `seen_ru` telling which of its directions are started.
  * `user`, `a` and `limit` are bind markers (or literals): the user, the asked directions with the user's day, and
  * the most notes to give.
  *
- * `todo`: the decks that have a new card for today. `work`: the own decks among them and the lowest such level;
- * `whole`: the deck is read note by note (the first half of `fresh`), otherwise its new cards are all rows in state
- * 'new' and only their notes are read (the second half); see `readWhole`. A level word the user already owns (same
- * word_key in a deck with owner_id = user) counts as shown and is skipped.
+ * `todo`: the own decks that have a new card for today. `work`: the same decks with `whole`: the deck is read note by
+ * note (the first half of `fresh`), otherwise its new cards are all rows in state 'new' and only their notes are read
+ * (the second half); see `readWhole`.
  */
-const newInDecks = (user: string, a: Asked, limit: string, ownOnly: boolean) => {
-  const cols = `n.id AS note_id, ${noteCols(user, "dk.owner_id")}, ${startedIn("tt_ru")} AS seen_tt, ${startedIn("ru_tt")} AS seen_ru,
-            (dk.kind = 'catalog') AS level_deck, COALESCE(dk.level_no, 0) AS level_no`;
+const newInOwnDecks = (user: string, a: Asked, limit: string) => {
+  const cols = `n.id AS note_id, ${noteCols(user, "dk.owner_id")}, ${startedIn("tt_ru")} AS seen_tt, ${startedIn("ru_tt")} AS seen_ru`;
   const open = `GROUP BY n.id HAVING COALESCE(MAX(c.buried_day IS ${a.today}), 0) = 0 AND (seen_tt < ${a.tt} OR seen_ru < ${a.ru})`;
   return `WITH todo AS MATERIALIZED (
-          SELECT dk.id, dk.kind, dk.level_no FROM user_decks ud JOIN decks dk ON dk.id = ud.deck_id
-          WHERE ud.user_id = ${user}${ownOnly ? " AND dk.owner_id IS NOT NULL" : ""} AND ${hasNewToday(user, "dk", a)}),
-        work AS MATERIALIZED (
-          SELECT t.id, ${readWhole(user, "t", a)} AS whole FROM todo t
-          WHERE t.level_no IS NULL OR t.level_no = (SELECT MIN(level_no) FROM todo)),
+          SELECT dk.id, dk.kind FROM user_decks ud JOIN decks dk ON dk.id = ud.deck_id
+          WHERE ud.user_id = ${user} AND dk.owner_id IS NOT NULL AND ${hasNewToday(user, "dk", a)}),
+        work AS MATERIALIZED (SELECT t.id, ${readWhole(user, "t", a)} AS whole FROM todo t),
         fresh AS (
           SELECT ${cols}
           FROM work w CROSS JOIN notes n ON n.deck_id = w.id JOIN decks dk ON dk.id = n.deck_id LEFT JOIN cards c ON c.user_id = ${user} AND c.note_id = n.id
-          WHERE w.whole AND NOT ${ownedCopy(user)}
+          WHERE w.whole
           ${open}
           UNION ALL
           SELECT ${cols}
           FROM work w CROSS JOIN ${NEW_CARDS} ON f.user_id = ${user} AND f.state = 'new' AND ${inNoteRange("f", "w")}
             CROSS JOIN notes n ON n.id = f.note_id JOIN decks dk ON dk.id = n.deck_id LEFT JOIN cards c ON c.user_id = ${user} AND c.note_id = n.id
-          WHERE NOT w.whole AND n.deck_id = w.id AND NOT ${ownedCopy(user)}
+          WHERE NOT w.whole AND n.deck_id = w.id
           ${open})
-        SELECT * FROM fresh ORDER BY level_deck, level_no, note_id LIMIT ${limit}`;
+        SELECT * FROM fresh ORDER BY note_id LIMIT ${limit}`;
 };
 
 /** An upper bound of an order value that bounds nothing: the largest integer SQLite holds. */
@@ -329,6 +322,11 @@ function rowToCard(r: Record<string, unknown>): CardRow {
     },
   };
 }
+const pairsStarted = (rows: Record<string, unknown>[]): PairStarted[] =>
+  rows.map((r) => ({ level: r.level as number, topicNo: r.topic_no as number, started: r.started as number }));
+const pairTotals = (rows: Record<string, unknown>[]): PairTotal[] =>
+  rows.map((r) => ({ level: r.level as number, topicNo: r.topic_no as number, total: r.total as number }));
+const todayOf = (rows: Record<string, unknown>[]) => ({ reviewsToday: rows[0]!.reviews as number, learnedToday: rows[0]!.learned as number });
 /** One new card for every direction of `directions`, in that order, whose flag column (`tt`, `ru`: 1 when the note needs no card of that direction) is 0. */
 function newCardsOf(rows: Record<string, unknown>[], directions: Direction[], tt: string, ru: string): NewNote[] {
   return rows.flatMap((r) => directions
@@ -376,6 +374,13 @@ export class Repo {
     return this.db.prepare(`UPDATE users SET ${keys.map((k) => `${snake(k)} = ?`).join(", ")} WHERE id = ?`).bind(...vals, id);
   }
   async updateUser(id: number, patch: Partial<Omit<User, "id">>): Promise<void> { await this.updateUserStmt(id, patch).run(); }
+  /**
+   * Clears the chosen topic `topicNo`, whose words have all been given, and stores the read positions found for the
+   * order without it, in one statement. Nothing is written when the user has chosen another topic meanwhile.
+   */
+  async endTopic(userId: number, topicNo: number, newCursors: string): Promise<void> {
+    await this.db.prepare("UPDATE users SET topic_no = NULL, new_cursors = ?3 WHERE id = ?1 AND topic_no = ?2").bind(userId, topicNo, newCursors).run();
+  }
   /**
    * The write that ends onboarding, two statements for one batch: the user patch, applied only while the user is still on
    * the time-zone step, and the subscription to the start deck (if there is one), made only when the patch was applied.
@@ -445,7 +450,7 @@ export class Repo {
    * the user owns a copy of; those are counted for all levels at once, from the user's own notes. A closed level is
    * not looked into. (One case is off by a word for a day: a first grade that was taken back and not given again
    * leaves the word hidden until tomorrow, when the session gives it first.) This is about words; the cards of the
-   * second direction, which do get started out of order, are the business of `candidateCards`.
+   * second direction, which do get started out of order, are the business of the session queue (`queue`).
    */
   async levelsOverview(userId: number): Promise<LevelRow[]> {
     const [levels, owned] = await this.db.batch<Record<string, unknown>>([
@@ -488,33 +493,6 @@ export class Repo {
        SELECT u.id, d.id, ?2 FROM users u JOIN decks d ON d.level_no < u.level AND d.level_no <= ${LAST_LEVEL} WHERE u.id = ?1`,
     ).bind(userId, now).run();
     return r.meta.changes ?? 0;
-  }
-  /**
-   * Opens the level that follows `from`: the next level the catalog has (the smallest `level_no` above `from`, up to
-   * `last`), so a gap in the catalog is stepped over. Three statements for one batch: the level change, which returns
-   * the new level; the subscription to the deck of that level, made only when the level changed; and the coverage and
-   * the number of words of `from` for the announcement.
-   * The level change touches a row only if the user is still on `from`, so only one of several concurrent calls gets
-   * the new level back; and only if the deck of `from` is open for the user or does not exist — a current level that
-   * was never opened is opened first, see `openCurrentLevelStmt`. While no higher level exists nothing changes, except
-   * on the last level: from there the user moves to `last + 1`, which means every level is done.
-   */
-  openLevelStmts(userId: number, from: number, last: number, now: number): D1PreparedStatement[] {
-    const next = "(SELECT MIN(level_no) FROM decks WHERE level_no > ?1 AND level_no <= ?2)";
-    const currentClosed = "EXISTS (SELECT 1 FROM decks d WHERE d.level_no = ?1 AND d.level_no <= ?2 AND NOT EXISTS (SELECT 1 FROM user_decks ud WHERE ud.user_id = ?3 AND ud.deck_id = d.id))";
-    return [
-      this.db.prepare(`UPDATE users SET level = COALESCE(${next}, ?2 + 1) WHERE id = ?3 AND level = ?1 AND (?1 = ?2 OR ${next} IS NOT NULL) AND NOT ${currentClosed} RETURNING level`).bind(from, last, userId),
-      this.db.prepare(`${OPEN_CURRENT_LEVEL} AND changes() = 1`).bind(userId, now),
-      this.db.prepare("SELECT coverage_pct, total FROM decks WHERE level_no = ?").bind(from),
-    ];
-  }
-  /**
-   * Opens the deck of the user's current level when the catalog has it and the user is not subscribed to it; `users.level`
-   * stays. A user's level is meant to be open whenever its deck exists; this restores that for a learner who finished
-   * onboarding before the level was published. Safe to run from several calls at once: the deck is opened once.
-   */
-  openCurrentLevelStmt(userId: number, now: number): D1PreparedStatement {
-    return this.db.prepare(OPEN_CURRENT_LEVEL).bind(userId, now);
   }
   private rowToDeck(r: Record<string, unknown>): DeckRow {
     return { id: r.id as number, slug: (r.slug as string) ?? null, ownerId: (r.owner_id as number) ?? null, kind: r.kind as DeckRow["kind"],
@@ -704,61 +682,6 @@ export class Repo {
   }
 
   /**
-   * Everything the session queue needs, in one D1 call. `pre` statements run first in the same batch; their results come back as `pre`.
-   * `currentLevelClosed`: the catalog has the deck of the user's current level and the user is not subscribed to it.
-   * `nextLevelExists`: a level change would move the user — the catalog has a level above the current one, or the
-   * current one is the last (LAST_LEVEL), after which the user is done with the levels.
-   *
-   * New cards come in this order: own and AI decks first, then the levels by number; inside a deck by note id, and the
-   * directions of a note in the order of `w.directions`. A card is new while it was never graded, whatever was started
-   * around it: with both directions the card of a word that was buried for a day is given on a later day.
-   * Only the decks that can hold the next new cards are read: the own decks that have a new card for today and the
-   * lowest such open level; the levels below it have none today and the levels above it wait for their turn. So
-   * `newNotes` are the next new cards, but not all of them when the level in work is near its end and another open
-   * level follows. A deck has a new card for today when it has a card without a row (`tailOpen`) or a row in state
-   * 'new' whose word is not buried today (`newRowIn`); a card that is only buried for today is not given today and
-   * does not count: when the open decks have nothing else, `newAvailable` is 0 and the next level may open.
-   */
-  async candidateCards(userId: number, w: DayWindow, pre: D1PreparedStatement[] = []): Promise<Candidates & { pre: D1Result<Record<string, unknown>>[]; currentLevelClosed: boolean; nextLevelExists: boolean }> {
-    const lim = w.limitEach ?? 50;
-    const dirs = JSON.stringify(w.directions);
-    const inDirs = "c.direction IN (SELECT value FROM json_each(?))";
-    const notBuried = "(c.buried_day IS NULL OR c.buried_day != ?)";
-    const inDecks = "n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?)";
-    const asked: Asked = { today: "?2", tt: "?3", ru: "?4" };
-    const res = await this.db.batch<Record<string, unknown>>([
-      ...pre,
-      this.db.prepare(`SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
-        WHERE c.user_id = ? AND c.state IN ('learning','relearning') AND ${inDirs} AND ${inDecks} ORDER BY c.due LIMIT ?`).bind(userId, dirs, userId, lim),
-      this.db.prepare(`SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
-        WHERE c.user_id = ? AND c.state = 'review' AND c.due < ? AND ${inDirs} AND ${notBuried} AND ${inDecks} ORDER BY c.due LIMIT ?`)
-        .bind(userId, w.dayEndMs, dirs, w.today, userId, lim),
-      this.db.prepare(newInDecks("?1", asked, "?5", false))
-        .bind(userId, w.today, w.directions.includes("tt_ru") ? 1 : 0, w.directions.includes("ru_tt") ? 1 : 0, lim),
-      this.db.prepare(`SELECT
-          (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state IN ('learning','relearning') AND c.direction IN (SELECT value FROM json_each(?2)) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS learning,
-          (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state = 'review' AND c.due < ?3 AND c.direction IN (SELECT value FROM json_each(?2)) AND (c.buried_day IS NULL OR c.buried_day != ?4) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS review,
-          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND was_new = 1 AND rating < 4 AND undone = 0 AND reviewed_at >= ?5) AS new_done_today,
-          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND was_new = 1 AND rating = 4 AND undone = 0 AND reviewed_at >= ?5) AS easy_new_today,
-          EXISTS (SELECT 1 FROM users u JOIN decks dk ON dk.level_no = u.level AND dk.level_no <= ${LAST_LEVEL} WHERE u.id = ?1 AND NOT EXISTS (SELECT 1 FROM user_decks ud WHERE ud.user_id = ?1 AND ud.deck_id = dk.id)) AS level_closed,
-          EXISTS (SELECT 1 FROM users u WHERE u.id = ?1 AND (u.level = ${LAST_LEVEL} OR EXISTS (SELECT 1 FROM decks d WHERE d.level_no > u.level AND d.level_no <= ${LAST_LEVEL}))) AS next_level`)
-        .bind(userId, dirs, w.dayEndMs, w.today, w.dayStartMs),
-    ]);
-    const [learning, review, fresh, counts] = res.slice(pre.length);
-    const c = counts!.results[0]!;
-    const newNotes = newCardsOf(fresh!.results, w.directions, "seen_tt", "seen_ru").slice(0, lim);
-    return {
-      pre: res.slice(0, pre.length),
-      currentLevelClosed: c.level_closed === 1,
-      nextLevelExists: c.next_level === 1,
-      learning: learning!.results.map(rowToCard),
-      review: review!.results.map(rowToCard),
-      newNotes,
-      counts: { learning: c.learning as number, review: c.review as number, newAvailable: newNotes.length, newDoneToday: c.new_done_today as number, easyNewToday: c.easy_new_today as number },
-    };
-  }
-
-  /**
    * Everything the session queue needs, in one D1 call (one batch).
    *
    * `learning`, `review`: the cards to repeat — every card of the user in the asked directions, whatever deck or level
@@ -806,7 +729,7 @@ export class Repo {
         WHERE c.user_id = ${p(userId)} AND c.state IN ('learning','relearning') AND ${inAsked} ORDER BY c.due LIMIT ${p(lim)}`),
       stmt((p) => `SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
         WHERE c.user_id = ${p(userId)} AND c.state = 'review' AND c.due < ${p(w.dayEndMs)} AND ${inAsked} AND c.buried_day IS NOT ${p(w.today)} ORDER BY c.due LIMIT ${p(lim)}`),
-      stmt((p) => newInDecks(p(userId), asked(p(w.today)), p(lim), true)),
+      stmt((p) => newInOwnDecks(p(userId), asked(p(w.today)), p(lim))),
       // A card hidden today is passed on its own row. Whether the word is hidden (its other card may be the hidden
       // one, after a grade was taken back) and whether the user owns a copy of it are asked after the note is known
       // to be a catalog note: a card of an own word, which is given by `ownNew`, costs its row and its note here.
@@ -943,24 +866,36 @@ export class Repo {
          AND changes() = 1`,
     ).bind(userId, cardId);
   }
+  private progressRowsStmt(userId: number): D1PreparedStatement {
+    return this.db.prepare("SELECT level, topic_no, started FROM user_progress WHERE user_id = ? ORDER BY level, topic_no").bind(userId);
+  }
+  private catalogTotalsStmt(): D1PreparedStatement {
+    return this.db.prepare("SELECT level, topic_no, total FROM catalog_groups ORDER BY level, topic_no");
+  }
+  private todayLogStmt(userId: number, dayStartMs: number): D1PreparedStatement {
+    return this.db.prepare(
+      "SELECT COUNT(*) AS reviews, COALESCE(SUM(learned_now), 0) AS learned FROM review_log WHERE user_id = ? AND undone = 0 AND reviewed_at >= ?",
+    ).bind(userId, dayStartMs);
+  }
   /** How many words the user has started in every pair (level, topic); own words are the pair (0, 0). Pairs with nothing started may be absent. */
-  async progress(userId: number): Promise<{ level: number; topicNo: number; started: number }[]> {
-    const { results } = await this.db.prepare("SELECT level, topic_no, started FROM user_progress WHERE user_id = ? ORDER BY level, topic_no")
-      .bind(userId).all<{ level: number; topic_no: number; started: number }>();
-    return results.map((r) => ({ level: r.level, topicNo: r.topic_no, started: r.started }));
+  async progress(userId: number): Promise<PairStarted[]> {
+    return pairsStarted((await this.progressRowsStmt(userId).all<Record<string, unknown>>()).results);
   }
   /** How many cards the catalog has in every pair (level, topic), as counted when the catalog was loaded. */
-  async catalogTotals(): Promise<{ level: number; topicNo: number; total: number }[]> {
-    const { results } = await this.db.prepare("SELECT level, topic_no, total FROM catalog_groups ORDER BY level, topic_no")
-      .all<{ level: number; topic_no: number; total: number }>();
-    return results.map((r) => ({ level: r.level, topicNo: r.topic_no, total: r.total }));
+  async catalogTotals(): Promise<PairTotal[]> {
+    return pairTotals((await this.catalogTotalsStmt().all<Record<string, unknown>>()).results);
   }
-  /** Today's grades that were not undone and the words learned today. Read through idx_log_user_time: only the rows of today. */
-  async todayLog(userId: number, dayStartMs: number): Promise<{ reviewsToday: number; learnedToday: number }> {
-    const r = await this.db.prepare(
-      "SELECT COUNT(*) AS reviews, COALESCE(SUM(learned_now), 0) AS learned FROM review_log WHERE user_id = ? AND undone = 0 AND reviewed_at >= ?",
-    ).bind(userId, dayStartMs).first<{ reviews: number; learned: number }>();
-    return { reviewsToday: r!.reviews, learnedToday: r!.learned };
+  /**
+   * What the screen that ends a session reads, in one D1 call: today's grades that were not undone and the words
+   * learned today (through idx_log_user_time: only the rows of today) and, with `counters`, what `progress` and
+   * `catalogTotals` give — the facts for the reason there are no new words. Without `counters` both lists are empty
+   * and are not read.
+   */
+  async dayEnd(userId: number, dayStartMs: number, counters: boolean): Promise<{ reviewsToday: number; learnedToday: number; progress: PairStarted[]; totals: PairTotal[] }> {
+    const [log, started, totals] = await this.db.batch<Record<string, unknown>>(
+      [this.todayLogStmt(userId, dayStartMs), ...(counters ? [this.progressRowsStmt(userId), this.catalogTotalsStmt()] : [])],
+    );
+    return { ...todayOf(log!.results), progress: pairsStarted(started?.results ?? []), totals: pairTotals(totals?.results ?? []) };
   }
 
   /** Cumulative numbers for /stats in one D1 call; `coveragePct` is the coverage of the nearest level the catalog has below the user's current one. */

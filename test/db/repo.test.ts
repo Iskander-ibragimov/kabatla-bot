@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { Repo, wordKey } from "../../src/db/repo";
+import { type Direction, LAST_LEVEL, type NewScope, Repo, wordKey } from "../../src/db/repo";
 import { countingDb } from "../helpers/countingDb";
 import { newMem } from "../../src/srs/fsrs";
 import { dayWindow } from "../../src/users/service";
@@ -9,6 +9,8 @@ import { note, seedLevels, seedUser } from "../helpers/seed";
 
 const T = Date.UTC(2026, 8, 30, 6, 0, 0);
 const DAY = 86_400_000;
+/** Level 1 in the order of the level, every part of speech, no read position. */
+const LEVEL_1: NewScope = { levels: [1], posCodes: null, mode: "freq", topicNo: null, spans: {}, spansVersion: 0 };
 
 async function seed(repo: Repo) {
   const deckId = await repo.insertDeck({ slug: "l01", kind: "catalog", titleRu: "Уровень 1", titleTt: "1 нче дәрәҗә", levelNo: 1, coveragePct: null, ownerId: null });
@@ -16,7 +18,7 @@ async function seed(repo: Repo) {
     { word: "китап", transcription: "кита́п", pos: "n", translation: "книга", exampleTt: "Бу китап яңа.", exampleRu: "Эта книга новая.", exampleSrc: "own" },
     { word: "Алма", transcription: null, pos: "n", translation: "яблоко", exampleTt: "Алма тәмле.", exampleRu: "Яблоко вкусное." },
     { word: "зур", transcription: null, pos: "adj", translation: "большой", exampleTt: "Өй зур.", exampleRu: "Дом большой." },
-  ]);
+  ].map((n, i) => ({ ...n, level: 1, topicNo: 0, seq: i + 1 })));
   const userId = await repo.insertUser({ tgId: 1, chatId: 1, lang: "ru", now: T });
   await repo.subscribe(userId, deckId, T);
   return { deckId, ids, userId };
@@ -33,50 +35,41 @@ describe("repo", () => {
     await repo.insertCard(userId, ids[0]!, "ru_tt", newMem(T));
   });
 
-  it("candidateCards returns due learning, due-today reviews, unseen notes and counts in one batch", async () => {
+  it("queue returns due learning, due-today reviews, the next new word and counts in one batch", async () => {
     const { ids, userId } = await seed(repo);
     await repo.insertCard(userId, ids[0]!, "tt_ru", { ...newMem(T), state: "learning", step: 1, due: T - 1000, reps: 1, lastReview: T - 600_000, stability: 2, difficulty: 5 });
     await repo.insertCard(userId, ids[1]!, "tt_ru", { ...newMem(T), state: "review", due: T + 3 * 3_600_000, scheduledDays: 2, reps: 2, lastReview: T - 2 * DAY, stability: 2, difficulty: 5 });
     const db = countingDb(env.DB);
     const r = new Repo(db);
-    const c = await r.candidateCards(userId, { dayStartMs: T - 3_600_000, dayEndMs: T + 20 * 3_600_000, today: "2026-09-30", directions: ["tt_ru"] });
+    const c = await r.queue(userId, { dayStartMs: T - 3_600_000, dayEndMs: T + 20 * 3_600_000, today: "2026-09-30", directions: ["tt_ru"] }, LEVEL_1);
     expect(db.calls).toBe(1);
     expect(c.learning.map((x) => x.word)).toEqual(["китап"]);
     expect(c.review.map((x) => x.word)).toEqual(["Алма"]);
-    expect(c.newNotes.map((x) => x.word)).toEqual(["зур"]);
-    expect(c.counts).toEqual({ learning: 1, review: 1, newAvailable: 1, newDoneToday: 0, easyNewToday: 0 });
+    expect(c.streams[1]!.map((x) => x.word)).toEqual(["зур"]);
+    expect(c.counts).toEqual({ learning: 1, review: 1, newDoneToday: 0, easyNewToday: 0 });
     expect(c.learning[0]!.mem.state).toBe("learning");
     expect(c.learning[0]).toMatchObject({ transcription: "кита́п", exampleTt: "Бу китап яңа.", exampleSrc: "own", audioFileId: null });
-    expect(c.newNotes[0]).toMatchObject({ transcription: null, exampleTt: "Өй зур.", exampleSrc: "" });
+    expect(c.streams[1]![0]).toMatchObject({ transcription: null, exampleTt: "Өй зур.", exampleSrc: "" });
   });
 
   it("offers both directions of a new note Tatar → Russian first", async () => {
     const { userId } = await seed(repo);
-    const c = await repo.candidateCards(userId, { dayStartMs: T - 3_600_000, dayEndMs: T + 20 * 3_600_000, today: "2026-09-30", directions: ["tt_ru", "ru_tt"] });
-    expect(c.newNotes.slice(0, 4).map((x) => [x.word, x.direction])).toEqual([["китап", "tt_ru"], ["китап", "ru_tt"], ["Алма", "tt_ru"], ["Алма", "ru_tt"]]);
+    const directions: Direction[] = ["tt_ru", "ru_tt"];
+    const c = await repo.queue(userId, { dayStartMs: T - 3_600_000, dayEndMs: T + 20 * 3_600_000, today: "2026-09-30", directions }, LEVEL_1);
+    expect(c.streams[1]!.map((x) => [x.word, x.direction])).toEqual([["китап", "tt_ru"], ["китап", "ru_tt"]]);
   });
 
-  it("gives own and AI words before level words, levels by number", async () => {
-    const now = Date.UTC(2026, 8, 30, 6, 0);
-    const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 2 }); // l01: китап, вакыт
-    const l2 = (await seedLevels(env.DB, { 2: ["авыл"] }))[2]!;
-    await repo.subscribe(user.id, l2, now);
-    const own = await repo.customDeck(user.id, now);
-    await repo.insertNotes(own, [note("рәхмәт")]); // added after all level words
-    const queue = async () => (await repo.candidateCards(user.id, { ...dayWindow(180, now), directions: ["tt_ru"] })).newNotes;
-    // Own words, then the lowest open level that has new words; level 2 waits for its turn.
-    expect((await queue()).map((n) => n.word)).toEqual(["рәхмәт", "китап", "вакыт"]);
-    for (const n of (await queue()).slice(1)) await repo.insertCard(user.id, n.noteId, "tt_ru", gradedMem(now));
-    expect((await queue()).map((n) => n.word)).toEqual(["рәхмәт", "авыл"]);
-  });
-
-  it("skips a level word the user already has among own words", async () => {
-    const now = Date.UTC(2026, 8, 30, 6, 0);
-    const { repo, user } = await seedUser(env.DB, { now, level: 1, words: 2 });
-    await repo.insertNotes(await repo.customDeck(user.id, now), [note("Китап")]);
-    const c = await repo.candidateCards(user.id, { ...dayWindow(180, now), directions: ["tt_ru"] });
-    expect(c.newNotes.map((n) => n.word)).toEqual(["Китап", "вакыт"]);
-    expect(c.counts.newAvailable).toBe(2);
+  it("a deck numbered above the last level is not a level: not for /levels, the button for skipped levels, the start of a new learner or the lookup of ready cards", async () => {
+    expect(LAST_LEVEL).toBe(20);
+    const { repo, user } = await seedUser(env.DB, { now: T, level: 20, words: 1 });
+    const ids = await seedLevels(env.DB, { 21: ["авыл"] }, { 20: 80 });
+    // The learner is done with the levels: «level 21», the number of that deck.
+    await repo.updateUser(user.id, { level: 21 });
+    expect(await repo.openSkippedLevels(user.id, T)).toBe(0);
+    expect(await repo.userDeckIds(user.id)).not.toContain(ids[21]);
+    expect((await repo.levelsOverview(user.id)).map((l) => l.levelNo)).toEqual([20]);
+    expect(await repo.startLevel(21)).toEqual({ deckId: (await repo.getDeckBySlug("l20"))!.id, levelNo: 20 });
+    expect((await repo.findCatalogNotes(["авыл"])).size).toBe(0);
   });
 
   it("reads a deck with its level number, coverage and both titles", async () => {
@@ -202,22 +195,22 @@ describe("a note's link is read only by the owner of its deck", () => {
   it("the queue and the card give no link for a level note and the owner's link for an own note", async () => {
     const { repo, a, b, level, own } = await planted();
     for (const viewer of [a, b]) {
-      const fresh = await repo.candidateCards(viewer, window);
-      expect(fresh.newNotes.find((n) => n.noteId === level)).toMatchObject({ word: "китап", sourceUrl: null });
+      const fresh = await repo.queue(viewer, window, LEVEL_1);
+      expect(fresh.streams[1]!.find((n) => n.noteId === level)).toMatchObject({ word: "китап", sourceUrl: null });
       const id = await repo.insertCard(viewer, level, "tt_ru", { ...newMem(T), state: "learning", step: 0, due: T - 1 });
       expect((await repo.getCard(viewer, id))!.sourceUrl).toBeNull();
       expect((await repo.getCardByNote(viewer, level, "tt_ru"))!.sourceUrl).toBeNull();
-      expect((await repo.candidateCards(viewer, window)).learning.map((c) => [c.word, c.sourceUrl])).toEqual([["китап", null]]);
+      expect((await repo.queue(viewer, window, LEVEL_1)).learning.map((c) => [c.word, c.sourceUrl])).toEqual([["китап", null]]);
       await env.DB.prepare("UPDATE cards SET state = 'review' WHERE id = ?").bind(id).run();
-      expect((await repo.candidateCards(viewer, window)).review.map((c) => [c.word, c.sourceUrl])).toEqual([["китап", null]]);
+      expect((await repo.queue(viewer, window, LEVEL_1)).review.map((c) => [c.word, c.sourceUrl])).toEqual([["китап", null]]);
     }
-    expect((await repo.candidateCards(a, window)).newNotes.find((n) => n.noteId === own)).toMatchObject({ word: "рәхмәт", sourceUrl: OWN });
+    expect((await repo.queue(a, window, LEVEL_1)).ownNew.find((n) => n.noteId === own)).toMatchObject({ word: "рәхмәт", sourceUrl: OWN });
     const mine = await repo.insertCard(a, own, "tt_ru", { ...newMem(T), state: "learning", step: 0, due: T - 1 });
     expect((await repo.getCard(a, mine))!.sourceUrl).toBe(OWN);
     expect((await repo.getCardByNote(a, own, "tt_ru"))!.sourceUrl).toBe(OWN);
-    expect((await repo.candidateCards(a, window)).learning.map((c) => [c.word, c.sourceUrl])).toEqual([["рәхмәт", OWN]]);
+    expect((await repo.queue(a, window, LEVEL_1)).learning.map((c) => [c.word, c.sourceUrl])).toEqual([["рәхмәт", OWN]]);
     await env.DB.prepare("UPDATE cards SET state = 'review' WHERE id = ?").bind(mine).run();
-    expect((await repo.candidateCards(a, window)).review.map((c) => c.sourceUrl)).toContain(OWN);
+    expect((await repo.queue(a, window, LEVEL_1)).review.map((c) => c.sourceUrl)).toContain(OWN);
     // A card that another learner somehow holds for that own note shows them no link.
     const foreign = await repo.insertCard(b, own, "tt_ru", newMem(T));
     expect((await repo.getCard(b, foreign))!.sourceUrl).toBeNull();

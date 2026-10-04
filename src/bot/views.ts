@@ -8,8 +8,8 @@ export type Keyboard = Button[][];
 export interface Rendered { text: string; keyboard: Keyboard }
 
 import type { CardDraft, Duplicate } from "../content/service";
-import type { CardView, Counts, DaySummary, Feedback, LevelUp } from "../review/service";
-export type { CardView, Counts, DaySummary, Feedback, LevelUp };
+import type { CardView, Counts, DaySummary, Feedback } from "../review/service";
+export type { CardView, Counts, DaySummary, Feedback };
 /** What a preview shows of a card that is not saved yet. */
 export type PreviewItem = Pick<CardDraft, "word" | "transcription" | "pos" | "translation" | "exampleTt" | "exampleRu" | "sourceUrl" | "ai">;
 
@@ -152,7 +152,7 @@ function fitCard(render: (fit: CardFit) => string): string {
     ?? render({ ...least, word: LEAST.word });
 }
 
-/** `lead` is a line that stands before the card in the same message (the news about a new level); it counts toward the length. */
+/** `lead` is a line that stands before the card in the same message; it counts toward the length. */
 function cardText(v: CardView, c: Counts, lang: Lang, lead: string, fit: CardFit): string {
   const word = esc(clipMiddle(v.word, fit.word));
   const translation = esc(clip(v.translation, fit.translation));
@@ -197,16 +197,10 @@ export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, str
 export function renderDone(s: DaySummary, lang: Lang): Rendered {
   const t = dict(lang);
   const lines: string[] = [];
-  lines.push(t.doneTitle, t.doneToday(s.reviewsToday, s.learnedToday), t.doneTotals(s.totals.learned, s.totals.known, s.totals.learning, s.totals.new));
+  lines.push(t.doneTitle, t.doneToday(s.reviewsToday, s.learnedToday));
   if (s.nextLearningInMs != null) lines.push("", t.doneNextLearning(formatLong(s.nextLearningInMs, lang)));
   if (s.streak > 0) lines.push(t.streak(s.streak));
   return { text: lines.join("\n"), keyboard: [[btn(t.addWords, "help:add"), btn(t.decksBtn, "levels")]] };
-}
-
-/** The line that opens the first card (the `lead` of `renderCard`) or the done screen after a level was opened or the last level was finished. */
-export function renderLevelUp(l: LevelUp, lang: Lang): string {
-  const t = dict(lang);
-  return l.to == null ? t.levelsDone(l.coveragePct) : t.levelUp(l.from, l.to, l.coveragePct, l.total);
 }
 
 /** The text of the preview of own words. One card is shown whole, with everything it has; several are a list. */

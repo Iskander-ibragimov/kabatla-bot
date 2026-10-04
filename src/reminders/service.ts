@@ -1,8 +1,7 @@
 import { PREVIEW_TTL_MS } from "../content/service";
-import { type Asked, type Lang, type Repo, deckHasUnshown, newCardRows, unshownInTail } from "../db/repo";
+import { type Asked, LAST_LEVEL, type Lang, type Repo, deckHasUnshown, newCardRows, unshownInTail } from "../db/repo";
 import { dict } from "../i18n";
 import { claim, completeMany, fail } from "../jobs/queue";
-import { LAST_LEVEL } from "../review/service";
 import { type TgApi, tgErrorInfo } from "../tg/client";
 import { EVENING_AT, localDay, nextOccurrence } from "../users/service";
 

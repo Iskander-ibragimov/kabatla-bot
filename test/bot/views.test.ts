@@ -89,11 +89,12 @@ describe("views", () => {
     expect(text).toContain("<b>надёжный</b>\n<tg-spoiler><b>ышанычлы</b> [ышанычлы́]</tg-spoiler>");
   });
 
-  it("done screen shows day and cumulative totals", () => {
-    const { text, keyboard } = renderDone({ reviewsToday: 24, learnedToday: 3, totals: { learned: 37, known: 20, learning: 14, new: 429 }, nextLearningInMs: 480_000, streak: 5 }, "ru");
+  it("done screen shows the day, the next learning card and the streak; the totals for all time are not on it", () => {
+    const { text, keyboard } = renderDone({ reviewsToday: 24, learnedToday: 3, nextLearningInMs: 480_000, streak: 5 }, "ru");
     expect(text.startsWith("✅")).toBe(true);
     expect(text).toContain("Сегодня: 24 повт. · +3 выучено");
-    expect(text).toContain("Всего: 🏆 37 · 🌳 20 · 🌿 14 · 🌱 429");
+    expect(text).not.toContain("Всего:");
+    expect(text.split("\n")).toHaveLength(5);
     expect(text).toContain("через 8 мин");
     expect(text).toContain("🔥 Серия: 5 дн.");
     expect(keyboard.flat().map((b) => [b.text, b.callback_data])).toEqual([["➕ Добавить слова", "help:add"], ["📚 Уровни", "levels"]]);
@@ -435,9 +436,9 @@ describe("views", () => {
     expect(card.keyboard.slice(0, 2).flat().map((b) => b.text)).toEqual(["Яңадан <10мин", "Авыр 1көн", "Яхшы 2көн", "Җиңел 4көн"]);
     expect(card.keyboard[2]!.map((b) => b.text)).toEqual(["🔊", "↩️ Кире алу", "⚑"]);
     expect(card.text).toContain("🌿 Өйрәнәм · хәтердә ~2 көн · кабатлау №4");
-    const done = renderDone({ reviewsToday: 24, learnedToday: 3, totals: { learned: 37, known: 20, learning: 14, new: 429 }, nextLearningInMs: 480_000, streak: 5 }, "tt");
+    const done = renderDone({ reviewsToday: 24, learnedToday: 3, nextLearningInMs: 480_000, streak: 5 }, "tt");
     expect(done.text).toContain("Бүген: 24 кабатлау · +3 өйрәнелде");
-    expect(done.text).toContain("Барлыгы: 🏆 37 · 🌳 20 · 🌿 14 · 🌱 429");
+    expect(done.text).not.toContain("Барлыгы:");
     expect(done.text).toContain("8 минут");
     expect(done.text).toContain("🔥 Рәттән 5 көн");
     expect(done.text).not.toMatch(/Сегодня|Всего|Серия/);

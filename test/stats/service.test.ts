@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { renderStats } from "../../src/bot/screens";
 import { Repo } from "../../src/db/repo";
+import { ru } from "../../src/i18n/ru";
 import { ReviewService } from "../../src/review/service";
 import { cumulative, levelsView } from "../../src/stats/service";
 import { newMem } from "../../src/srs/fsrs";
@@ -158,7 +159,7 @@ describe("levels view", () => {
     expect(await levelsView(repo, (await repo.getUser(user.id))!)).toEqual({ passed: [], inProgress: [], ahead: 0, own: [], coveragePct: null, skipped: [1] });
   });
 
-  it("a current level that exists but was never opened is a level ahead, in /levels as in the session; /stats is the same as for an open one (ruling T16c)", async () => {
+  it("a current level that exists but was never opened is a level ahead in /levels; /stats is the same as for an open one; the session does not open it (ruling T16c)", async () => {
     const repo = new Repo(env.DB);
     const id = await repo.insertUser({ tgId: 42, chatId: 42, lang: "ru", now: T });
     await repo.updateUser(id, { onboardingStep: null, level: 4 });
@@ -170,11 +171,11 @@ describe("levels view", () => {
     expect(h.lastText()).toBe(["📚 <b>Уровни</b>", "⏭ Пропущено: 3", "🔒 Впереди: 2", "📖 Покрытие текста ≈54%"].join("\n"));
     const closed = await cumulative(repo, user, T);
     expect(closed).toMatchObject({ level: 4, coveragePct: 54, fresh: 0 });
-    // The session opens it: now it is the level in progress and one level is ahead.
+    // The session opens no level: new words come by the checked levels, and the picture of /levels stays.
     await h.text("/learn");
-    expect(h.lastText()).toContain("<b>авыл</b>");
-    expect(await levelsView(repo, user)).toEqual({ passed: [], inProgress: [{ levelNo: 4, seen: 0, total: 2 }], ahead: 1, own: [], coveragePct: 54, skipped: [3] });
-    expect(await cumulative(repo, user, T)).toMatchObject({ level: 4, coveragePct: 54, fresh: 2 });
+    expect(h.lastText()).toBe(ru.nothingToLearn);
+    expect(await levelsView(repo, user)).toEqual({ passed: [], inProgress: [], ahead: 2, own: [], coveragePct: 54, skipped: [3] });
+    expect(await cumulative(repo, user, T)).toMatchObject({ level: 4, coveragePct: 54, fresh: 0 });
   });
 
   it("takes the coverage from the nearest level below the current one when the catalog has a gap, in /levels and in /stats", async () => {

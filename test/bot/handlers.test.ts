@@ -6,6 +6,7 @@ import { transcribe } from "../../src/content/transcribe";
 import { Repo } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
+import { levelBit } from "../../src/levels/scale";
 import { PLACEMENT } from "../../src/users/placement";
 import { countingDb } from "../helpers/countingDb";
 import { easyButton, harness } from "../helpers/botHarness";
@@ -250,8 +251,8 @@ describe("bot handlers", () => {
     });
   });
 
-  it("a note stored with fields longer than a message is still sent as a card, also under the line about a new level", async () => {
-    await seedUser(env.DB, { now: T, level: 1, words: 1, tgId: 42 });
+  it("a note stored with fields longer than a message is still sent as a card, in every checked level", async () => {
+    await seedUser(env.DB, { now: T, level: 1, levels: levelBit(1) | levelBit(2), words: 1, tgId: 42 });
     await seedLevels(env.DB, { 2: ["авыл"] }, { 1: 31 });
     await env.DB.prepare("UPDATE notes SET translation = ?, example_tt = ?, example_ru = ?").bind("я".repeat(5000), "ә".repeat(5000), "я".repeat(5000)).run();
     const h = harness(env.DB, { now: T });
@@ -259,7 +260,7 @@ describe("bot handlers", () => {
     expect(h.lastText()).toContain("<b>китап</b>");
     expect(visibleLength(h.lastText())).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
     await h.press(easyButton(h), h.tg.lastMessageId());
-    expect(h.lastText().startsWith(`${ru.levelUp(1, 2, 31, 1)}\n\n🔵 1 · 🔴 0 · 🟢 0\n<b>авыл</b>`)).toBe(true);
+    expect(h.lastText().startsWith("🔵 10 · 🔴 0 · 🟢 0\n<b>авыл</b>")).toBe(true);
     expect(visibleLength(h.lastText())).toBe(TELEGRAM_TEXT_LIMIT);
     // The learner's queue is not blocked: the card can be graded and the session goes on.
     await h.press(easyButton(h), h.tg.lastMessageId());
@@ -283,9 +284,9 @@ describe("bot handlers", () => {
   describe("autoplay budget", () => {
     const TG_CAP = 5, D1_CAP = 10;
 
-    /** A learner with autoplay on, two words left in level 1 and level 2 behind it; every word has a voice. */
+    /** A learner with autoplay on, levels 1 and 2 checked, two words left in level 1 and level 2 behind it; every word has a voice. */
     async function autoplaySession(direction: "tt_ru" | "both" = "tt_ru") {
-      await seedUser(env.DB, { now: T, level: 1, words: 2, tgId: 42, patch: { autoplay: true, direction } });
+      await seedUser(env.DB, { now: T, level: 1, levels: levelBit(1) | levelBit(2), words: 2, tgId: 42, patch: { autoplay: true, direction } });
       await seedLevels(env.DB, { 2: ["авыл", "су"] }, { 1: 31 });
       await env.DB.prepare("UPDATE notes SET audio_file_id = 'voice-of-' || word").run();
       const db = countingDb(env.DB);
@@ -329,12 +330,12 @@ describe("bot handlers", () => {
       within(second);
     });
 
-    it.each(["tt_ru", "both"] as const)("the grade that opens a level stays within the caps, direction %s", async (direction) => {
+    it.each(["tt_ru", "both"] as const)("the grade that goes on to the next checked level stays within the caps, direction %s", async (direction) => {
       const { h, update, easy } = await autoplaySession(direction);
       within(await update(() => h.text("/learn")));
       within(await easy());
       const opening = await easy();
-      expect(h.lastText().startsWith(ru.levelUp(1, 2, 31, 2))).toBe(true);
+      expect(h.lastText().startsWith("🔵 10 · 🔴 0 · 🟢 0\n<b>авыл</b>")).toBe(true);
       expect(opening.methods).toEqual(["sendMessage", "deleteMessage", "deleteMessage", "answerCallbackQuery", "sendVoice"]);
       voiceAfterCard(opening, "авыл");
       within(opening);

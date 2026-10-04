@@ -1,4 +1,5 @@
 import type { DirectionSetting, Lang, Repo, User } from "../db/repo";
+import { LEVELS, levelBit } from "../levels/scale";
 import { PLACEMENT, placementLevel } from "./placement";
 
 const MIN = 60_000;
@@ -161,9 +162,11 @@ export async function advanceOnboarding(repo: Repo, user: User, answer: string, 
     // and `users.level` is the level actually opened. With an empty catalog the placed level stays, with nothing opened.
     const start = await repo.startLevel(user.level);
     const level = start?.levelNo ?? user.level;
+    // Transitional, until the onboarding lets the learner check the levels: the start level, as far as the scale
+    // A1–C1 goes, is the one checked level, so the session gives the catalog words of that level.
     // Two answers to this step may arrive together: the write is guarded on the step, so only one of them finishes.
     const [finished] = await repo.batch(repo.finishOnboardingStmts(user.id, {
-      level, tzOffsetMin: offset, onboardingStep: null, onboardingData: null,
+      level, levels: levelBit(Math.min(level, LEVELS.length)), tzOffsetMin: offset, onboardingStep: null, onboardingData: null,
       nextDailyAt: nextOccurrence(offset, user.remindAt, now), nextEveningAt: nextOccurrence(offset, EVENING_AT, now),
     }, start?.deckId ?? null, now));
     if (!finished!.meta.changes) return { kind: "stale" };

@@ -14,7 +14,7 @@ import { cumulative, levelsView } from "../stats/service";
 import type { TgApi } from "../tg/client";
 import { REMIND_TIMES, RETENTIONS, advanceOnboarding, getOrCreate, langFromTelegram, setSetting, startOnboarding } from "../users/service";
 import { learnKeyboard, renderGenPreview, renderLevels, renderOnboarding, renderSettings, renderStats } from "./screens";
-import { type Keyboard, type Rendered, addReplyText, esc, hostOf, renderAddPreview, renderCard, renderDone, renderLevelUp } from "./views";
+import { type Keyboard, type Rendered, addReplyText, esc, hostOf, renderAddPreview, renderCard, renderDone } from "./views";
 
 export interface BotDeps {
   config: Config;
@@ -64,13 +64,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     if (s.kind === "stale") return toast(ctx, t.staleButton);
     if (s.kind === "noundo") { if (ctx.callbackQuery) return toast(ctx, t.nothingToUndo); await ctx.reply(t.nothingToUndo); return; }
     if (s.kind === "nothing") { await toast(ctx); await send(ctx, { text: t.nothingToLearn, keyboard: [[{ text: t.decksBtn, callback_data: "levels" }]] }); return; }
-    // The news about a level opens the same message: a separate one would not fit the Telegram budget of an update.
-    // A card takes it as its lead, so that the two together are fitted into one message.
-    const lead = s.levelUp ? renderLevelUp(s.levelUp, ctx.user.lang) : "";
-    const r = s.kind === "card"
-      ? renderCard(s.view, s.counts, s.intervals, s.canUndo, ctx.user.lang, lead)
-      : renderDone(s.summary, ctx.user.lang);
-    if (lead && s.kind === "done") r.text = `${lead}\n\n${r.text}`;
+    const r = s.kind === "card" ? renderCard(s.view, s.counts, s.intervals, s.canUndo, ctx.user.lang) : renderDone(s.summary, ctx.user.lang);
     const cardId = s.kind === "card" ? s.view.cardId : null;
     const chatId = ctx.user.chatId;
     const old = mode === "replace" ? clickedId(ctx) : undefined;

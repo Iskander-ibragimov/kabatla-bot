@@ -461,8 +461,8 @@ describe("repo.queue: cards that exist", () => {
 });
 
 describe("repo.queue: own words", () => {
-  it("`ownNew` gives the words of the own and the AI decks as `candidateCards` did, and no level word", async () => {
-    const ids = await seedCatalog(env.DB, rows(1, "а", 3));
+  it("`ownNew` gives the words of the own and the AI decks, and no level word", async () => {
+    await seedCatalog(env.DB, rows(1, "а", 3));
     const { repo, user } = await seedLearner(env.DB, { now: T, patch: { direction: "both" } });
     const custom = await repo.customDeck(user.id, T);
     const own = await repo.insertNotes(custom, [{ ...note("бер"), sourceUrl: "https://example.org/a" }, note("ике"), note("өч")]);
@@ -474,18 +474,19 @@ describe("repo.queue: own words", () => {
     // A deck of somebody else, and a level deck the learner is subscribed to in the old way: neither is an own deck.
     const other = await seedLearner(env.DB, { now: T, tgId: 2 });
     await repo.insertNotes(await repo.customDeck(other.user.id, T), [note("чужое")]);
-    const before = await repo.candidateCards(user.id, win(BOTH));
-    expect(before.newNotes.map((x) => `${x.word}/${x.direction}`)).toEqual(["бер/ru_tt", "өч/tt_ru", "өч/ru_tt", "дүрт/tt_ru", "дүрт/ru_tt"]);
-
+    // «бер» is started Tatar → Russian; «ике» was graded today and is hidden until tomorrow.
+    const ownCards = ["бер/ru_tt", "өч/tt_ru", "өч/ru_tt", "дүрт/tt_ru", "дүрт/ru_tt"];
     const q = await repo.queue(user.id, win(BOTH), scope());
-    expect(q.ownNew).toEqual(before.newNotes);
+    expect(q.ownNew.map((x) => `${x.word}/${x.direction}`)).toEqual(ownCards);
     expect(q.ownNew[0]).toMatchObject({ noteId: own[0], sourceUrl: "https://example.org/a" });
+    expect(q.ownNew[1]).toEqual({
+      noteId: own[2], direction: "tt_ru",
+      word: "өч", transcription: null, pos: "n", translation: "өч-ru", exampleTt: "өч.", exampleRu: "өч-ru.", exampleSrc: "own", audioFileId: null, sourceUrl: null,
+    });
 
     await repo.subscribe(user.id, (await repo.getDeckBySlug("a1"))!.id, T);
-    const subscribed = await repo.candidateCards(user.id, win(BOTH));
-    expect(subscribed.newNotes).toHaveLength(5 + 2 * ids.length);
-    expect((await repo.queue(user.id, win(BOTH), scope())).ownNew).toEqual(before.newNotes);
-    expect((await repo.queue(user.id, { ...win(BOTH), limitEach: 2 }, scope())).ownNew).toEqual(before.newNotes.slice(0, 2));
+    expect((await repo.queue(user.id, win(BOTH), scope())).ownNew).toEqual(q.ownNew);
+    expect((await repo.queue(user.id, { ...win(BOTH), limitEach: 2 }, scope())).ownNew).toEqual(q.ownNew.slice(0, 2));
   });
 });
 
