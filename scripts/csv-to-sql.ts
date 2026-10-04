@@ -1,22 +1,27 @@
 /**
- * Turns the level files into the catalog seed: data/levels/l01.csv … + meta.json + data/renames.csv → seed/catalog.sql.
+ * Turns the catalog files into the catalog seed:
+ * data/catalog/a1.csv … c1.csv + meta.json + data/topics.csv + data/renames.csv → seed/catalog.sql.
  *   npx tsx scripts/csv-to-sql.ts
  * The deploy loads the file with `wrangler d1 execute --file` on every push; loading an unchanged catalog writes no rows
- * (see `csvToSql`). Without level files the seed is empty.
+ * (see `catalogToSql`). Without catalog files the seed is empty.
  */
-import { csvToSql } from "../src/content/csv";
-import { dict } from "../src/i18n";
-import { levelSlug } from "../src/users/service";
-import { FILES, levelNumbers, readLevel, readMeta, readRenames, writeText } from "./lib/files";
-import { renamesOf } from "./lib/levels";
+import { type SeedLevel, catalogToSql } from "../src/content/csv";
+import { LEVELS } from "../src/levels/scale";
+import { catalogRenames } from "./lib/catalog";
+import { FILES, catalogHash, readCatalog, readCatalogMeta, readRenames, readTopics, writeText } from "./lib/files";
 
-const coverage = new Map(readMeta().map((m) => [m.level, m.coveragePct]));
-const renames = readRenames();
-let words = 0;
-const sql = levelNumbers().map((n) => {
-  const rows = readLevel(n);
-  words += rows.length;
-  return csvToSql({ slug: levelSlug(n), titleRu: dict("ru").levelTitle(n), titleTt: dict("tt").levelTitle(n), levelNo: n, coveragePct: coverage.get(n) ?? null }, rows, renamesOf(renames, n));
-}).join("");
-writeText(FILES.seed, sql);
-console.log(`${FILES.seed}: уровней ${levelNumbers().length}, слов ${words}, выражений ${sql.split("\n").length - 1}`);
+const catalog = readCatalog();
+if (catalog.length === 0) {
+  writeText(FILES.seed, "");
+  console.log("каталога нет");
+} else {
+  const coverage = new Map(readCatalogMeta().map((m) => [m.level, m.coveragePct]));
+  const levels = catalog.map(({ level, rows }): SeedLevel => {
+    const { slug, code } = LEVELS.find((l) => l.no === level)!;
+    return { level, slug, titleRu: code, titleTt: code, coveragePct: coverage.get(level) ?? null, rows };
+  });
+  const sql = catalogToSql(levels, readTopics(), catalogRenames(readRenames()), catalogHash());
+  writeText(FILES.seed, sql);
+  const cards = levels.reduce((sum, l) => sum + l.rows.length, 0);
+  console.log(`${FILES.seed}: уровней ${levels.length}, карточек ${cards}, выражений ${sql.split("\n").length - 1}`);
+}

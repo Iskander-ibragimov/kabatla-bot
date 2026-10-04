@@ -9,7 +9,8 @@
     "deploy": "wrangler deploy",
     "test:ci": "vitest run --coverage",
     "set-webhook": "tsx scripts/set-webhook.ts",
-    "validate": "tsx scripts/validate-levels.ts"
+    "validate": "tsx scripts/validate-levels.ts",
+    "validate:catalog": "tsx scripts/validate-catalog.ts"
   },
   "dependencies": {
     "grammy": "^1.46.0",

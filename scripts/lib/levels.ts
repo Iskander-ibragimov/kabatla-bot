@@ -82,21 +82,23 @@ export interface CheckOptions {
 /** One entry of data/levels/meta.json. */
 export interface LevelMeta { level: number; coveragePct: number }
 
-/** The levels whose coverage is lower than that of the level before, as `l03: покрытие 39% …`. */
-export function coverageDrops(meta: readonly LevelMeta[]): string[] {
+/** The levels whose coverage is lower than that of the level before, as `l03: покрытие 39% …`; `name` gives the file name of a level. */
+export function coverageDrops(meta: readonly LevelMeta[], name: (level: number) => string = levelSlug): string[] {
   const byLevel = [...meta].sort((a, b) => a.level - b.level);
   return byLevel.flatMap((m, i) => {
     const before = byLevel[i - 1];
     return before && m.coveragePct < before.coveragePct
-      ? [`${levelSlug(m.level)}: покрытие ${m.coveragePct}% меньше, чем у ${levelSlug(before.level)} (${before.coveragePct}%)`]
+      ? [`${name(m.level)}: покрытие ${m.coveragePct}% меньше, чем у ${name(before.level)} (${before.coveragePct}%)`]
       : [];
   });
 }
 
-const TRANSCRIPTION_EXTRA = "wʼ́";
-const show = (chars: string[]): string => [...new Set(chars)].map((c) => JSON.stringify(c).slice(1, -1)).join("");
+/** Signs a transcription may hold besides Tatar letters and punctuation. */
+export const TRANSCRIPTION_EXTRA = "wʼ́";
+/** The characters once each, as they are named in a violation. */
+export const show = (chars: string[]): string => [...new Set(chars)].map((c) => JSON.stringify(c).slice(1, -1)).join("");
 /** Characters of a Tatar field that are neither Tatar Cyrillic nor allowed punctuation. */
-const foreign = (text: string, extra = ""): string[] => [...text].filter((c) => !isTatarText(c) && !extra.includes(c));
+export const foreign = (text: string, extra = ""): string[] => [...text].filter((c) => !isTatarText(c) && !extra.includes(c));
 
 /**
  * Checks the level files; `levels[0]` is level 1. Returns the violations as `l01:5 <what is wrong>`, where the
