@@ -1,6 +1,6 @@
 /** Ten words of rising difficulty for the 30-second level check; `level` is the level the word belongs to. */
 export const PLACEMENT: readonly { word: string; level: number }[] = [
-  { word: "бар", level: 1 }, { word: "юк", level: 1 }, { word: "су", level: 2 }, { word: "өй", level: 3 }, { word: "вакыт", level: 4 },
+  { word: "бар", level: 1 }, { word: "юк", level: 1 }, { word: "су", level: 2 }, { word: "өй", level: 3 }, { word: "тәрәзә", level: 4 },
   { word: "авыл", level: 6 }, { word: "сәяхәт", level: 8 }, { word: "тәҗрибә", level: 10 }, { word: "мөнәсәбәт", level: 13 }, { word: "җәмгыять", level: 16 },
 ];
 
