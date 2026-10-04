@@ -76,9 +76,14 @@ describe("mergeStreams", () => {
 });
 
 describe("emptyReason", () => {
-  const base: EmptyFacts = { mode: "guided", levels: 0b1, posGroups: ALL_POS, totals: { 1: 10, 2: 10, 3: 0, 4: 5, 5: 0 }, started: { 1: 10, 2: 0, 3: 0, 4: 0, 5: 0 } };
-  it("topic mode asks for a topic", () => {
-    expect(emptyReason({ ...base, mode: "topic" })).toEqual({ kind: "pickTopic" });
+  const base: EmptyFacts = { mode: "guided", topicNo: null, levels: 0b1, posGroups: ALL_POS, totals: { 1: 10, 2: 10, 3: 0, 4: 5, 5: 0 }, started: { 1: 10, 2: 0, 3: 0, 4: 0, 5: 0 } };
+  it("topic mode asks for a topic, and tells a chosen topic that has no word left from no topic chosen", () => {
+    expect(emptyReason({ ...base, mode: "topic" })).toEqual({ kind: "pickTopic", chosen: false });
+    expect(emptyReason({ ...base, mode: "topic", topicNo: 5 })).toEqual({ kind: "pickTopic", chosen: true });
+    // «Основа» is topic 0: a chosen topic like any other.
+    expect(emptyReason({ ...base, mode: "topic", topicNo: 0 })).toEqual({ kind: "pickTopic", chosen: true });
+    // In the other orders a chosen topic changes nothing of the reason.
+    expect(emptyReason({ ...base, topicNo: 5 })).toEqual({ kind: "addLevel", level: 2 });
   });
   it("narrowed parts of speech with unstarted words in a checked level", () => {
     expect(emptyReason({ ...base, posGroups: 1, started: { ...base.started, 1: 4 } })).toEqual({ kind: "allPos" });

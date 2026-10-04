@@ -49,13 +49,16 @@ export function mergeStreams<T extends Ordered>(streams: T[][], mode: NewMode): 
 }
 
 export type EmptyReason =
-  | { kind: "pickTopic" }
+  /** «Сам выбираю тему» has no word to give. `chosen`: a topic is chosen and its words are all given; false: no topic is chosen. */
+  | { kind: "pickTopic"; chosen: boolean }
   | { kind: "allPos" }
   | { kind: "addLevel"; level: LevelNo }
   | { kind: "allDone" };
 
 export interface EmptyFacts {
   mode: NewMode;
+  /** The chosen topic, null when there is none. */
+  topicNo: number | null;
   levels: number;
   posGroups: number;
   /** Catalog cards per level 1-5. */
@@ -66,7 +69,7 @@ export interface EmptyFacts {
 
 /** Why there are no new words, and what to offer. */
 export function emptyReason(f: EmptyFacts): EmptyReason {
-  if (f.mode === "topic") return { kind: "pickTopic" };
+  if (f.mode === "topic") return { kind: "pickTopic", chosen: f.topicNo != null };
   const total = (n: number) => f.totals[n] ?? 0;
   const started = (n: number) => f.started[n] ?? 0;
   if (f.posGroups !== ALL_POS && LEVELS.some((l) => hasLevel(f.levels, l.no) && total(l.no) > started(l.no))) return { kind: "allPos" };

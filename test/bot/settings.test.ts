@@ -128,7 +128,67 @@ describe("/settings", () => {
     expect(u.methods).toEqual(["answerCallbackQuery", "sendMessage"]);
     expect(u.d1).toBe(2);
     expect(s.h.lastText()).toBe(["📚 <b>Уровни</b>", "☑ A1 · 0 из 1 (будет 500)", "☐ A2 · скоро", "☐ B1 · скоро", "☐ B2 · скоро", "☐ C1 · скоро", "", "🧭 Бот ведёт по темам · сейчас «Семья и близкие»: 0 из 1"].join("\n"));
-    expect(buttons(s.h.lastMarkup()).map(([, data]) => data)).toEqual(["hub:lv", "hub:pos", "hub:mode", "hub:tp"]);
+    expect(buttons(s.h.lastMarkup()).map(([, data]) => data)).toEqual(["hub:lv", "hub:pos", "hub:mode", "hub:tp", "learn"]);
+  });
+});
+
+describe("a change of the time zone and the streak", () => {
+  /** 00:30 UTC on 30 September: 03:30 at UTC+3, before the day changes at 04:00, and 05:30 at UTC+5, after it. */
+  const NIGHT = Date.UTC(2026, 8, 30, 0, 30);
+  const MIN = 60_000;
+  const good = (h: ReturnType<typeof harness>) => (h.lastMarkup().inline_keyboard ?? []).flat().map((b) => b.callback_data).find((c) => /^g:\d+:\d+:3$/.test(c))!;
+
+  /** A learner (Telegram id 42) at `tzOffsetMin` with a streak of 7 days up to `lastStudyDay`, who grades one card at NIGHT. */
+  async function studiedTonight(tzOffsetMin: number, lastStudyDay: string) {
+    await seedCatalog(env.DB, ["китап", "вакыт", "авыл"].map((word) => ({ level: 1, word })));
+    const { repo, user } = await seedLearner(env.DB, { now: NIGHT, tgId: 42, patch: { tzOffsetMin, streak: 7, lastStudyDay } });
+    const h = harness(env.DB, { now: NIGHT });
+    await h.text("/learn");
+    await h.press(good(h), h.tg.lastMessageId());
+    const streak = async () => { const u = (await repo.getUser(user.id))!; return { streak: u.streak, lastStudyDay: u.lastStudyDay }; };
+    const reviews = async () => (await env.DB.prepare("SELECT COUNT(*) AS n FROM review_log WHERE user_id = ?").bind(user.id).first<{ n: number }>())!.n;
+    expect(await reviews()).toBe(1);
+    /** The zone is changed a minute later, and the card on the screen is graded a minute after that. Gives the streak as the change left it. */
+    const moveAndGrade = async (offset: number) => {
+      const card = h.tg.lastMessageId(), button = good(h);
+      h.setNow(NIGHT + MIN);
+      await h.press(`tz:${offset}`, 900);
+      const moved = await streak();
+      h.setNow(NIGHT + 2 * MIN);
+      await h.press(button, card);
+      expect(await reviews()).toBe(2);
+      return moved;
+    };
+    return { streak, moveAndGrade };
+  }
+
+  it("the clock moved back across the start of the day: the day of the last study, which would lie ahead of today, becomes today, and the next grade keeps the streak", async () => {
+    // At UTC+5 it is already 30 September; at UTC+3 it is still the 29th.
+    const s = await studiedTonight(300, "2026-09-29");
+    expect(await s.streak()).toEqual({ streak: 8, lastStudyDay: "2026-09-30" });
+    expect(await s.moveAndGrade(180)).toEqual({ streak: 8, lastStudyDay: "2026-09-29" });
+    expect(await s.streak()).toEqual({ streak: 8, lastStudyDay: "2026-09-29" });
+  });
+
+  it("the clock moved forward across the start of the day: the day of the last study stays and is yesterday, so the next grade goes on with the streak", async () => {
+    // At UTC+3 it is still 29 September; at UTC+5 it is already the 30th.
+    const s = await studiedTonight(180, "2026-09-28");
+    expect(await s.streak()).toEqual({ streak: 8, lastStudyDay: "2026-09-29" });
+    expect(await s.moveAndGrade(300)).toEqual({ streak: 8, lastStudyDay: "2026-09-29" });
+    expect(await s.streak()).toEqual({ streak: 9, lastStudyDay: "2026-09-30" });
+  });
+
+  it("a change inside one day, and a learner who never studied: the day of the last study is left as it is", async () => {
+    const { repo, user } = await seedLearner(env.DB, { now: T, patch: { streak: 3, lastStudyDay: "2026-09-30" } });
+    await setSetting(repo, user.id, "tzOffsetMin", 120, T);
+    expect(await repo.getUser(user.id)).toMatchObject({ tzOffsetMin: 120, streak: 3, lastStudyDay: "2026-09-30" });
+    await repo.updateUser(user.id, { lastStudyDay: null, streak: 0 });
+    await setSetting(repo, user.id, "tzOffsetMin", 720, T);
+    expect(await repo.getUser(user.id)).toMatchObject({ tzOffsetMin: 720, streak: 0, lastStudyDay: null });
+    // Another setting never touches it, whatever the clock.
+    await repo.updateUser(user.id, { lastStudyDay: "2026-10-05" });
+    await setSetting(repo, user.id, "remindAt", "21:00", T);
+    expect((await repo.getUser(user.id))!.lastStudyDay).toBe("2026-10-05");
   });
 });
 

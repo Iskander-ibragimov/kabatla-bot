@@ -140,7 +140,7 @@ export class ReviewService {
       const end = await this.repo.dayEnd(user.id, w.dayStartMs, noNew);
       const empty = noNew
         ? emptyReason({
-          mode: user.newMode, levels: user.levels, posGroups: user.posGroups,
+          mode: user.newMode, topicNo: user.topicNo, levels: user.levels, posGroups: user.posGroups,
           totals: byLevel(end.totals.map((t) => ({ level: t.level, n: t.total }))),
           started: byLevel(end.progress.map((s) => ({ level: s.level, n: s.started }))),
         })

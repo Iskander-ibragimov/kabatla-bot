@@ -84,7 +84,13 @@ export async function setSetting(repo: Repo, userId: number, key: SettingKey, va
     if (u) {
       const after = { ...u, ...patch };
       patch.nextDailyAt = nextOccurrence(after.tzOffsetMin, after.remindAt, now);
-      if (key === "tzOffsetMin") patch.nextEveningAt = nextOccurrence(after.tzOffsetMin, EVENING_AT, now);
+      if (key === "tzOffsetMin") {
+        patch.nextEveningAt = nextOccurrence(after.tzOffsetMin, EVENING_AT, now);
+        // On a clock moved back the day of the last study may lie ahead of today, and the next grade would count the
+        // streak as broken: that day becomes today. Moved forward it is at most yesterday, which keeps the streak.
+        const today = localDay(after.tzOffsetMin, now);
+        if (u.lastStudyDay != null && u.lastStudyDay > today) patch.lastStudyDay = today;
+      }
     }
   }
   await repo.updateUser(userId, patch);

@@ -54,11 +54,11 @@ describe("new words by the learner's settings", () => {
     await seedCatalog(env.DB, [...rows(1, "а", 4, (i) => ({ topic: topics[i]! })), ...rows(2, "б", 2, (i) => ({ topic: i ? 5 : 1 }))]);
     const { repo, user } = await seedLearner(env.DB, { now, patch: { levels: levelBit(1) | levelBit(2), newMode: "topic", topicNo: 5 } });
     expect(words(await study(repo, user.id, now, easy))).toEqual(["а1", "а3", "б2"]);
-    expect(emptyOf(await screenAt(repo, user.id, now + 60_000))).toEqual({ kind: "pickTopic" });
+    expect(emptyOf(await screenAt(repo, user.id, now + 60_000))).toEqual({ kind: "pickTopic", chosen: true });
     expect((await repo.getUser(user.id))!.topicNo).toBe(5);
-    // With no topic chosen there are no new catalog words either.
+    // With no topic chosen there are no new catalog words either, and the reason says which of the two it is.
     await repo.updateUser(user.id, { topicNo: null });
-    expect(emptyOf(await screenAt(repo, user.id, now + 60_000))).toEqual({ kind: "pickTopic" });
+    expect(emptyOf(await screenAt(repo, user.id, now + 60_000))).toEqual({ kind: "pickTopic", chosen: false });
   });
 
   it("guided with a chosen topic: that topic comes first; when it has no word left the choice is cleared and the order goes on from the first unfinished topic", async () => {

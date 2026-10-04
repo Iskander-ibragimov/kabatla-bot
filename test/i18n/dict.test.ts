@@ -192,7 +192,8 @@ describe("i18n dictionaries", () => {
   });
 
   it("says why no new word came and names the button that mends it", () => {
-    expect([ru.emptyTopic, ru.emptyPos, ru.emptyLevels, ru.emptyAllDone]).toEqual([
+    expect([ru.emptyNoTopic, ru.emptyTopic, ru.emptyPos, ru.emptyLevels, ru.emptyAllDone]).toEqual([
+      "Новых слов по вашим настройкам нет: тема не выбрана.",
       "Новых слов по вашим настройкам нет: тема закончилась.",
       "Новых слов по вашим настройкам нет: в отмеченных частях речи слова кончились.",
       "Новых слов по вашим настройкам нет: отмеченные уровни пройдены.",
@@ -200,6 +201,8 @@ describe("i18n dictionaries", () => {
     ]);
     expect([ru.fixTopicBtn, ru.fixPosBtn, ru.fixLevelBtn("A2")]).toEqual(["Выбрать тему", "Включить все части речи", "Добавить уровень A2"]);
     expect([tt.fixTopicBtn, tt.fixPosBtn, tt.fixLevelBtn("A2")]).toEqual(["Тема сайлау", "Барлык сүз төркемнәрен кабызу", "A2 дәрәҗәсен өстәү"]);
+    expect([tt.emptyNoTopic, tt.emptyTopic]).toEqual(["Көйләүләрегез буенча яңа сүзләр юк: тема сайланмаган.", "Көйләүләрегез буенча яңа сүзләр юк: тема бетте."]);
+    expect([ru.learnBtn, tt.learnBtn]).toEqual(["▶ Учить", "▶ Өйрәнү"]);
   });
 
   it("the empty state points to /levels and to own words, not to adding a deck", () => {

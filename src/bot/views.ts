@@ -207,7 +207,7 @@ export function renderDone(s: DaySummary, lang: Lang, empty: EmptyReason | null)
   if (s.streak > 0) lines.push(t.streak(s.streak));
   const keyboard: Keyboard = [[btn(t.addWords, "help:add"), btn(t.decksBtn, "levels")]];
   if (empty) {
-    const [why, fix] = empty.kind === "pickTopic" ? [t.emptyTopic, btn(t.fixTopicBtn, "fix:topic")]
+    const [why, fix] = empty.kind === "pickTopic" ? [empty.chosen ? t.emptyTopic : t.emptyNoTopic, btn(t.fixTopicBtn, "fix:topic")]
       : empty.kind === "allPos" ? [t.emptyPos, btn(t.fixPosBtn, "fix:pos")]
       : empty.kind === "addLevel" ? [t.emptyLevels, btn(t.fixLevelBtn(levelCode(empty.level)), `fix:lv:${empty.level}`)]
       : [t.emptyAllDone, null];

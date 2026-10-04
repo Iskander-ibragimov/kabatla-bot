@@ -87,7 +87,7 @@ const HUB_RU = [
   "📝 Мои слова · 12",
   "🤖 Путешествия · 20",
 ].join("\n");
-const HUB_BUTTONS = [["Уровни", "hub:lv"], ["Части речи", "hub:pos"], ["Порядок слов", "hub:mode"], ["Темы", "hub:tp"]];
+const HUB_BUTTONS = [["Уровни", "hub:lv"], ["Части речи", "hub:pos"], ["Порядок слов", "hub:mode"], ["Темы", "hub:tp"], ["▶ Учить", "learn"]];
 const LEVELS_TEXT = "📚 <b>Уровни</b>\nНовые слова берутся из отмеченных уровней. Начатые слова повторяются в любом случае.";
 const POS_TEXT = "🧩 <b>Части речи</b>\nНовые слова берутся только из отмеченных частей речи. Начатые слова повторяются в любом случае.";
 const MODES_TEXT = [
@@ -105,7 +105,7 @@ describe("/levels: the hub", () => {
     const u = await b.text("/levels");
     expect(b.h.lastText()).toBe(HUB_RU);
     expect(buttons(b.h.lastMarkup())).toEqual(HUB_BUTTONS);
-    expect(rows(b.h.lastMarkup())).toEqual([["hub:lv", "hub:pos"], ["hub:mode", "hub:tp"]]);
+    expect(rows(b.h.lastMarkup())).toEqual([["hub:lv", "hub:pos"], ["hub:mode", "hub:tp"], ["learn"]]);
     expect(u.methods).toEqual(["sendMessage"]);
     expect(u.d1).toBe(2);
   });
@@ -127,7 +127,7 @@ describe("/levels: the hub", () => {
       "📝 Минем сүзләр · 12",
       "🤖 Путешествия · 20",
     ].join("\n"));
-    expect(buttons(b.h.lastMarkup())).toEqual([["Дәрәҗәләр", "hub:lv"], ["Сүз төркемнәре", "hub:pos"], ["Сүзләр тәртибе", "hub:mode"], ["Темалар", "hub:tp"]]);
+    expect(buttons(b.h.lastMarkup())).toEqual([["Дәрәҗәләр", "hub:lv"], ["Сүз төркемнәре", "hub:pos"], ["Сүзләр тәртибе", "hub:mode"], ["Темалар", "hub:tp"], ["▶ Өйрәнү", "learn"]]);
   });
 
   it("the «Уровни» button of the done screen and of the empty screen sends the hub as a new message", async () => {
@@ -294,7 +294,8 @@ describe("«Порядок слов»: the three orders of new words", () => {
     // «По частоте» takes no notice of a topic: the hub names no topic and offers no «Темы».
     await b.press("hub");
     expect(b.h.lastText().split("\n").slice(7)).toEqual(["🧭 По частоте", "📝 Мои слова · 12", "🤖 Путешествия · 20"]);
-    expect(buttons(b.h.lastMarkup())).toEqual(HUB_BUTTONS.slice(0, 3));
+    expect(buttons(b.h.lastMarkup())).toEqual(HUB_BUTTONS.filter(([, data]) => data !== "hub:tp"));
+    expect(rows(b.h.lastMarkup())).toEqual([["hub:lv", "hub:pos"], ["hub:mode"], ["learn"]]);
 
     await b.press("md:guided");
     expect((await repo.getUser(user.id))!.newMode).toBe("guided");
@@ -501,9 +502,29 @@ describe("the end of a session with no new word although the day allows more", (
     expect(u.d1).toBe(2);
     expect(b.h.lastText()).toBe(TOPICS_TEXT);
     expect(buttons(b.h.lastMarkup())).toEqual([["Основа · 0 из 1", "tp:0"], ["Семья и близкие · 0 из 2", "tp:2"], ["✅ Еда · 1 из 1", "tp:8"], ["Не выбирать", "tp:none"], ["Готово", "hub"]]);
+    // «Готово» is the hub, and its last button goes on to the cards: the learner types no command.
     await b.press("tp:2", done);
-    await b.text("/learn");
+    await b.press("hub", done);
+    expect(buttons(b.h.lastMarkup())).toEqual(HUB_BUTTONS);
+    const learn = await b.press("learn", done);
+    expect(learn.methods).toEqual(["sendMessage", "answerCallbackQuery"]);
     expect(b.h.lastText()).toContain("<b>әни</b>");
+  });
+
+  it("«Сам выбираю тему» and no topic is chosen: the line says so, with the same button", async () => {
+    const { repo, user } = await learnerWithTopics(env.DB);
+    await repo.updateUser(user.id, { newMode: "topic", topicNo: 8 });
+    const b = bot();
+    const done = await toTheEnd(b);
+    await b.press("fix:topic", done);
+    await b.press("tp:none", done);
+    await b.text("/learn");
+    expect(b.h.lastText().split("\n").at(-1)).toBe(`${LEAD}тема не выбрана.`);
+    expect(buttons(b.h.lastMarkup())[0]).toEqual(["Выбрать тему", "fix:topic"]);
+    await repo.updateUser(user.id, { lang: "tt" });
+    await b.text("/learn");
+    expect(b.h.lastText().split("\n").at(-1)).toBe("Көйләүләрегез буенча яңа сүзләр юк: тема сайланмаган.");
+    expect(buttons(b.h.lastMarkup())[0]).toEqual(["Тема сайлау", "fix:topic"]);
   });
 
   it("with autoplay the button that adds a level stays within the caps of an update with a voice", async () => {

@@ -56,8 +56,8 @@ function levelLine(l: LevelLine, t: Dict, whole: boolean): string {
 
 /**
  * /levels: the five levels, the order of new words with the topic they come from, the parts of speech when not all
- * are checked, the own decks; a button for each list. «Темы» is not offered in «По частоте», which takes no notice
- * of a topic.
+ * are checked, the own decks; a button for each list and «Учить». «Темы» is not offered in «По частоте», which takes
+ * no notice of a topic.
  */
 export function renderHub(h: Hub, lang: Lang): Rendered {
   const t = dict(lang);
@@ -71,7 +71,8 @@ export function renderHub(h: Hub, lang: Lang): Rendered {
   for (const d of h.own) lines.push(`${d.kind === "custom" ? "📝 " : ""}${esc(lang === "ru" ? d.titleRu : d.titleTt)} · ${d.total}`);
   const second = [btn(t.hubModeBtn, "hub:mode")];
   if (h.mode !== "freq") second.push(btn(t.hubTopicsBtn, "hub:tp"));
-  return { text: lines.join("\n"), keyboard: [[btn(t.hubLevelsBtn, "hub:lv"), btn(t.hubPosBtn, "hub:pos")], second] };
+  // The last row goes on to the cards: the hub is also where the done screen sends a learner to mend the settings.
+  return { text: lines.join("\n"), keyboard: [[btn(t.hubLevelsBtn, "hub:lv"), btn(t.hubPosBtn, "hub:pos")], second, ...learnKeyboard(lang)] };
 }
 
 /** «Уровни»: a checkbox for every level of the scale; a tap flips it. */

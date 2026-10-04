@@ -110,9 +110,13 @@ describe("views", () => {
     const BELOW = [["➕ Добавить слова", "help:add"], ["📚 Уровни", "levels"]];
 
     it("says why in its last line, after an empty one, and puts the button that mends it above the other two", () => {
-      expect(done({ kind: "pickTopic" })).toEqual({
+      expect(done({ kind: "pickTopic", chosen: true })).toEqual({
         text: `${plain.text}\n\nНовых слов по вашим настройкам нет: тема закончилась.`,
         last: ["", "Новых слов по вашим настройкам нет: тема закончилась."], rows: [[["Выбрать тему", "fix:topic"]], BELOW],
+      });
+      // With no topic chosen the line says that; the button is the same.
+      expect(done({ kind: "pickTopic", chosen: false })).toMatchObject({
+        last: ["", "Новых слов по вашим настройкам нет: тема не выбрана."], rows: [[["Выбрать тему", "fix:topic"]], BELOW],
       });
       expect(done({ kind: "allPos" })).toMatchObject({
         last: ["", "Новых слов по вашим настройкам нет: в отмеченных частях речи слова кончились."], rows: [[["Включить все части речи", "fix:pos"]], BELOW],
@@ -128,7 +132,8 @@ describe("views", () => {
     });
 
     it("is in Tatar for a tt user", () => {
-      expect(done({ kind: "pickTopic" }, "tt")).toMatchObject({ last: ["", "Көйләүләрегез буенча яңа сүзләр юк: тема бетте."], rows: [[["Тема сайлау", "fix:topic"]], [["➕ Сүз өстәү", "help:add"], ["📚 Дәрәҗәләр", "levels"]]] });
+      expect(done({ kind: "pickTopic", chosen: false }, "tt")).toMatchObject({ last: ["", "Көйләүләрегез буенча яңа сүзләр юк: тема сайланмаган."] });
+      expect(done({ kind: "pickTopic", chosen: true }, "tt")).toMatchObject({ last: ["", "Көйләүләрегез буенча яңа сүзләр юк: тема бетте."], rows: [[["Тема сайлау", "fix:topic"]], [["➕ Сүз өстәү", "help:add"], ["📚 Дәрәҗәләр", "levels"]]] });
       expect(done({ kind: "allPos" }, "tt")).toMatchObject({ last: ["", "Көйләүләрегез буенча яңа сүзләр юк: билгеләнгән сүз төркемнәрендә сүзләр бетте."] });
       expect(done({ kind: "allPos" }, "tt").rows[0]).toEqual([["Барлык сүз төркемнәрен кабызу", "fix:pos"]]);
       expect(done({ kind: "addLevel", level: 3 }, "tt")).toMatchObject({ last: ["", "Көйләүләрегез буенча яңа сүзләр юк: билгеләнгән дәрәҗәләр үтелде."] });

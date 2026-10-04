@@ -41,6 +41,7 @@ export const ru = {
   doneNextLearning: (after: string) => `Карточки на закреплении вернутся через ${after}. Я напомню.`,
   streak: (d: number) => `🔥 Серия: ${d} дн.`,
   /** Last line of the done screen when no new word came although the day allows more, and the button under it that mends it. */
+  emptyNoTopic: "Новых слов по вашим настройкам нет: тема не выбрана.",
   emptyTopic: "Новых слов по вашим настройкам нет: тема закончилась.",
   emptyPos: "Новых слов по вашим настройкам нет: в отмеченных частях речи слова кончились.",
   emptyLevels: "Новых слов по вашим настройкам нет: отмеченные уровни пройдены.",
