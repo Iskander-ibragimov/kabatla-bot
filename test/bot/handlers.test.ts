@@ -546,6 +546,18 @@ describe("bot handlers", () => {
       expect(callbacks(h.lastMarkup())[0]).toMatch(/^add:ok:\d+$/);
     }
 
+    it("the request for a translation is sent as HTML, so a quote in the word is shown as a quote", async () => {
+      const h = harness(env.DB, { now: T, fetch: echoLlm() });
+      await h.text("/start");
+      const repo = new Repo(env.DB);
+      await repo.updateUser((await repo.getUserByTg(42))!.id, { onboardingStep: null });
+      await h.text('ул "әйе" диде');
+      await h.press(callbacks(h.lastMarkup())[1]!, h.tg.lastMessageId());
+      const ask = h.tg.of("sendMessage").at(-1)!.payload;
+      expect(ask.text).toBe(ru.editAsk("ул &quot;әйе&quot; диде"));
+      expect(ask.parse_mode).toBe("HTML");
+    });
+
     it("✏️, then ✅: the word is added and the next typed word starts a new preview", async () => {
       const { h, repo, u, preview, add } = await editing();
       await h.press(add, preview);

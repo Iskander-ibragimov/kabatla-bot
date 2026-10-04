@@ -228,7 +228,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     if (ctx.match[1] === "edit") {
       const items = await svc.startEdit(ctx.user, id);
       await toast(ctx);
-      await ctx.reply(items ? t.editAsk(esc(items[0]!.word)) : t.previewExpired);
+      await ctx.reply(items ? t.editAsk(esc(items[0]!.word)) : t.previewExpired, HTML);
       return;
     }
     try {
