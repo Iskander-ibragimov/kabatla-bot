@@ -722,6 +722,54 @@ describe("bot handlers", () => {
     });
   });
 
+  describe("the daily limit of messages with words", () => {
+    async function ready(lang: "ru" | "tt", patch: Record<string, unknown> = {}) {
+      const h = harness(env.DB, { now: T, fetch: echoLlm() });
+      await h.text("/start");
+      const repo = new Repo(env.DB);
+      const u = (await repo.getUserByTg(42))!;
+      await repo.updateUser(u.id, { onboardingStep: null, lang, ...patch });
+      return { h, repo, u };
+    }
+
+    it.each([["ru", ru], ["tt", tt]] as const)("the 51st message of the day is answered with the limit text, in one message, %s", async (lang, t) => {
+      const { h, repo, u } = await ready(lang, { addsDay: "2026-09-30", addsCount: 49 });
+      await h.text("матур");
+      expect(h.lastText()).toContain("<b>матур</b>");
+      expect((await repo.getUser(u.id))!.addsCount).toBe(50);
+      const before = h.tg.calls.length;
+      await h.text("зур");
+      expect(h.tg.calls.slice(before).map((c) => [c.method, c.payload.text])).toEqual([["sendMessage", t.addLimit(50)]]);
+      expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM previews").first()).toEqual({ n: 1 });
+      // The next local day words are taken again.
+      h.setNow(T + 24 * 3_600_000);
+      await h.text("зур");
+      expect(h.lastText()).toContain("<b>зур</b>");
+    });
+
+    it("a translation typed by hand and a command are not messages with words", async () => {
+      const { h, repo, u } = await ready("ru");
+      await h.text("матур");
+      await h.press(callbacks(h.lastMarkup())[1]!, h.tg.lastMessageId()); // ✏️
+      await h.text("красивый");
+      await h.text("/help");
+      expect((await repo.getUser(u.id))!.addsCount).toBe(1);
+    });
+
+    it("counting a message costs no D1 call beyond the budget of the update", async () => {
+      await seedCatalog(env.DB);
+      const db = countingDb(env.DB);
+      const h = harness(db, { now: T, fetch: echoLlm() });
+      await h.text("/start");
+      const repo = new Repo(env.DB);
+      await repo.updateUser((await repo.getUserByTg(42))!.id, { onboardingStep: null, pendingUrl: "https://youtu.be/q", pendingUrlAt: T });
+      db.calls = 0;
+      await h.text("матур\nавыл\nэни");
+      expect(h.lastText()).toContain(ru.foundN(3));
+      expect(db.calls).toBeLessThanOrEqual(8);
+    });
+  });
+
   it("D1 daily limit error answers with maintenance and does not throw", async () => {
     const broken = new Repo(env.DB);
     broken.getUserByTg = async () => { throw new Error("D1_ERROR: Your account has exceeded D1's free tier daily row write limit."); };

@@ -33,6 +33,7 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   manualAsk: [["китап"]],
   notTranslated: [["китап, вакыт"]],
   tooLong: [[80], [200]],
+  addLimit: [[50]],
   added: [["<b>китап</b>, <b>вакыт</b>"]],
   editAsk: [["китап"]],
   genWorking: [["сәяхәт"]],

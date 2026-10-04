@@ -1,3 +1,4 @@
+import { PREVIEW_TTL_MS } from "../content/service";
 import { type Asked, type Lang, type Repo, deckHasNew, newInTail } from "../db/repo";
 import { dict } from "../i18n";
 import { claim, completeMany, fail } from "../jobs/queue";
@@ -8,6 +9,8 @@ import { EVENING_AT, localDay, nextOccurrence } from "../users/service";
 export interface TickDeps { repo: Repo; tg: TgApi; now: number }
 
 const MAX_SENDS = 35;
+/** A finished job is kept this long (the admin screen counts the failures of the last day), then deleted. */
+const DONE_JOBS_KEPT_MS = 7 * 86_400_000;
 const EVENING_SCAN = 100;
 
 /* SQL fragments; ?1 = now (ms). Local day uses the 04:00 boundary. */
@@ -46,7 +49,7 @@ const button = (text: string) => ({ inline_keyboard: [[{ text, callback_data: "l
 
 /**
  * Runs every minute. Candidates come from indexed columns (next_daily_at, next_evening_at, last_review_at),
- * so only due users are read. The reviews due today are counted in the index idx_cards_user_state_due alone, one row
+ * so only due users are read. The same first batch deletes previews that can no longer be confirmed and old finished jobs. The reviews due today are counted in the index idx_cards_user_state_due alone, one row
  * per due card: a deck, once open, is never closed, so the deck of a card is not looked up. Users are marked before sending (at-most-once), so a crashed or slow tick never repeats a push.
  * The daily push counts the reviews due today and the new words today's limit still allows: the new words of the
  * open decks (NEW_IN_OPEN_DECKS), or, when there are none, the words of the next level the catalog has.
@@ -70,6 +73,8 @@ export async function tick(d: TickDeps): Promise<{ sent: number }> {
         AND ${LOCAL_MIN} >= 480 AND ${LOCAL_MIN} < 1380
         AND EXISTS (SELECT 1 FROM cards c WHERE c.user_id = u.id AND c.state IN ('learning','relearning') AND c.due <= ${NOW})
       ORDER BY u.id LIMIT ${MAX_SENDS}`).bind(now),
+    // Housekeeping rides in the batch the tick makes anyway: expired previews and old finished jobs go.
+    ...repo.purgeStmts(now - PREVIEW_TTL_MS, now - DONE_JOBS_KEPT_MS),
   ]);
 
   const marks: D1PreparedStatement[] = [];

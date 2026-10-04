@@ -105,3 +105,18 @@ describe("D1 rows read with the whole catalog loaded (ruling F4)", () => {
     }
   }
 });
+
+describe("D1 rows read by a tick with nobody due", () => {
+  it("does not grow with the previews and the finished jobs that are kept", async () => {
+    const repo = new Repo(env.DB);
+    const id = await repo.insertUser({ tgId: 42, chatId: 42, lang: "ru", now });
+    await repo.updateUser(id, { onboardingStep: null, nextDailyAt: now + DAY, nextEveningAt: now + DAY });
+    const fresh = Array.from({ length: 300 }, (_, i) => env.DB.prepare("INSERT INTO previews (user_id, kind, payload, created_at) VALUES (?, 'add', '[]', ?)").bind(id, now - i * MIN));
+    const done = Array.from({ length: 300 }, (_, i) => env.DB.prepare("INSERT INTO jobs (kind, payload, run_at, done_at) VALUES ('push', '{}', ?, ?)").bind(now - DAY, now - i * MIN));
+    for (let i = 0; i < 300; i += 100) await env.DB.batch([...fresh.slice(i, i + 100), ...done.slice(i, i + 100)]);
+    const db = readingDb(env.DB);
+    await tick({ repo: new Repo(db), tg: fakeTelegram(), now });
+    expect(db.rowsRead).toBeLessThanOrEqual(20);
+    expect(await env.DB.prepare("SELECT (SELECT COUNT(*) FROM previews) AS p, (SELECT COUNT(*) FROM jobs) AS j").first()).toEqual({ p: 300, j: 300 });
+  });
+});

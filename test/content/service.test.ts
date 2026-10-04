@@ -5,7 +5,7 @@ import { Repo, type User } from "../../src/db/repo";
 import { LlmClient } from "../../src/content/llm";
 import { ContentService, MAX_TYPED, typedTranslation } from "../../src/content/service";
 import { transcribe } from "../../src/content/transcribe";
-import { consume } from "../../src/entitlements/service";
+import { consume, remaining } from "../../src/entitlements/service";
 import { ru } from "../../src/i18n/ru";
 import { ReviewService } from "../../src/review/service";
 import { tt } from "../../src/i18n/tt";
@@ -630,7 +630,7 @@ describe("content service: own words", () => {
     const r = await preview(new ContentService(new Repo(db), { llm: new LlmClient([provider("https://llm/v1")], llm) }, T), user, words.join("\n"));
     expect(r.items).toHaveLength(20);
     expect(llm.urls).toEqual(["https://llm/v1/chat/completions"]);
-    expect(db.calls).toBe(3);
+    expect(db.calls).toBe(4); // the count of the message against the daily limit, the two lookups, the preview
   });
 
   it("one invalid card does not sink the batch and untranslated words are all reported", async () => {
@@ -655,6 +655,57 @@ describe("content service: own words", () => {
     const r = await svc.prepareAdd(user, "матур", []);
     expect(r.kind).toBe("manual");
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+});
+
+describe("content service: the daily limit of messages with words (ruling F2)", () => {
+  const previewsCount = async () => (await env.DB.prepare("SELECT COUNT(*) AS n FROM previews").first<{ n: number }>())!.n;
+
+  it("takes 50 messages with words in a local day; the 51st is refused before anything is looked up, asked or stored", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const llm = llmReturning([card("матур", "красивый")]);
+    const svc = service(repo, llm);
+    await repo.updateUser(user.id, { addsDay: "2026-09-30", addsCount: 48 });
+    expect((await svc.prepareAdd(await fresh(repo, user), "матур", [])).kind).toBe("preview");
+    expect((await svc.prepareAdd(await fresh(repo, user), "матур", [])).kind).toBe("preview");
+    expect(await fresh(repo, user)).toMatchObject({ addsDay: "2026-09-30", addsCount: 50 });
+    expect(llm.urls).toHaveLength(2);
+
+    const db = countingDb(env.DB);
+    const capped = new ContentService(new Repo(db), { llm: client(llm) }, T);
+    expect(await capped.prepareAdd(await fresh(repo, user), "матур", [])).toEqual({ kind: "limit", max: 50 });
+    expect(db.calls).toBe(1);
+    expect(llm.urls).toHaveLength(2);
+    expect(await previewsCount()).toBe(2);
+    expect((await fresh(repo, user)).addsCount).toBe(50);
+    // A link alone is a message too: it is not remembered over the limit.
+    expect(await svc.prepareAdd(await fresh(repo, user), "https://youtu.be/q", [{ type: "url", offset: 0, length: 18 }])).toEqual({ kind: "limit", max: 50 });
+    expect((await fresh(repo, user)).pendingUrl).toBeNull();
+
+    // The next local day (04:00 boundary) the count starts again.
+    const tomorrow = service(repo, llm, Date.UTC(2026, 9, 1, 1, 1)); // 04:01 local
+    expect((await tomorrow.prepareAdd(await fresh(repo, user), "матур", [])).kind).toBe("preview");
+    expect(await fresh(repo, user)).toMatchObject({ addsDay: "2026-10-01", addsCount: 1 });
+  });
+
+  it("counts a message even when the caller holds a stale copy of the user: fifty-one at once are fifty", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 1 });
+    const svc = service(repo, failingLlm());
+    const results = await Promise.all(Array.from({ length: 51 }, () => svc.prepareAdd(user, "китап", [])));
+    expect(results.filter((r) => r.kind === "limit")).toHaveLength(1);
+    expect(results.filter((r) => r.kind === "duplicates-only")).toHaveLength(50);
+    expect((await fresh(repo, user)).addsCount).toBe(50);
+  });
+
+  it("does not count a message that is refused for its form: empty, or with a line that is too long", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const svc = service(repo, failingLlm());
+    expect((await svc.prepareAdd(user, "  \n ", [])).kind).toBe("empty");
+    expect((await svc.prepareAdd(user, "сүз ".repeat(20) + "я", [])).kind).toBe("too-long");
+    expect(await fresh(repo, user)).toMatchObject({ addsDay: null, addsCount: 0 });
+    expect((await svc.prepareAdd(user, "китап", [])).kind).toBe("duplicates-only");
+    expect((await svc.prepareAdd(user, "https://youtu.be/q", [{ type: "url", offset: 0, length: 18 }])).kind).toBe("ask-words");
+    expect(await fresh(repo, user)).toMatchObject({ addsDay: "2026-09-30", addsCount: 2, pendingUrl: "https://youtu.be/q" });
   });
 });
 
@@ -693,6 +744,19 @@ describe("content service: AI decks", () => {
     expect(await repo.findNoteForUser(user.id, "сүзг")).toMatchObject({ translation: "слово 3", exampleTt: "Бу сүзг." });
     expect(await jobsCount()).toBe(0);
     await expect(svc.confirmDeck(user, r.previewId)).rejects.toThrow();
+  });
+
+  it("the two daily limits are counted apart", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    for (let i = 0; i < 3; i++) expect(await consume(repo, await fresh(repo, user), "gen", T)).toBe(true);
+    expect(await consume(repo, await fresh(repo, user), "add", T)).toBe(true);
+    expect(await fresh(repo, user)).toMatchObject({ gensDay: "2026-09-30", gensCount: 3, addsDay: "2026-09-30", addsCount: 1 });
+    expect(await remaining(await fresh(repo, user), "gen", T)).toBe(0);
+    expect(await remaining(await fresh(repo, user), "add", T)).toBe(49);
+    expect(await remaining(await fresh(repo, user), "add", Date.UTC(2026, 9, 1, 1, 1))).toBe(50);
+    // A unit is taken from the row, not from the copy the caller holds: three more calls with the first copy are refused.
+    expect(await consume(repo, user, "gen", T)).toBe(false);
+    expect((await fresh(repo, user)).gensCount).toBe(3);
   });
 
   it("failed generation refunds the daily quota", async () => {

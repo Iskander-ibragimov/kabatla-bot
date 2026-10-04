@@ -221,6 +221,30 @@ describe("reminders tick", () => {
     expect((await env.DB.prepare("SELECT done_at FROM jobs").first<{ done_at: number | null }>())!.done_at).not.toBeNull();
   });
 
+  describe("housekeeping", () => {
+    const DAY = 86_400_000;
+    const now = local(30, 9, 1);
+    const preview = (createdAt: number) => env.DB.prepare("INSERT INTO previews (user_id, kind, payload, created_at) VALUES (1, 'add', '[]', ?)").bind(createdAt).run();
+    const job = (doneAt: number | null) => env.DB.prepare("INSERT INTO jobs (kind, payload, run_at, done_at) VALUES ('voice', '{}', ?, ?)").bind(now + DAY, doneAt).run();
+
+    it("deletes previews older than 24 hours and finished jobs older than 7 days, and nothing else", async () => {
+      for (const at of [now - DAY - 1, now - 3 * DAY, now - DAY, now - 60_000]) await preview(at);
+      for (const at of [now - 7 * DAY - 1, now - 30 * DAY, now - 7 * DAY, now - 60_000, null]) await job(at);
+      await run(env.DB, fakeTelegram(), now);
+      expect((await env.DB.prepare("SELECT created_at FROM previews ORDER BY created_at").all<{ created_at: number }>()).results.map((r) => r.created_at)).toEqual([now - DAY, now - 60_000]);
+      // A job that is not done is never deleted, however old.
+      expect((await env.DB.prepare("SELECT done_at FROM jobs ORDER BY id").all<{ done_at: number | null }>()).results.map((r) => r.done_at)).toEqual([now - 7 * DAY, now - 60_000, null]);
+    });
+
+    it("costs no D1 call: an idle tick still makes two", async () => {
+      await preview(now - 2 * DAY);
+      const db = countingDb(env.DB);
+      await run(db, fakeTelegram(), now);
+      expect(db.calls).toBe(2); // the batch that reads who is due, and the claim of queued jobs
+      expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM previews").first()).toEqual({ n: 0 });
+    });
+  });
+
   it("tick uses at most 10 D1 calls", async () => {
     for (let i = 0; i < 5; i++) await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 2000 + i });
     await enqueue(env.DB, "push", { chat_id: 1, text: "x" }, local(30, 9, 0));

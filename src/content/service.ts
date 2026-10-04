@@ -1,5 +1,5 @@
 import { type NoteInput, type NoteRow, type Repo, type User, wordKey } from "../db/repo";
-import { consume, refund } from "../entitlements/service";
+import { DAILY_LIMITS, consume, refund } from "../entitlements/service";
 import { type Entity, type WordLink, parseWordsAndLinks } from "./links";
 import { DECK_SYSTEM, type LlmClient, LlmUnavailable, MAX, WORDS_SYSTEM, type WordCard, completeCards } from "./llm";
 import { hasTatarLetters } from "./tatar";
@@ -15,6 +15,8 @@ export type AddResult =
   | { kind: "ask-words"; url: string }
   | { kind: "empty" }
   | { kind: "too-long"; max: number }
+  /** Today's limit of messages with words is reached: nothing was looked up, asked or stored. */
+  | { kind: "limit"; max: number }
   | { kind: "duplicates-only"; duplicates: Duplicate[] }
   | { kind: "preview"; previewId: number; items: CardDraft[]; duplicates: Duplicate[]; manual: string[] }
   /** `at`: when the bot began to wait for the translation; it names this wait in the ✖️ button of the request. */
@@ -50,7 +52,8 @@ const PENDING_URL_MS = 10 * 60_000;
  * not the translation of the old one.
  */
 const PENDING_EDIT_MS = 10 * 60_000;
-const PREVIEW_TTL_MS = 24 * 3_600_000;
+/** A preview can be confirmed for this long; the tick deletes the older ones. */
+export const PREVIEW_TTL_MS = 24 * 3_600_000;
 
 /** Combining grave and acute accents: stress marks that come along with a copied word. `transcribe` puts its own. */
 const STRESS_MARKS = /[\u0300\u0301]/g;
@@ -95,25 +98,25 @@ export class ContentService {
    * among the words the user already learns (a duplicate), in the catalog (a ready card, copied from a level that is not
    * open yet), and only then the model is asked, once for all the remaining lines. The model may restore the spelling or
    * give the Tatar word for a Russian line, so both lookups are repeated for the words it returned.
-   * A message with a line of more than MAX_TYPED.line characters is answered with `too-long`.
+   * A message with a line of more than MAX_TYPED.line characters is answered with `too-long`, and one over the
+   * daily limit of messages with words (DAILY_LIMITS.add) with `limit`.
    */
   async prepareAdd(user: User, text: string, entities: Entity[]): Promise<AddResult> {
     const parsed = parseWordsAndLinks(text, entities);
     const lines = cleanLines(parsed.items);
-    // A wait for a translation that has ended is forgotten in the write this message makes anyway.
-    const patch: Partial<User> = user.pendingEdit && !this.pending(user) ? { pendingEdit: null } : {};
-    if (!lines.length) {
-      if (!parsed.orphanUrl) return { kind: "empty" };
-      await this.repo.updateUser(user.id, { ...patch, pendingUrl: parsed.orphanUrl, pendingUrlAt: this.now });
-      return { kind: "ask-words", url: parsed.orphanUrl };
-    }
+    if (!lines.length && !parsed.orphanUrl) return { kind: "empty" };
     // A longer line is not a word or a phrase. Nothing is looked up or stored, so a remembered link waits for the next message.
     if (lines.some((l) => l.word.length > MAX_TYPED.line)) return { kind: "too-long", max: MAX_TYPED.line };
-    if (user.pendingUrl && user.pendingUrlAt != null) {
+    // From here on the message costs lookups, a request to the model and writes, so it is counted against the daily
+    // limit. The same write forgets a wait for a translation that has ended and takes or forgets the remembered link.
+    const patch: Partial<User> = user.pendingEdit && !this.pending(user) ? { pendingEdit: null } : {};
+    if (!lines.length) Object.assign(patch, { pendingUrl: parsed.orphanUrl, pendingUrlAt: this.now });
+    else if (user.pendingUrl && user.pendingUrlAt != null) {
       if (this.now - user.pendingUrlAt <= PENDING_URL_MS && lines.every((l) => !l.url)) for (const l of lines) l.url = user.pendingUrl;
       Object.assign(patch, { pendingUrl: null, pendingUrlAt: null });
     }
-    if (Object.keys(patch).length) await this.repo.updateUser(user.id, patch);
+    if (!(await consume(this.repo, user, "add", this.now, patch))) return { kind: "limit", max: DAILY_LIMITS.add };
+    if (!lines.length) return { kind: "ask-words", url: parsed.orphanUrl! };
 
     const known = await this.repo.findNotesForUser(user.id, lines.map((l) => l.word));
     const notKnown = lines.filter((l) => !known.has(wordKey(l.word)));

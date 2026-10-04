@@ -64,6 +64,8 @@ export const ru = {
   notTranslated: (list: string) => `Не удалось перевести: ${list}. Пришлите их позже или по одному.`,
   /** Answer to a typed line (a word or phrase) or a hand-typed translation that is longer than `max` characters. */
   tooLong: (max: number) => `Слишком длинно: в одной строке может быть до ${max} символов. Пришлите текст короче.`,
+  /** Answer to a message with words sent after `max` such messages in one day. */
+  addLimit: (max: number) => `Сегодня вы уже прислали ${max} сообщений со словами — это дневной лимит. Завтра можно снова.`,
   added: (words: string) => `✅ Добавлено в «Мои слова»: ${words}`,
   notAdded: "Не добавляю.",
   editAsk: (word: string) => `Пришлите свой перевод для «${word}»`,

@@ -24,6 +24,9 @@ export interface User {
   onboardingData: string | null;
   gensDay: string | null;
   gensCount: number;
+  /** Messages with words sent on the local day `addsDay`; see entitlements/service.ts. */
+  addsDay: string | null;
+  addsCount: number;
   pendingUrl: string | null;
   pendingUrlAt: number | null;
   pendingEdit: string | null;
@@ -201,6 +204,36 @@ export class Repo {
       stmts.push(this.db.prepare("INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) SELECT ?, ?, ? WHERE changes() = 1").bind(userId, deckId, now));
     }
     return stmts;
+  }
+
+  /**
+   * Takes one unit of a daily allowance kept in two columns of the user's row (the day and the count of that day),
+   * unless `limit` units are already taken on `today`. One statement, so concurrent calls never take more than the limit.
+   * `also` is written in the same UPDATE when the unit is taken; when it is not, nothing is written. Returns whether it was taken.
+   */
+  async takeDailyUnit(userId: number, columns: { day: string; count: string }, today: string, limit: number, also: Partial<Omit<User, "id">> = {}): Promise<boolean> {
+    const keys = Object.keys(also);
+    const vals = keys.map((k) => { const v = (also as Record<string, unknown>)[k]; return typeof v === "boolean" ? (v ? 1 : 0) : (v ?? null); });
+    const r = await this.db.prepare(
+      `UPDATE users SET ${columns.count} = CASE WHEN ${columns.day} IS ?1 THEN ${columns.count} + 1 ELSE 1 END, ${columns.day} = ?1${keys.map((k, i) => `, ${snake(k)} = ?${i + 4}`).join("")}
+       WHERE id = ?2 AND (${columns.day} IS NOT ?1 OR ${columns.count} < ?3)`,
+    ).bind(today, userId, limit, ...vals).run();
+    return (r.meta.changes ?? 0) > 0;
+  }
+  /** Gives back one unit taken on `today` (see `takeDailyUnit`). */
+  async returnDailyUnit(userId: number, columns: { day: string; count: string }, today: string): Promise<void> {
+    await this.db.prepare(`UPDATE users SET ${columns.count} = MAX(0, ${columns.count} - 1) WHERE id = ? AND ${columns.day} = ?`).bind(userId, today).run();
+  }
+  /**
+   * Housekeeping for a batch that runs anyway: previews created before `previewsBefore` (they can no longer be
+   * confirmed) and finished jobs done before `jobsBefore` are deleted. Each statement goes by an index
+   * (idx_previews_created, idx_jobs_pending) and reads only the rows it deletes.
+   */
+  purgeStmts(previewsBefore: number, jobsBefore: number): D1PreparedStatement[] {
+    return [
+      this.db.prepare("DELETE FROM previews WHERE created_at < ?").bind(previewsBefore),
+      this.db.prepare("DELETE FROM jobs WHERE done_at < ?").bind(jobsBefore),
+    ];
   }
 
   /* decks and notes */

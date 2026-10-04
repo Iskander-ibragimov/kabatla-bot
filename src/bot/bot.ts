@@ -5,7 +5,7 @@ import { playVoice, sendVoice } from "../content/audio";
 import { LlmClient } from "../content/llm";
 import { ContentService, MAX_TYPED, typedTranslation } from "../content/service";
 import type { Repo, User } from "../db/repo";
-import { remaining } from "../entitlements/service";
+import { DAILY_LIMITS, remaining } from "../entitlements/service";
 import type { Config } from "../env";
 import { dict } from "../i18n";
 import { ReviewService, type Screen } from "../review/service";
@@ -291,6 +291,8 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
       // The preview that was being edited is gone and the state is dropped: the text is a message with words like any other.
       ctx.user = { ...ctx.user, pendingEdit: null };
     }
+    // Over the daily limit of messages with words: one answer, and nothing is looked up. `prepareAdd` counts the message.
+    if ((await remaining(ctx.user, "add", deps.now())) === 0) { await ctx.reply(t.addLimit(DAILY_LIMITS.add)); return; }
     const m = await ctx.reply(t.searching);
     const user = ctx.user;
     const entities = (ctx.message.entities ?? []).map((e) => ({ type: e.type, offset: e.offset, length: e.length, url: "url" in e ? (e as { url?: string }).url : undefined }));
@@ -301,6 +303,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
         if (res.kind === "ask-words") r = { text: t.askWords(esc(hostOf(res.url))), keyboard: [] };
         else if (res.kind === "empty") r = { text: t.helpAdd, keyboard: [] };
         else if (res.kind === "too-long") r = { text: t.tooLong(res.max), keyboard: [] };
+        else if (res.kind === "limit") r = { text: t.addLimit(res.max), keyboard: [] };
         else {
           const keyboard = res.kind === "preview" ? renderAddPreview(res.items, res.previewId, user.lang).keyboard
             : res.kind === "duplicates-only" ? learnKeyboard(user.lang)
