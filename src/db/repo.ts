@@ -1,9 +1,12 @@
-import { STREAM_LIMIT, type Spans } from "../levels/order";
 import { type NewMode, tseqOf } from "../levels/scale";
-import type { CardState, Mem } from "../srs/fsrs";
+import type { Mem } from "../srs/fsrs";
+import { type DayWindow, type NewScope, type Queue, progressStmt, readQueue, unprogressStmt } from "./queue";
+import { type Asked, CARD_COLS, type CardRow, type Direction, NEW_CARDS, type NoteFields, askedDirection, noteCols, noteFields, ownedCopy, rowToCard } from "./sql";
+
+export type { CatalogNew, DayWindow, NewScope, Queue, StreamSeen } from "./queue";
+export type { Asked, CardRow, Direction, NewNote, NoteFields } from "./sql";
 
 export type Lang = "ru" | "tt";
-export type Direction = "tt_ru" | "ru_tt";
 export type DirectionSetting = Direction | "both";
 
 export interface User {
@@ -52,17 +55,6 @@ export interface User {
   newCursors: string | null;
 }
 
-export interface NoteFields {
-  word: string;
-  transcription: string | null;
-  pos: string;
-  translation: string;
-  exampleTt: string;
-  exampleRu: string;
-  exampleSrc: string;
-  audioFileId: string | null;
-  sourceUrl: string | null;
-}
 export type NoteInput = Pick<NoteFields, "word" | "transcription" | "pos" | "translation" | "exampleTt" | "exampleRu"> &
   Partial<Pick<NoteFields, "exampleSrc" | "audioFileId" | "sourceUrl">> & {
     /** Catalog position: only catalog notes have it; own and AI notes leave all three out. */
@@ -71,37 +63,12 @@ export type NoteInput = Pick<NoteFields, "word" | "transcription" | "pos" | "tra
 export interface NoteRow extends NoteFields { id: number; deckId: number }
 /** A note of a deck the user is subscribed to, with the titles of that deck; `owned`: the deck is the user's own, not a level. */
 export interface UserNote extends NoteRow { deckTitleRu: string; deckTitleTt: string; owned: boolean }
-export interface CardRow extends NoteFields { id: number; noteId: number; direction: Direction; mem: Mem; buriedDay: string | null }
-export interface NewNote extends NoteFields { noteId: number; direction: Direction }
-/**
- * Which catalog words may come as new ones: the checked levels, the card codes of the checked part-of-speech groups
- * (null: all), the order, the chosen topic, and the read positions per level (`Span`) with the catalog version they
- * were stored for; a position stored for another version is not used.
- */
-export interface NewScope { levels: number[]; posCodes: string[] | null; mode: NewMode; topicNo: number | null; spans: Spans; spansVersion: number }
-/** A new card of a catalog note that has no row yet, with the places of the note in its level: `seq` in the order of the level, `tseq` in its guided order. */
-export interface CatalogNew extends NewNote { level: number; topicNo: number; seq: number; tseq: number }
-/**
- * What a stream of one level held: the order values of its first and last note (`tseq` by topic, `seq` in `freq`), and
- * whether it is as long as a stream gets (STREAM_LIMIT notes): then more may lie beyond its last note.
- */
-export interface StreamSeen { first: number | null; last: number | null; full: boolean }
-/** Everything the session queue needs; see `Repo.queue`. */
-export interface Queue {
-  learning: CardRow[]; review: CardRow[];
-  ownNew: NewNote[]; newRows: NewNote[];
-  streams: Partial<Record<number, CatalogNew[]>>;
-  seen: Partial<Record<number, StreamSeen>>;
-  counts: { learning: number; review: number; newDoneToday: number; easyNewToday: number };
-  catalogVersion: number; hasCards: boolean;
-}
 /** The words a user has started in one pair (level, topic); own words are the pair (0, 0). */
 export interface PairStarted { level: number; topicNo: number; started: number }
 /** The cards the catalog has in one pair (level, topic). */
 export interface PairTotal { level: number; topicNo: number; total: number }
 /** One level of the catalog as a user sees it; `seen` counts the notes that were started or are skipped as copies of own words, in an open level; 0 for a closed one. */
 export interface LevelRow { levelNo: number; total: number; coveragePct: number | null; open: boolean; seen: number }
-export interface DayWindow { dayStartMs: number; dayEndMs: number; today: string; directions: Direction[]; limitEach?: number }
 export interface Session { userId: number; chatId: number; messageId: number | null; cardId: number | null; lastVoiceMessageId: number | null }
 export interface DeckRow {
   id: number; slug: string | null; ownerId: number | null; kind: "catalog" | "ai" | "custom";
@@ -125,42 +92,8 @@ function rowToUser(r: Record<string, unknown>): User {
   return u as unknown as User;
 }
 
-/**
- * The columns of a note `n` as `viewer` may read them. `viewer` is an SQL expression for the id of the user the row is read for
- * (a bind marker or a column), or null when the row is read for nobody in particular.
- * The link of a note is read only when the note's deck is owned by the viewer: a link belongs to the learner who typed it,
- * and whatever stands in `source_url` of a level note, which every learner sees, is read as NULL.
- */
-const noteCols = (viewer: string | null, owner = "(SELECT owner_id FROM decks WHERE id = n.deck_id)") =>
-  "n.word, n.transcription, n.pos, n.translation, n.example_tt, n.example_ru, n.example_src, n.audio_file_id, " +
-  (viewer === null ? "NULL" : `CASE WHEN ${owner} = ${viewer} THEN n.source_url END`) + " AS source_url";
-/** True when the user owns a note with the word_key of `note`, in «Мои слова» or an AI deck. */
-const ownsWord = (user: string, note = "n") =>
-  `EXISTS (SELECT 1 FROM notes o JOIN decks od ON od.id = o.deck_id WHERE od.owner_id = ${user} AND o.word_key = ${note}.word_key)`;
-/** True for a word of a level (`note` in the catalog deck `deck`) when the user owns a note with the same word_key: such a level word counts as shown. */
-const ownedCopy = (user: string, deck = "dk", note = "n") => `(${deck}.kind = 'catalog' AND ${ownsWord(user, note)})`;
 /** A card of the note was started: it is in any state but 'new'. */
 const started = (user: string, noteId: string) => `EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ${user} AND c.note_id = ${noteId} AND c.state != 'new')`;
-/** 1 when a card of this direction was started, over the cards `c` of one note. */
-const startedIn = (direction: Direction) => `COALESCE(MAX(c.direction = '${direction}' AND c.state != 'new'), 0)`;
-/**
- * The directions a user asks for, as SQL: `tt` and `ru` are expressions that give 1 when the user learns tt_ru and
- * ru_tt cards, else 0; `today` is the user's local day, the day a buried card stays hidden.
- */
-export interface Asked { today: string; tt: string; ru: string }
-/** True for a card `f` of a direction the user asks for. */
-const askedDirection = (f: string, a: Asked) => `((${f}.direction = 'tt_ru' AND ${a.tt}) OR (${f}.direction = 'ru_tt' AND ${a.ru}))`;
-/** The cards of a user that were never graded, read through the partial index of migration 0007 (alias `f`). */
-const NEW_CARDS = "cards f INDEXED BY idx_cards_user_new";
-/** True when the note has a card of this direction that was never graded (state 'new'). */
-const hasNewRow = (user: string, noteId: string, direction: Direction) =>
-  `EXISTS (SELECT 1 FROM ${NEW_CARDS} WHERE f.user_id = ${user} AND f.note_id = ${noteId} AND f.direction = '${direction}' AND f.state = 'new')`;
-/** True when the note has a card of this direction, in any state. Answered by the index of UNIQUE (user_id, note_id, direction) alone. */
-const hasRow = (user: string, noteId: string, direction: Direction) =>
-  `EXISTS (SELECT 1 FROM cards r WHERE r.user_id = ${user} AND r.note_id = ${noteId} AND r.direction = '${direction}')`;
-/** True unless a card of the note was hidden for today: the grade of one card of a word buries the word until tomorrow. */
-const wordNotBuried = (user: string, noteId: string, a: Asked) =>
-  `NOT EXISTS (SELECT 1 FROM cards b WHERE b.user_id = ${user} AND b.note_id = ${noteId} AND b.buried_day IS ${a.today})`;
 /**
  * A scalar subquery: 1 when a direction the user asks for has no card at all for this note, in any state. Such a
  * note is not buried either: the grade that buries a word makes sure both of its cards exist. Index only.
@@ -170,75 +103,6 @@ export const lacksCard = (user: string, noteId: string, a: Asked) =>
 /** A one-row table `(id)`: the last (`DESC`) or the first (`ASC`) note of the deck that is not a level word the user owns a copy of; no row when there is none. */
 const edgeNote = (user: string, deck: string, order: "ASC" | "DESC") =>
   `(SELECT x.id FROM notes x WHERE x.deck_id = ${deck}.id AND NOT ${ownedCopy(user, deck, "x")} ORDER BY x.id ${order} LIMIT 1)`;
-/**
- * How the queue finds the new cards without reading every open deck. Two facts hold for every deck and each direction:
- *
- * 1. New cards are given in the order of the note ids, and a card is passed over only while its word is buried for
- *    the day. The grade that buries a word creates its other card (state 'new') when it does not exist. So a card
- *    that was passed over is always a row in state 'new': if a card of some direction is started, every card of
- *    that direction earlier in the deck is either started too or is such a row. (An undone grade leaves a row in
- *    state 'new' as well.) Cards are never deleted.
- * 2. Hence the cards of a direction that have no row at all lie behind the last started card of that direction.
- *
- * So a deck has two kinds of cards to give: rows in state 'new', found in the index idx_cards_user_new by the ids of
- * the deck's notes (`newRowIn`), and cards without a row, found by walking the deck from its end (`tailOpenIn`).
- * The walk needs one note for a deck that is finished or untouched, and never more than the notes graded today
- * plus the cards waiting in state 'new' at the end of the deck.
- *
- * `tailOpenIn`: 1 when the deck has a card of this direction that has no row yet. The walk goes from the last note
- * backwards, passes the notes whose card of this direction is a row in state 'new' and the level words the user owns
- * a copy of, and stops at the first other note: that note either has no card of this direction — then the deck has
- * such cards, and this one can be given today — or its card is started, and then by (1) every card of this direction
- * that is still to give in this deck is a row in state 'new'. Read through idx_notes_deck.
- */
-const tailOpenIn = (user: string, deck: string, direction: Direction, a: Asked) =>
-  `COALESCE((SELECT NOT ${hasRow(user, "x.id", direction)} FROM notes x WHERE x.deck_id = ${deck}.id
-      AND CASE WHEN ${hasNewRow(user, "x.id", direction)} THEN 0 WHEN ${hasRow(user, "x.id", direction)} THEN 1
-               ELSE NOT ${ownedCopy(user, deck, "x")} AND ${wordNotBuried(user, "x.id", a)} END
-    ORDER BY x.id DESC LIMIT 1), 0)`;
-/** 1 when the deck has a card without a row in a direction the user asks for (see `tailOpenIn`): the deck must be read note by note. */
-const tailOpen = (user: string, deck: string, a: Asked) =>
-  `CASE WHEN (CASE WHEN ${a.tt} THEN ${tailOpenIn(user, deck, "tt_ru", a)} ELSE 0 END) THEN 1 WHEN ${a.ru} THEN ${tailOpenIn(user, deck, "ru_tt", a)} ELSE 0 END`;
-/** True for a card `f` of a note of this deck or of a note whose id lies between the ids of its notes: two rows of idx_notes_deck give the bounds. */
-const inNoteRange = (f: string, deck: string) =>
-  `${f}.note_id >= (SELECT MIN(x.id) FROM notes x WHERE x.deck_id = ${deck}.id) AND ${f}.note_id <= (SELECT MAX(x.id) FROM notes x WHERE x.deck_id = ${deck}.id)`;
-/** True when the user has a card in state 'new' in a direction the user asks for, in whatever deck: without one no deck needs `newRowIn`. */
-const anyNewRow = (user: string, a: Asked) =>
-  `EXISTS (SELECT 1 FROM ${NEW_CARDS} WHERE f.user_id = ${user} AND f.state = 'new' AND ${askedDirection("f", a)})`;
-/**
- * A deck whose note ids are not one run — words typed over months, a level that got a word later — has the notes of
- * other decks between its first and its last note. Up to this many rows in state 'new' between them are read from the
- * index; when there are more (a learner who switched to both directions late has one for every word repeated since),
- * the deck is read note by note instead, so the cost is bounded by the deck and not by the cards of other decks.
- */
-const MANY_NEW_ROWS = 50;
-/** True when the user has more than MANY_NEW_ROWS cards in state 'new' between the first and the last note of the deck. Index only. */
-const manyNewRowsIn = (user: string, deck: string) =>
-  `(SELECT COUNT(*) FROM (SELECT 1 FROM ${NEW_CARDS} WHERE f.user_id = ${user} AND f.state = 'new' AND ${inNoteRange("f", deck)} LIMIT ${MANY_NEW_ROWS + 1})) > ${MANY_NEW_ROWS}`;
-/**
- * True when the deck has a row in state 'new' that can be given today: a card of a direction the user asks for whose
- * word is not buried today and is not a level word the user owns a copy of. The index is read between the smallest
- * and the largest id of the deck's notes, and a card of another deck whose note id falls in between is recognised by
- * its note and passed. The first MANY_NEW_ROWS + 1 rows are tried; when none of them will do and there are more
- * (`manyNewRowsIn`), the notes of the deck are asked one by one instead.
- */
-const newRowIn = (user: string, deck: string, a: Asked) => {
-  const ok = `${askedDirection("f", a)} AND ${wordNotBuried(user, "fn.id", a)} AND NOT ${ownedCopy(user, deck, "fn")}`;
-  const first = `(SELECT f.note_id, f.direction FROM ${NEW_CARDS} WHERE f.user_id = ${user} AND f.state = 'new' AND ${inNoteRange("f", deck)} ORDER BY f.note_id, f.direction LIMIT ${MANY_NEW_ROWS + 1})`;
-  return `CASE WHEN EXISTS (SELECT 1 FROM ${first} f CROSS JOIN notes fn ON fn.id = f.note_id WHERE fn.deck_id = ${deck}.id AND ${ok}) THEN 1
-    WHEN ${manyNewRowsIn(user, deck)}
-    THEN EXISTS (SELECT 1 FROM notes fn CROSS JOIN ${NEW_CARDS} ON f.user_id = ${user} AND f.note_id = fn.id AND f.state = 'new' WHERE fn.deck_id = ${deck}.id AND ${ok})
-    ELSE 0 END`;
-};
-/** True while the deck has a new card the user can be given today; see `tailOpenIn` for why these two questions are enough. */
-const hasNewToday = (user: string, deck: string, a: Asked) =>
-  `CASE WHEN (CASE WHEN ${anyNewRow(user, a)} THEN ${newRowIn(user, deck, a)} ELSE 0 END) THEN 1 ELSE ${tailOpen(user, deck, a)} END`;
-/**
- * 1 when the new cards of the deck are found by reading it note by note: it has cards without a row (`tailOpen`), or
- * so many rows in state 'new' lie between its notes that reading them is no cheaper. 0: its new cards are all rows in
- * state 'new', few enough to be read from the index.
- */
-const readWhole = (user: string, deck: string, a: Asked) => `CASE WHEN ${manyNewRowsIn(user, deck)} THEN 1 ELSE ${tailOpen(user, deck, a)} END`;
 /**
  * For the reminder: true while the last note of the deck (level words the user owns a copy of aside) has no card in a
  * direction the user asks for — the deck has words that were never shown that way. The cards that already exist in
@@ -260,79 +124,12 @@ export const unshownInTail = (user: string, deck: string, a: Asked, limit: numbe
  */
 export const newCardRows = (user: string, a: Asked, limit: number) =>
   `(SELECT COUNT(*) FROM (SELECT 1 FROM ${NEW_CARDS} WHERE f.user_id = ${user} AND f.state = 'new' AND ${askedDirection("f", a)} LIMIT ${Math.trunc(limit)}))`;
-/** A card `c` with its note `n`; the viewer of the note is the user the card belongs to. */
-const CARD_COLS = `c.id, c.note_id, c.direction, c.state, c.step, c.stability, c.difficulty, c.due, c.last_review, c.scheduled_days, c.reps, c.lapses, c.buried_day, ${noteCols("c.user_id")}`;
 
-/**
- * The new cards of the decks the user owns («Мои слова» and the AI decks) for today, a statement of its own: one row
- * per note, in the order of the note ids, with `seen_tt` and `seen_ru` telling which of its directions are started.
- * `user`, `a` and `limit` are bind markers (or literals): the user, the asked directions with the user's day, and
- * the most notes to give.
- *
- * `todo`: the own decks that have a new card for today. `work`: the same decks with `whole`: the deck is read note by
- * note (the first half of `fresh`), otherwise its new cards are all rows in state 'new' and only their notes are read
- * (the second half); see `readWhole`.
- */
-const newInOwnDecks = (user: string, a: Asked, limit: string) => {
-  const cols = `n.id AS note_id, ${noteCols(user, "dk.owner_id")}, ${startedIn("tt_ru")} AS seen_tt, ${startedIn("ru_tt")} AS seen_ru`;
-  const open = `GROUP BY n.id HAVING COALESCE(MAX(c.buried_day IS ${a.today}), 0) = 0 AND (seen_tt < ${a.tt} OR seen_ru < ${a.ru})`;
-  return `WITH todo AS MATERIALIZED (
-          SELECT dk.id, dk.kind FROM user_decks ud JOIN decks dk ON dk.id = ud.deck_id
-          WHERE ud.user_id = ${user} AND dk.owner_id IS NOT NULL AND ${hasNewToday(user, "dk", a)}),
-        work AS MATERIALIZED (SELECT t.id, ${readWhole(user, "t", a)} AS whole FROM todo t),
-        fresh AS (
-          SELECT ${cols}
-          FROM work w CROSS JOIN notes n ON n.deck_id = w.id JOIN decks dk ON dk.id = n.deck_id LEFT JOIN cards c ON c.user_id = ${user} AND c.note_id = n.id
-          WHERE w.whole
-          ${open}
-          UNION ALL
-          SELECT ${cols}
-          FROM work w CROSS JOIN ${NEW_CARDS} ON f.user_id = ${user} AND f.state = 'new' AND ${inNoteRange("f", "w")}
-            CROSS JOIN notes n ON n.id = f.note_id JOIN decks dk ON dk.id = n.deck_id LEFT JOIN cards c ON c.user_id = ${user} AND c.note_id = n.id
-          WHERE NOT w.whole AND n.deck_id = w.id
-          ${open})
-        SELECT * FROM fresh ORDER BY note_id LIMIT ${limit}`;
-};
-
-/** An upper bound of an order value that bounds nothing: the largest integer SQLite holds. */
-const NO_END = "9223372036854775807";
-/** How many cards in state 'new' one read of the queue takes from the index: more than a learner is given before the next read. */
-const NEW_ROWS_LIMIT = 20;
-/** The bound values of one statement, in order: `p(v)` binds `v` and gives its marker `?N`, which may be used many times. */
-function binder() {
-  const values: unknown[] = [];
-  return { values, p: (v: unknown) => { values.push(v); return `?${values.length}`; } };
-}
-
-function noteFields(r: Record<string, unknown>): NoteFields {
-  return {
-    word: r.word as string, transcription: (r.transcription as string) ?? null, pos: (r.pos as string) ?? "", translation: r.translation as string,
-    exampleTt: (r.example_tt as string) ?? "", exampleRu: (r.example_ru as string) ?? "", exampleSrc: (r.example_src as string) ?? "",
-    audioFileId: (r.audio_file_id as string) ?? null, sourceUrl: (r.source_url as string) ?? null,
-  };
-}
-function rowToCard(r: Record<string, unknown>): CardRow {
-  return {
-    ...noteFields(r),
-    id: r.id as number, noteId: r.note_id as number, direction: r.direction as Direction, buriedDay: (r.buried_day as string) ?? null,
-    mem: {
-      state: r.state as CardState, step: (r.step as number) ?? null, stability: (r.stability as number) ?? null,
-      difficulty: (r.difficulty as number) ?? null, due: r.due as number, lastReview: (r.last_review as number) ?? null,
-      scheduledDays: r.scheduled_days as number, reps: r.reps as number, lapses: r.lapses as number,
-    },
-  };
-}
 const pairsStarted = (rows: Record<string, unknown>[]): PairStarted[] =>
   rows.map((r) => ({ level: r.level as number, topicNo: r.topic_no as number, started: r.started as number }));
 const pairTotals = (rows: Record<string, unknown>[]): PairTotal[] =>
   rows.map((r) => ({ level: r.level as number, topicNo: r.topic_no as number, total: r.total as number }));
 const todayOf = (rows: Record<string, unknown>[]) => ({ reviewsToday: rows[0]!.reviews as number, learnedToday: rows[0]!.learned as number });
-/** One new card for every direction of `directions`, in that order, whose flag column (`tt`, `ru`: 1 when the note needs no card of that direction) is 0. */
-function newCardsOf(rows: Record<string, unknown>[], directions: Direction[], tt: string, ru: string): NewNote[] {
-  return rows.flatMap((r) => directions
-    .filter((d) => r[d === "tt_ru" ? tt : ru] === 0)
-    .map((direction): NewNote => ({ ...noteFields(r), noteId: r.note_id as number, direction })));
-}
 /**
  * Spaces, . , ! ? … : ; « » " ' ( ) - – — and the typographic quotes “ ” „ ‘ ’ at either end of a word or phrase.
  * migrations/0002_word_key_punctuation.sql and 0006_word_key_quotes.sql trim the same set in the stored keys.
@@ -681,191 +478,14 @@ export class Repo {
     return r ? rowToCard(r) : null;
   }
 
-  /**
-   * Everything the session queue needs, in one D1 call (one batch).
-   *
-   * `learning`, `review`: the cards to repeat — every card of the user in the asked directions, whatever deck or level
-   * its note is in: a started word is repeated whatever is checked.
-   *
-   * New cards come from three places; the caller gives them in this order:
-   * - `ownNew`: the words of the decks the user owns («Мои слова», AI decks), in the order of the note ids. No setting of
-   *   the scope applies to them.
-   * - `newRows`: the cards of catalog notes that exist in state 'new' — the reverse card of a word (it was created when
-   *   the other card was graded) and a card that was shown and not graded. They belong to words the learner has met,
-   *   so they are given whatever the scope is; up to NEW_ROWS_LIMIT, in the order of the note ids.
-   * - `streams[level]`: for every level of the scope, the first STREAM_LIMIT notes (one: the head of the level) that
-   *   lack a card row in an asked direction, in the order of the mode — `seq`, the order of the level, in `freq`;
-   *   `tseq`, the guided order of the level (levels/order.ts `guidedTseq`), otherwise — with one card for every such
-   *   direction in the order of `w.directions`. `seen[level]` tells where that stream began and ended, for the read
-   *   position of the level (`nextSpans`).
-   *
-   * A stream is read from the index of its order, from the read position of the level on, and stops at its last
-   * note; see `streamStmt`. With a topic chosen (`topic`, or `guided` with a topic) only the words of that topic are
-   * given, in the guided order; the basic words that stand in the run of a themed topic are not words of it. In
-   * `topic` with no topic chosen there are no new catalog words: no stream is read, and `streams` and `seen` are
-   * empty. `freq` takes no notice of a topic.
-   *
-   * A stream holds no filter on words hidden for today, and must not get one. A word is hidden by the grade of one of
-   * its cards, and that grade creates the other card; so a hidden word has both its cards, is in no stream, and comes
-   * back through `newRows` on a later day — a note that lacks a card is never hidden. A filter here could only
-   * shorten a stream by words that are hidden for a day, and a stream shorter than STREAM_LIMIT says that nothing
-   * lies beyond it: the level would look finished, and its read position would say so until the scope changes.
-   *
-   * `counts`: how many cards there are to repeat (the lists are cut at `w.limitEach`, the counts are not) and how many
-   * new cards were graded today, those graded «Легко» counted apart. `hasCards`: the user has a card at all.
-   */
-  async queue(userId: number, w: DayWindow, s: NewScope): Promise<Queue> {
-    const lim = w.limitEach ?? 50;
-    const stmt = (sql: (p: (v: unknown) => string) => string) => {
-      const b = binder();
-      return this.db.prepare(sql(b.p)).bind(...b.values);
-    };
-    /** The asked directions as SQL: literals, so a statement binds only what it reads. */
-    const asked = (today: string): Asked => ({ today, tt: w.directions.includes("tt_ru") ? "1" : "0", ru: w.directions.includes("ru_tt") ? "1" : "0" });
-    const inAsked = askedDirection("c", asked("NULL"));
-    const levels = s.mode === "topic" && s.topicNo == null ? [] : s.levels;
-    const res = await this.db.batch<Record<string, unknown>>([
-      stmt((p) => `SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
-        WHERE c.user_id = ${p(userId)} AND c.state IN ('learning','relearning') AND ${inAsked} ORDER BY c.due LIMIT ${p(lim)}`),
-      stmt((p) => `SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
-        WHERE c.user_id = ${p(userId)} AND c.state = 'review' AND c.due < ${p(w.dayEndMs)} AND ${inAsked} AND c.buried_day IS NOT ${p(w.today)} ORDER BY c.due LIMIT ${p(lim)}`),
-      stmt((p) => newInOwnDecks(p(userId), asked(p(w.today)), p(lim))),
-      // A card hidden today is passed on its own row. Whether the word is hidden (its other card may be the hidden
-      // one, after a grade was taken back) and whether the user owns a copy of it are asked after the note is known
-      // to be a catalog note: a card of an own word, which is given by `ownNew`, costs its row and its note here.
-      stmt((p) => {
-        const user = p(userId);
-        const a = asked(p(w.today));
-        return `SELECT f.note_id, f.direction, ${noteCols(null)} FROM ${NEW_CARDS} CROSS JOIN notes n ON n.id = f.note_id
-          WHERE f.user_id = ${user} AND f.state = 'new' AND ${askedDirection("f", a)} AND f.buried_day IS NOT ${a.today} AND n.level IS NOT NULL
-            AND ${wordNotBuried(user, "n.id", a)} AND NOT ${ownsWord(user)}
-          ORDER BY f.note_id, f.direction LIMIT ${NEW_ROWS_LIMIT}`;
-      }),
-      ...levels.map((level) => this.streamStmt(userId, w.directions, s, level)),
-      stmt((p) => {
-        const user = p(userId);
-        const due = `c.user_id = ${user} AND c.state = 'review' AND c.due < ${p(w.dayEndMs)} AND ${inAsked} AND c.buried_day IS NOT ${p(w.today)}`;
-        return `SELECT
-          (SELECT COUNT(*) FROM cards c WHERE c.user_id = ${user} AND c.state IN ('learning','relearning') AND ${inAsked}) AS learning,
-          (SELECT COUNT(*) FROM cards c WHERE ${due}) AS review,
-          l.new_done, l.easy_new,
-          (SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'catalog_version') AS catalog_version,
-          EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ${user}) AS has_cards
-        FROM (SELECT COALESCE(SUM(rating < 4), 0) AS new_done, COALESCE(SUM(rating = 4), 0) AS easy_new FROM review_log
-              WHERE user_id = ${user} AND was_new = 1 AND undone = 0 AND reviewed_at >= ${p(w.dayStartMs)}) l`;
-      }),
-    ]);
-    const [learning, review, own, rows] = res;
-    const c = res[res.length - 1]!.results[0]!;
-    const place = (d: Direction) => w.directions.indexOf(d);
-    const streams: Queue["streams"] = {};
-    const seen: Queue["seen"] = {};
-    levels.forEach((level, i) => {
-      const notes = res[4 + i]!.results;
-      streams[level] = notes.flatMap((r) => newCardsOf([r], w.directions, "has_tt", "has_ru")
-        .map((n): CatalogNew => ({ ...n, level: r.level as number, topicNo: r.topic_no as number, seq: r.seq as number, tseq: r.tseq as number })));
-      seen[level] = { first: (notes[0]?.ord as number) ?? null, last: (notes[notes.length - 1]?.ord as number) ?? null, full: notes.length === STREAM_LIMIT };
-    });
-    return {
-      learning: learning!.results.map(rowToCard),
-      review: review!.results.map(rowToCard),
-      ownNew: newCardsOf(own!.results, w.directions, "seen_tt", "seen_ru").slice(0, lim),
-      // The index gives the directions of a note in the order of their names; the caller asked for an order of its own.
-      newRows: rows!.results.map((r): NewNote => ({ ...noteFields(r), noteId: r.note_id as number, direction: r.direction as Direction }))
-        .sort((x, y) => x.noteId - y.noteId || place(x.direction) - place(y.direction)),
-      streams, seen,
-      counts: { learning: c.learning as number, review: c.review as number, newDoneToday: c.new_done as number, easyNewToday: c.easy_new as number },
-      catalogVersion: (c.catalog_version as number) ?? 0,
-      hasCards: c.has_cards === 1,
-    };
-  }
-
-  /**
-   * The stream of one level: its first STREAM_LIMIT notes, in the order of the mode, that lack a card row in an asked
-   * direction, are of the asked parts of speech and are not words the user owns a copy of. One row per note; `ord` is
-   * its order value, `has_tt` and `has_ru` tell which of its cards exist.
-   *
-   * The notes are walked in the index of the order — idx_notes_level_seq in `freq`, idx_notes_level_tseq otherwise —
-   * between the bounds that the read position of the level and the chosen topic give: order values above `from` and,
-   * when it is known, up to `to`; for a themed topic (1–20), the range of order values of that topic's run, in
-   * which all its words stand. Both bounds are one expression each, so the index is entered at the nearer one and
-   * nothing before it is read. A read position counts only while the catalog is the one it was stored for;
-   * otherwise the whole level (or run) is walked. The basic words (topic 0) have no range of their own: they are
-   * spread over the runs of the themed topics, and the level is walked for them.
-   *
-   * The conditions are asked in the order of what they read, as D1 counts rows. The topic and the part of speech
-   * come first: the row of a note counts as one with its index row. Then whether a card is lacking: one exact look into the index of
-   * the cards for every asked direction, which reads a row only when that card exists. Whether the user owns the
-   * word is asked last, of the few notes that are left. So a note that is passed costs one row, and one more for
-   * each card it has when it is of the asked topic and part of speech.
-   *
-   * What a read costs is therefore the notes between the read position and the note the stream gives. While the
-   * head of the level stays, that is the head alone. When the head was started, the next read walks on to the next
-   * note of the scope — far, when the words of the scope are few in the level, and to the end of the level when
-   * there is none left; but never further, and only once: the caller stores the position that read finds.
-   */
-  private streamStmt(userId: number, directions: Direction[], s: NewScope, level: number): D1PreparedStatement {
-    const b = binder();
-    const user = b.p(userId);
-    const freq = s.mode === "freq";
-    const ord = freq ? "n.seq" : "n.tseq";
-    const span = s.spans[level];
-    const topic = freq ? null : s.topicNo;
-    const lo: string[] = [];
-    const hi: string[] = [];
-    if (topic != null && topic >= 1) { lo.push(b.p(tseqOf(topic, 0))); hi.push(b.p(tseqOf(topic + 1, 0) - 1)); }
-    if (span) {
-      const current = `(SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'catalog_version') = ${b.p(s.spansVersion)}`;
-      lo.push(`CASE WHEN ${current} THEN ${b.p(span.from)} ELSE 0 END`);
-      if (span.to != null) hi.push(`CASE WHEN ${current} THEN ${b.p(span.to)} ELSE ${NO_END} END`);
-    }
-    const one = (parts: string[], pick: "MAX" | "MIN") => (parts.length > 1 ? `${pick}(${parts.join(", ")})` : parts[0]);
-    const otherTopic = topic != null ? `WHEN n.topic_no IS NOT ${b.p(topic)} THEN 0` : "";
-    const otherPos = s.posCodes ? `WHEN n.pos NOT IN (${s.posCodes.map((code) => b.p(code)).join(", ")}) THEN 0` : "";
-    const hasAllCards = directions.map((d) => hasRow(user, "n.id", d)).join(" AND ") || "1";
-    return this.db.prepare(
-      `SELECT n.id AS note_id, n.level, n.topic_no, n.seq, n.tseq, ${ord} AS ord, ${noteCols(null)},
-         ${hasRow(user, "n.id", "tt_ru")} AS has_tt, ${hasRow(user, "n.id", "ru_tt")} AS has_ru
-       FROM notes n INDEXED BY ${freq ? "idx_notes_level_seq" : "idx_notes_level_tseq"}
-       WHERE n.level = ${b.p(level)} AND ${ord} > ${one(lo, "MAX") ?? "0"}${hi.length ? ` AND ${ord} <= ${one(hi, "MIN")}` : ""}
-         AND CASE ${otherTopic} ${otherPos} WHEN ${hasAllCards} THEN 0 ELSE NOT ${ownsWord(user)} END
-       ORDER BY ${ord} LIMIT ${STREAM_LIMIT}`,
-    ).bind(...b.values);
-  }
+  /** Everything the session queue needs, in one D1 call (one batch); see `readQueue` in db/queue.ts. */
+  queue(userId: number, w: DayWindow, s: NewScope): Promise<Queue> { return readQueue(this.db, userId, w, s); }
 
   /* progress counters */
-  /**
-   * The counter of started words, a statement for the batch of a grade, placed after a guarded statement: it runs only
-   * when that one changed a row (SQLite changes()). It adds 1 to the user's counter of the pair (level, topic) of the
-   * note — (0, 0) for an own word — when this grade is the first of the word: the card was new (`wasNew`) and the
-   * note has no other card outside state 'new'. Otherwise it adds 0, and still writes: whenever the guard passes it
-   * changes exactly one row, so the guarded statement that follows it runs as well.
-   */
-  progressStmt(userId: number, noteId: number, cardId: number, wasNew: boolean): D1PreparedStatement {
-    return this.db.prepare(
-      `INSERT INTO user_progress (user_id, level, topic_no, started)
-       SELECT ?1, COALESCE(n.level, 0), COALESCE(n.topic_no, 0),
-              ?4 AND NOT EXISTS (SELECT 1 FROM cards o WHERE o.user_id = ?1 AND o.note_id = n.id AND o.id != ?3 AND o.state != 'new')
-       FROM notes n WHERE n.id = ?2 AND changes() = 1
-       ON CONFLICT (user_id, level, topic_no) DO UPDATE SET started = started + excluded.started`,
-    ).bind(userId, noteId, cardId, wasNew ? 1 : 0);
-  }
-  /**
-   * Takes a started word back, for the batch of an undo. It runs directly after `markUndoneStmt` and only when that
-   * one changed a row (SQLite changes()), so one grade is taken back once however many undo writes arrive for it; the
-   * statement that restores the card stands before both: `[updateCardStmt, markUndoneStmt, unprogressStmt, …]`.
-   * 1 is taken from the counter of the pair of the card's note, never below 0, when no card of the note is outside
-   * state 'new' any more — the undone grade was the first of the word. Nothing changes when the word is still started.
-   */
-  unprogressStmt(userId: number, cardId: number): D1PreparedStatement {
-    return this.db.prepare(
-      `UPDATE user_progress SET started = MAX(0, started - 1)
-       WHERE user_id = ?1
-         AND (level, topic_no) = (SELECT COALESCE(n.level, 0), COALESCE(n.topic_no, 0) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.id = ?2 AND c.user_id = ?1)
-         AND NOT EXISTS (SELECT 1 FROM cards c JOIN cards o ON o.user_id = c.user_id AND o.note_id = c.note_id WHERE c.id = ?2 AND o.state != 'new')
-         AND changes() = 1`,
-    ).bind(userId, cardId);
-  }
+  /** The counter of started words, a statement for the batch of a grade; see `progressStmt` in db/queue.ts. */
+  progressStmt(userId: number, noteId: number, cardId: number, wasNew: boolean): D1PreparedStatement { return progressStmt(this.db, userId, noteId, cardId, wasNew); }
+  /** Takes a started word back, a statement for the batch of an undo; see `unprogressStmt` in db/queue.ts. */
+  unprogressStmt(userId: number, cardId: number): D1PreparedStatement { return unprogressStmt(this.db, userId, cardId); }
   private progressRowsStmt(userId: number): D1PreparedStatement {
     return this.db.prepare("SELECT level, topic_no, started FROM user_progress WHERE user_id = ? ORDER BY level, topic_no").bind(userId);
   }
