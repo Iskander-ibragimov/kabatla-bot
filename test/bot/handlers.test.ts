@@ -341,6 +341,29 @@ describe("bot handlers", () => {
       within(opening);
     });
 
+    it("the grade that finishes a chosen topic in the guided order stays within the caps, and so does the grade after it, which stores the read positions", async () => {
+      const { h, update, easy } = await autoplaySession();
+      // «китап» is the one word of topic 3, which the learner has chosen; the other words are of topic 1.
+      await env.DB.batch([
+        env.DB.prepare("UPDATE notes SET topic_no = 1, tseq = 1000000 + seq"),
+        env.DB.prepare("UPDATE notes SET topic_no = 3, tseq = 3000000 + seq WHERE word = 'китап'"),
+        env.DB.prepare("UPDATE users SET topic_no = 3 WHERE tg_id = 42"),
+      ]);
+      const first = await update(() => h.text("/learn"));
+      voiceAfterCard(first, "китап");
+      within(first);
+      const clearing = await easy();
+      expect(clearing.methods).toEqual(["sendMessage", "deleteMessage", "deleteMessage", "answerCallbackQuery", "sendVoice"]);
+      voiceAfterCard(clearing, "вакыт");
+      within(clearing);
+      expect(clearing.d1).toBe(D1_CAP);
+      expect(await new Repo(env.DB).getUserByTg(42)).toMatchObject({ topicNo: null, newCursors: null });
+      const storing = await easy();
+      voiceAfterCard(storing, "авыл");
+      within(storing);
+      expect((await new Repo(env.DB).getUserByTg(42))!.newCursors).not.toBeNull();
+    });
+
     it("undo with autoplay stays within the caps and sends the voice after the restored card", async () => {
       const { h, update, easy, cardMessage } = await autoplaySession();
       await h.text("/learn");

@@ -88,13 +88,14 @@ export class ReviewService {
   constructor(private readonly repo: Repo, private readonly now: number) {}
 
   /**
-   * Reads the queue for the user's settings without writing anything. Positions stored for another catalog version
+   * Reads the queue for the user's settings; it writes nothing but what `pre` holds, statements that run in the batch
+   * of the read, before it. Positions stored for another catalog version
    * were not used by the read, so what this read saw replaces them whatever it is; otherwise the positions are worth
    * storing when one of them moved far enough (`nextSpans`).
    */
-  private async readQueue(user: User, w: Window): Promise<QueueRead> {
+  private async readQueue(user: User, w: Window, pre: D1PreparedStatement[] = []): Promise<QueueRead> {
     const scope = newScopeOf(user);
-    const q = await this.repo.queue(user.id, { ...w, directions: directionsOf(user) }, scope);
+    const q = await this.repo.queue(user.id, { ...w, directions: directionsOf(user) }, scope, pre);
     const stream = mergeStreams(Object.values(q.streams).map((level) => level ?? []), user.newMode);
     const reset = q.catalogVersion !== scope.spansVersion;
     const next = nextSpans(reset ? {} : scope.spans, q.seen);
@@ -107,14 +108,14 @@ export class ReviewService {
   /**
    * The queue of a session: one read, and the read positions are stored when they moved (one more D1 call, only then).
    * In the guided order a chosen topic that has no word left is cleared: the queue is read once more without it, and
-   * the choice and the positions of that second read are written together.
+   * the choice is cleared in the batch of that second read, with the positions that were stored for it. The positions
+   * of the order without a topic are not stored by this read — it would be a write of its own — but by the next one,
+   * which finds none stored, as after any change of the settings.
    */
   private async sessionQueue(user: User, w: Window): Promise<QueueRead> {
     const read = await this.readQueue(user, w);
     if (user.newMode === "guided" && user.topicNo != null && !read.streamed) {
-      const onward = await this.readQueue({ ...user, topicNo: null }, w);
-      await this.repo.endTopic(user.id, user.topicNo, onward.cursors);
-      return onward;
+      return this.readQueue({ ...user, topicNo: null }, w, [this.repo.clearTopicStmt(user.id, user.topicNo)]);
     }
     if (read.moved) await this.repo.updateUser(user.id, { newCursors: read.cursors });
     return read;

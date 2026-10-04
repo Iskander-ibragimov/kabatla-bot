@@ -179,11 +179,12 @@ export class Repo {
   }
   async updateUser(id: number, patch: Partial<Omit<User, "id">>): Promise<void> { await this.updateUserStmt(id, patch).run(); }
   /**
-   * Clears the chosen topic `topicNo`, whose words have all been given, and stores the read positions found for the
-   * order without it, in one statement. Nothing is written when the user has chosen another topic meanwhile.
+   * Clears the chosen topic `topicNo`, whose words have all been given, and the read positions, which were stored for
+   * the order with that topic. A statement for the batch of a queue read (`queue`, `pre`). Nothing is written when the
+   * user has chosen another topic meanwhile.
    */
-  async endTopic(userId: number, topicNo: number, newCursors: string): Promise<void> {
-    await this.db.prepare("UPDATE users SET topic_no = NULL, new_cursors = ?3 WHERE id = ?1 AND topic_no = ?2").bind(userId, topicNo, newCursors).run();
+  clearTopicStmt(userId: number, topicNo: number): D1PreparedStatement {
+    return this.db.prepare("UPDATE users SET topic_no = NULL, new_cursors = NULL WHERE id = ?1 AND topic_no = ?2").bind(userId, topicNo);
   }
   /**
    * Checks or unchecks level `no` of the scale for the user, in one UPDATE that looks at the stored set and changes
@@ -513,8 +514,8 @@ export class Repo {
     return r ? rowToCard(r) : null;
   }
 
-  /** Everything the session queue needs, in one D1 call (one batch); see `readQueue` in db/queue.ts. */
-  queue(userId: number, w: DayWindow, s: NewScope): Promise<Queue> { return readQueue(this.db, userId, w, s); }
+  /** Everything the session queue needs, in one D1 call (one batch), after the statements of `pre` in the same batch; see `readQueue` in db/queue.ts. */
+  queue(userId: number, w: DayWindow, s: NewScope, pre: D1PreparedStatement[] = []): Promise<Queue> { return readQueue(this.db, userId, w, s, pre); }
 
   /* progress counters */
   /** The counter of started words, a statement for the batch of a grade; see `progressStmt` in db/queue.ts. */

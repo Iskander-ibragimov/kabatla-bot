@@ -79,12 +79,35 @@ describe("new words by the learner's settings", () => {
     expect(emptyOf(await screenAt(repo, user.id, now + 120_000))).toEqual({ kind: "allDone" });
   });
 
-  it("a topic chosen while the finished one was being cleared is kept", async () => {
-    const { repo, user } = await seedLearner(env.DB, { now, patch: { topicNo: 7 } });
-    await repo.endTopic(user.id, 3, "{}");
-    expect((await repo.getUser(user.id))!.topicNo).toBe(7);
-    await repo.endTopic(user.id, 7, "{}");
-    expect((await repo.getUser(user.id))!).toMatchObject({ topicNo: null, newCursors: "{}" });
+  it("a topic chosen while the finished one was being cleared is kept, with its read positions", async () => {
+    const { repo, user } = await seedLearner(env.DB, { now, patch: { topicNo: 7, newCursors: "{}" } });
+    await repo.batch([repo.clearTopicStmt(user.id, 3)]);
+    expect((await repo.getUser(user.id))!).toMatchObject({ topicNo: 7, newCursors: "{}" });
+    await repo.batch([repo.clearTopicStmt(user.id, 7)]);
+    expect((await repo.getUser(user.id))!).toMatchObject({ topicNo: null, newCursors: null });
+  });
+
+  it("the 🔵 counter, also on the card that undo brings back: the day's limit while a level has a word to give; else the new cards that are left", async () => {
+    await seedCatalog(env.DB, rows(1, "а", 3));
+    const { repo, user } = await seedLearner(env.DB, { now });
+    const me = async () => (await repo.getUser(user.id))!;
+    let s = await new ReviewService(repo, now).nextScreen(user);
+    expect(asCard(s).counts).toEqual({ n: 10, l: 0, r: 0 });
+    // «а1» is graded «Хорошо» and the grade is taken back: the level still has a word to give, and no card is on a learning step any more.
+    s = await gradeShown(repo, user, s, 3, now);
+    expect([asCard(s).view.word, asCard(s).counts]).toEqual(["а2", { n: 9, l: 1, r: 0 }]);
+    s = await new ReviewService(repo, now).undo(await me());
+    expect([asCard(s).view.word, asCard(s).counts]).toEqual(["а1", { n: 10, l: 0, r: 0 }]);
+    // Every word of the checked level is started; two own words are all that is new.
+    for (let i = 0; i < 3; i++) s = await gradeShown(repo, user, s, 4, now);
+    expect(s.kind).toBe("done");
+    await repo.insertNotes(await repo.customDeck(user.id, now), [note("үзем1"), note("үзем2")]);
+    s = await screenAt(repo, user.id, now);
+    expect([asCard(s).view.word, asCard(s).counts]).toEqual(["үзем1", { n: 2, l: 0, r: 0 }]);
+    s = await gradeShown(repo, user, s, 4, now);
+    expect([asCard(s).view.word, asCard(s).counts]).toEqual(["үзем2", { n: 1, l: 0, r: 0 }]);
+    s = await new ReviewService(repo, now).undo(await me());
+    expect([asCard(s).view.word, asCard(s).counts]).toEqual(["үзем1", { n: 2, l: 0, r: 0 }]);
   });
 
   it("a level unchecked after ten words: the ten keep coming for review and no new word of it is given; checked again, its eleventh word is next", async () => {
@@ -249,19 +272,28 @@ describe("D1 and Telegram calls of one update", () => {
     expect((await update(() => h.text("/learn"))).d1).toBe(4);
   });
 
-  it("the grade that finishes a chosen topic in the guided order reads the queue twice and clears the choice in one write: 8 D1 calls", async () => {
-    await seedCatalog(env.DB, rows(1, "а", 5, (i) => ({ topic: i < 2 ? 3 : 1 })));
+  it("the grade that finishes a chosen topic in the guided order reads the queue twice and clears the choice in the batch of the second read: one D1 call more than a plain grade; the grade after it stores the positions", async () => {
+    await seedCatalog(env.DB, rows(1, "а", 6, (i) => ({ topic: i < 2 ? 3 : 1 })));
     const { h, user, update, easyGrade } = await atTheBot({ topicNo: 3 });
+    const me = async () => (await new Repo(env.DB).getUser(user.id))!;
     await update(() => h.text("/learn"));
     expect(h.lastText()).toContain("<b>а1</b>");
     const plain = await easyGrade();
     expect(h.lastText()).toContain("<b>а2</b>");
+    expect(plain.d1).toBe(6);
     const clearing = await easyGrade();
     expect(h.lastText()).toContain("<b>а3</b>");
-    expect(clearing.d1).toBe(plain.d1 + 2);
-    expect(clearing.d1).toBeLessThanOrEqual(8);
+    expect(clearing.d1).toBe(plain.d1 + 1);
     expect(clearing.tg).toBeLessThanOrEqual(3);
-    expect((await new Repo(env.DB).getUser(user.id))!.topicNo).toBeNull();
+    expect(await me()).toMatchObject({ topicNo: null, newCursors: null });
+    // The next read finds no position stored for the order without a topic and stores what it sees; then grades are plain again.
+    const storing = await easyGrade();
+    expect(h.lastText()).toContain("<b>а4</b>");
+    expect(storing.d1).toBe(plain.d1 + 1);
+    const after = await me();
+    expect(readSpans(after.newCursors, scopeKey(after))).toEqual({ version: 0, spans: { 1: { from: 1_000_003, to: null } } });
+    expect((await easyGrade()).d1).toBe(plain.d1);
+    expect(h.lastText()).toContain("<b>а5</b>");
   });
 
   it("the grade that ends the session, with the reason for no new words and the position of the finished level stored, is within 8 D1 calls", async () => {

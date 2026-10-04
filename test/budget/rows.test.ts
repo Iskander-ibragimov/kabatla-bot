@@ -51,6 +51,8 @@ interface Case {
   direction: DirectionSetting;
   /** The order the started words were started in, when it is not the order of `mode`: the learner changed the mode. */
   startedIn?: NewMode;
+  /** `guided` only: the topic the learner has chosen. Every word of it but the last is started, besides what `where` says. */
+  chosenTopic?: number;
 }
 
 /**
@@ -71,12 +73,15 @@ async function learner(catalog: CatalogNote[], c: Case) {
   const themed = order.filter((n) => inPos(n) && n.topicNo >= 1);
   const half = mergeStreams([scope], c.startedIn ?? c.mode).slice(0, Math.floor(scope.length / 2));
   // `topic`: a learner at the start chose the fifth topic; in the middle, the topic of the next themed word; at the end, the last topic.
-  const topicNo = c.mode !== "topic" ? null
+  const topicNo = c.chosenTopic !== undefined ? c.chosenTopic
+    : c.mode !== "topic" ? null
     : c.where === "start" ? 5
       : c.where === "middle" ? themed.find((n) => !half.includes(n))!.topicNo
         : themed[themed.length - 1]!.topicNo;
   const left = new Set(order.filter((n) => inPos(n) && (topicNo === null || n.topicNo === topicNo)).slice(-2).map((n) => n.id));
-  const started = c.where === "start" ? [] : c.where === "middle" ? half : c.where === "run" ? order.slice(1, -1) : scope.filter((n) => !left.has(n.id));
+  const byWhere = c.where === "start" ? [] : c.where === "middle" ? half : c.where === "run" ? order.slice(1, -1) : scope.filter((n) => !left.has(n.id));
+  const ofChosenTopic = c.chosenTopic === undefined ? [] : order.filter((n) => n.topicNo === c.chosenTopic).slice(0, -1);
+  const started = [...byWhere, ...ofChosenTopic.filter((n) => !byWhere.includes(n))];
 
   const { repo, user } = await seedLearner(env.DB, {
     now, tgId: 42,
@@ -211,6 +216,34 @@ describe("D1 rows read by a session with the whole catalog (3 850 notes) loaded"
       const r = await afterChange({ levels: "all", pos: "all", mode, where: "middle", direction: "tt_ru" }, "direction", "both");
       expect(r.first).toBeLessThanOrEqual(BUDGET.first);
       expect(r.plain).toBeLessThanOrEqual(BUDGET.grade);
+    });
+  }
+
+  for (const direction of ["tt_ru", "both"] as const) {
+    it(`all five levels, all parts of speech, guided with a chosen topic, middle, ${direction}: the grade that finishes the topic reads the queue once more with no position stored, a first read; so is the grade after it, which stores the positions; the grades after that are within the grade budget`, async () => {
+      // Half of the catalog is started in the guided order (the topics up to the tenth); the learner chose topic 15, and its last word is left.
+      const { repo, userId } = await learner(await fullCatalog(), { levels: "all", pos: "all", mode: "guided", where: "middle", direction, chosenTopic: 15 });
+      const bot = atTheBot();
+      expect(await bot.learn()).toBeLessThanOrEqual(BUDGET.first);
+      // The reviews due today, the cards that wait and the last word of the topic are graded; the grade after which the topic is cleared is the last of these.
+      const rows: number[] = [];
+      while ((await repo.getUser(userId))!.topicNo !== null && rows.length < 80) {
+        expect(bot.h.lastText()).toContain("🔵");
+        rows.push((await bot.grade(4))!);
+      }
+      expect((await repo.getUser(userId))!).toMatchObject({ topicNo: null, newCursors: null });
+      // Class `first`: the second read of that grade is for the order without a topic, for which no position is stored: it walks over the started half.
+      const clearing = rows.pop()!;
+      expect(clearing).toBeLessThanOrEqual(BUDGET.first);
+      expect(clearing).toBeGreaterThan(1925);
+      expect(Math.max(...rows)).toBeLessThanOrEqual(BUDGET.grade);
+      // Class `first` once more: the topic was cleared in the batch of that read, and the positions are stored by the next one.
+      expect(await bot.grade(4)).toBeLessThanOrEqual(BUDGET.first);
+      expect((await repo.getUser(userId))!.newCursors).not.toBeNull();
+      // Class `grade` from here on.
+      const plain = await grades(bot, 4);
+      expect(plain).toHaveLength(4);
+      expect(Math.max(...plain)).toBeLessThanOrEqual(BUDGET.grade);
     });
   }
 

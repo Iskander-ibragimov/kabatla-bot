@@ -184,8 +184,10 @@ function newCardsOf(rows: Record<string, unknown>[], directions: Direction[], tt
  *
  * `counts`: how many cards there are to repeat (the lists are cut at `w.limitEach`, the counts are not) and how many
  * new cards were graded today, those graded «Легко» counted apart. `hasCards`: the user has a card at all.
+ *
+ * `pre`: statements that run first in the same batch — a write the read is to see, at no D1 call of its own.
  */
-export async function readQueue(db: D1Database, userId: number, w: DayWindow, s: NewScope): Promise<Queue> {
+export async function readQueue(db: D1Database, userId: number, w: DayWindow, s: NewScope, pre: D1PreparedStatement[] = []): Promise<Queue> {
   const lim = w.limitEach ?? 50;
   const stmt = (sql: (p: (v: unknown) => string) => string) => {
     const b = binder();
@@ -195,7 +197,8 @@ export async function readQueue(db: D1Database, userId: number, w: DayWindow, s:
   const asked = (today: string): Asked => ({ today, tt: w.directions.includes("tt_ru") ? "1" : "0", ru: w.directions.includes("ru_tt") ? "1" : "0" });
   const inAsked = askedDirection("c", asked("NULL"));
   const levels = s.mode === "topic" && s.topicNo == null ? [] : s.levels;
-  const res = await db.batch<Record<string, unknown>>([
+  const all = await db.batch<Record<string, unknown>>([
+    ...pre,
     stmt((p) => `SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
       WHERE c.user_id = ${p(userId)} AND c.state IN ('learning','relearning') AND ${inAsked} ORDER BY c.due LIMIT ${p(lim)}`),
     stmt((p) => `SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
@@ -226,6 +229,7 @@ export async function readQueue(db: D1Database, userId: number, w: DayWindow, s:
             WHERE user_id = ${user} AND was_new = 1 AND undone = 0 AND reviewed_at >= ${p(w.dayStartMs)}) l`;
     }),
   ]);
+  const res = all.slice(pre.length);
   const [learning, review, own, rows] = res;
   const c = res[res.length - 1]!.results[0]!;
   const place = (d: Direction) => w.directions.indexOf(d);
