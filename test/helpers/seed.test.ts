@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Repo } from "../../src/db/repo";
-import { WORDS, seedCatalog, seedLevels, seedUser } from "./seed";
+import { WORDS, seedCatalog, seedLearner, seedLevels, seedUser } from "./seed";
 
 const T = Date.UTC(2026, 8, 30, 6);
 
@@ -82,5 +82,15 @@ describe("seedCatalog and the new columns", () => {
     expect((await seedUser(env.DB, { now: T, level: 3, tgId: 2 })).user.levels).toBe(4);
     expect((await seedUser(env.DB, { now: T, level: 1, tgId: 3, levels: 31 })).user.levels).toBe(31);
     expect((await seedUser(env.DB, { now: T, level: 7, tgId: 4 })).user.levels).toBe(1);
+  });
+
+  it("seedLearner gives an onboarded user with the defaults of a new learner and creates no deck, so it goes with seedCatalog", async () => {
+    await seedCatalog(env.DB, [{ level: 1, word: "бер" }]);
+    const { repo, user } = await seedLearner(env.DB, { now: T, patch: { direction: "both", levels: 3 } });
+    expect(user).toMatchObject({ onboardingStep: null, tgId: 1, direction: "both", levels: 3, posGroups: 255, newMode: "guided", topicNo: null, tzOffsetMin: 180 });
+    expect(user.nextDailyAt).toBeGreaterThan(T);
+    expect(await repo.userDeckIds(user.id)).toEqual([]);
+    expect((await env.DB.prepare("SELECT slug FROM decks").all()).results).toEqual([{ slug: "a1" }]);
+    expect((await seedLearner(env.DB, { now: T, tgId: 7 })).user).toMatchObject({ tgId: 7, levels: 1, direction: "tt_ru" });
   });
 });

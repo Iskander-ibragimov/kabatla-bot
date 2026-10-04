@@ -95,3 +95,19 @@ export async function seedUser(db: D1Database, opts: { now: number; level?: numb
   const user = (await repo.getUser(userId))!;
   return { repo, user, deckId, noteIds };
 }
+
+/**
+ * A user who finished onboarding, with no deck and no subscription: the learner of the new model, whose new catalog
+ * words come from the checked levels (`users.levels`, A1 by default) and not from subscribed level decks.
+ */
+export async function seedLearner(db: D1Database, opts: { now: number; tgId?: number; patch?: Partial<User> }): Promise<{ repo: Repo; user: User }> {
+  const repo = new Repo(db);
+  const userId = await repo.insertUser({ tgId: opts.tgId ?? 1, chatId: opts.tgId ?? 1, lang: "ru", now: opts.now });
+  const tz = opts.patch?.tzOffsetMin ?? 180;
+  await repo.updateUser(userId, {
+    onboardingStep: null, tzOffsetMin: tz,
+    nextDailyAt: nextOccurrence(tz, opts.patch?.remindAt ?? "09:00", opts.now), nextEveningAt: nextOccurrence(tz, "20:00", opts.now),
+    ...(opts.patch ?? {}),
+  });
+  return { repo, user: (await repo.getUser(userId))! };
+}
