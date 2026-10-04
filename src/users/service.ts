@@ -98,9 +98,6 @@ export async function setSetting(repo: Repo, userId: number, key: SettingKey, va
  */
 export const DEFAULTS = { newPerDay: 10, remindAt: "09:00", tzOffsetMin: 180 } as const;
 
-/** Slug of the catalog deck that held a level by hundreds: l01 … l20. */
-export const levelSlug = (level: number) => `l${String(level).padStart(2, "0")}`;
-
 /**
  * The introduction, `users.onboarding_step`: the language, two screens about the bot, the levels to study; NULL once
  * it is finished. Nothing else is asked: the rest is `DEFAULTS`.

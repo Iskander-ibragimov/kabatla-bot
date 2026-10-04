@@ -97,9 +97,10 @@ export class ContentService {
 
   /**
    * Turns a message with words and links into a preview. Each line is looked for, in this order:
-   * among the words the user already learns (a duplicate), in the catalog (a ready card, copied from a level that is not
-   * open yet), and only then the model is asked, once for all the remaining lines. The model may restore the spelling or
-   * give the Tatar word for a Russian line, so both lookups are repeated for the words it returned.
+   * among the words the user already learns — the own words and the catalog words that were shown — (a duplicate), in
+   * the catalog (a ready card, copied from whatever level it stands in), and only then the model is asked, once for all
+   * the remaining lines. The model may restore the spelling or give the Tatar word for a Russian line, so both lookups
+   * are repeated for the words it returned.
    * A message with a line of more than MAX_TYPED.line characters is answered with `too-long`, and one over the
    * daily limit of messages with words (DAILY_LIMITS.add) with `limit`.
    */
@@ -159,7 +160,7 @@ export class ContentService {
       if (!own && !draft) manual.push({ word: l.word, url: l.url });
       else if (repeated(key)) continue;
       else if (own) {
-        // A link goes only on a note of the user's own deck. A level note is shared: there the link is dropped and not announced.
+        // A link goes only on a note of the user's own deck. A catalog note is shared: there the link is dropped and not announced.
         const linkAdded = !!l.url && own.owned && !own.sourceUrl;
         if (linkAdded) links.push(this.repo.setNoteSourceUrlStmt(user.id, own.id, l.url!));
         duplicates.push({ word, deckTitle: user.lang === "ru" ? own.deckTitleRu : own.deckTitleTt, linkAdded });
@@ -272,7 +273,7 @@ export class ContentService {
   async cancel(user: User, previewId: number): Promise<void> { await this.repo.deletePreview(user.id, previewId); }
 
   /**
-   * An AI deck on a topic. A word the catalog has (in any level, open or not) or the user already has is left out: a
+   * An AI deck on a topic. A word the catalog has (in any level, checked or not) or the user already has is left out: a
    * card of the model in a deck of the user's own would stand in for the reviewed card of the level for good.
    * The lookup is two D1 calls. With fewer than MIN_DECK_CARDS words left there is no deck: the result is `failed`
    * and the daily unit is given back, as when the model is down.

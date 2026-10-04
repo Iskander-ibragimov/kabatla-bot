@@ -31,8 +31,6 @@ export const noteCols = (viewer: string | null, owner = "(SELECT owner_id FROM d
 /** True when the user owns a note with the word_key of `note`, in «Мои слова» or an AI deck. */
 export const ownsWord = (user: string, note = "n") =>
   `EXISTS (SELECT 1 FROM notes o JOIN decks od ON od.id = o.deck_id WHERE od.owner_id = ${user} AND o.word_key = ${note}.word_key)`;
-/** True for a word of a level (`note` in the catalog deck `deck`) when the user owns a note with the same word_key: such a level word counts as shown. */
-export const ownedCopy = (user: string, deck = "dk", note = "n") => `(${deck}.kind = 'catalog' AND ${ownsWord(user, note)})`;
 /**
  * The directions a user asks for, as SQL: `tt` and `ru` are expressions that give 1 when the user learns tt_ru and
  * ru_tt cards, else 0; `today` is the user's local day, the day a buried card stays hidden.

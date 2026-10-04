@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Repo, type User } from "../../src/db/repo";
 import { HINT } from "../../src/tutorial/hints";
-import { advanceOnboarding, getOrCreate, levelSlug, langFromTelegram, nextOccurrence, setSetting, startOnboarding } from "../../src/users/service";
+import { advanceOnboarding, getOrCreate, langFromTelegram, nextOccurrence, setSetting, startOnboarding } from "../../src/users/service";
 import { seedCatalog, seedLearner } from "../helpers/seed";
 
 const T = Date.UTC(2026, 8, 30, 6, 0);
@@ -17,7 +17,6 @@ describe("users", () => {
     expect(langFromTelegram("tts")).toBe("ru");
     expect(langFromTelegram(undefined)).toBe("ru");
   });
-  it("level slug is l01…l20", () => expect([1, 9, 20].map(levelSlug)).toEqual(["l01", "l09", "l20"]));
   it("invalid settings rejected", async () => {
     const repo = new Repo(env.DB);
     const { user } = await getOrCreate(repo, 5, 5, "ru", T);
@@ -43,7 +42,7 @@ describe("users", () => {
     expect(b.created).toBe(false);
     expect(b.user.id).toBe(a.user.id);
     expect(b.user.lang).toBe("tt");
-    expect(b.user).toMatchObject({ level: 1, direction: "tt_ru" });
+    expect(b.user).toMatchObject({ levels: 1, direction: "tt_ru" });
   });
 
   describe("onboarding", () => {
@@ -93,7 +92,8 @@ describe("users", () => {
         // The first reminder is the next 09:00 in Moscow, not the moment of the finish; the evening one is today's 20:00.
         nextDailyAt: Date.UTC(2026, 9, 1, 6, 0), nextEveningAt: Date.UTC(2026, 8, 30, 17, 0),
       });
-      expect(await repo.userDeckIds(state.user.id)).toEqual([]);
+      // The levels are the checked ones of the row: no deck is subscribed to.
+      expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM user_decks").first()).toEqual({ n: 0 });
     });
 
     it("an answer the step does not take is invalid and writes nothing", async () => {
@@ -164,7 +164,7 @@ describe("users", () => {
     it("the finish stores what the step «Уровни» says, also for a learner who had answered the introduction that is gone", async () => {
       const repo = new Repo(env.DB);
       await catalog();
-      const user = await atLevels(repo, 14, { newPerDay: 20, remindAt: "19:00", tzOffsetMin: 300, onboardingData: JSON.stringify({ i: 10, known: 4 }), level: 2 });
+      const user = await atLevels(repo, 14, { newPerDay: 20, remindAt: "19:00", tzOffsetMin: 300, onboardingData: JSON.stringify({ i: 10, known: 4 }) });
       expect(await advanceOnboarding(repo, user, "go", T)).toEqual({ kind: "finished" });
       expect(await repo.getUser(user.id)).toMatchObject({
         onboardingStep: null, onboardingData: null, newPerDay: 10, remindAt: "09:00", tzOffsetMin: 180, levels: 0b1,

@@ -4,8 +4,7 @@
  */
 import { transcribe } from "../../src/content/transcribe";
 import { wordKey } from "../../src/db/repo";
-import { levelSlug } from "../../src/users/service";
-import { LEVEL_SIZE, type Row, isAttested, tokenize, wordForm } from "./levels";
+import { LEVEL_SIZE, type Row, isAttested, levelSlug, tokenize, wordForm } from "./levels";
 import type { LemmaRow, SentencePair } from "./sources";
 import { dictionaryForm, verbInfinitive } from "./tatar-verbs";
 

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { CSV_HEADER, type Row, checkLevels, checkRenames, coverage, coverageDrops, formatLevel, levelFile, levelNumber, parseLevel, renamesOf, tokenize, wordForm } from "../../scripts/lib/levels";
+import { CSV_HEADER, type Row, checkLevels, checkRenames, coverage, coverageDrops, formatLevel, levelFile, levelNumber, levelSlug, parseLevel, renamesOf, tokenize, wordForm } from "../../scripts/lib/levels";
 import { transcribe } from "../../src/content/transcribe";
-import { levelSlug } from "../../src/users/service";
 
 const C1 = "бтдкмнрслч", C2 = "зшрлнмтдкб";
 /** 100 distinct made-up nouns per level: `<c1>а<c2>ы<c3>` with the level picking c3. */
@@ -30,6 +29,7 @@ const opts = (expectLevels: number) => ({ attested, expectLevels });
 
 describe("level files", () => {
   it("names level files like the deck slugs", () => {
+    expect([1, 9, 20].map(levelSlug)).toEqual(["l01", "l09", "l20"]);
     expect(levelFile(1)).toBe("l01.csv");
     for (let n = 1; n <= 20; n++) expect(levelFile(n)).toBe(`${levelSlug(n)}.csv`);
   });

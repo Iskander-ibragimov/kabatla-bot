@@ -10,25 +10,26 @@ import { levelBit } from "../../src/levels/scale";
 import { countingDb } from "../helpers/countingDb";
 import { easyButton, harness } from "../helpers/botHarness";
 import { echoLlm } from "../helpers/llm";
-import { note, seedLevels, seedUser } from "../helpers/seed";
+import { levelWords, note, seedCatalog, seedUser } from "../helpers/seed";
 import { TELEGRAM_TEXT_LIMIT, visibleLength } from "../helpers/visible";
 
 const T = Date.UTC(2026, 8, 30, 6);
 const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
 
-const seedCatalog = (db: D1Database) => seedLevels(db, { 1: ["китап", "вакыт"], 2: ["авыл", "су"], 3: ["юл", "көн"], 4: ["өй", "эш"] });
+/** Two words in each of A1, A2, B1 and B2. */
+const catalog = (db: D1Database) =>
+  seedCatalog(db, [["китап", "вакыт"], ["авыл", "су"], ["юл", "көн"], ["өй", "эш"]].flatMap((words, i) => levelWords(i + 1, words)));
 const callbacks = (m: { inline_keyboard?: { callback_data: string }[][] }) => (m.inline_keyboard ?? []).flat().map((b) => b.callback_data);
 
 describe("bot handlers", () => {
   // The introduction, the hints and «Показать обучение заново» are in tutorial.test.ts.
   async function startSession() {
-    await seedCatalog(env.DB);
+    await catalog(env.DB);
     const h = harness(env.DB, { now: T });
     await h.text("/start");
     const repo = new Repo(env.DB);
     const u = (await repo.getUserByTg(42))!;
     await repo.updateUser(u.id, { onboardingStep: null });
-    await repo.subscribe(u.id, (await repo.getDeckBySlug("l01"))!.id, T);
     await h.text("/learn");
     const cardMsg = h.tg.lastMessageId();
     const grade = callbacks(h.tg.of("sendMessage").at(-1)!.payload.reply_markup as never)[2]!;
@@ -93,17 +94,20 @@ describe("bot handlers", () => {
       void repo;
     });
 
-    it("does not play another learner's own word, a word of a level that is not open, or a note that does not exist: the tap is answered like a stale button", async () => {
+    it("does not play another learner's own word, a catalog word that was not shown to the learner, or a note that does not exist: the tap is answered like a stale button", async () => {
       const { h, repo, cardMsg } = await startSession();
       const other = await repo.insertUser({ tgId: 77, chatId: 77, lang: "ru", now: T });
       const [secret] = await repo.insertNotes(await repo.customDeck(other, T), [{ word: "серсүз", transcription: null, pos: "", translation: "тайна", exampleTt: "", exampleRu: "", audioFileId: "VOICE-SECRET" }]);
-      const closed = (await env.DB.prepare("SELECT id FROM notes WHERE word = 'авыл'").first<{ id: number }>())!.id; // level 2, not open
-      await setAudio(closed, "VOICE-AVYL");
+      // «авыл» is a word of A2, which is not checked; «вакыт» is the next word of A1, which is: neither was shown yet.
+      const [unchecked, next] = await Promise.all(["авыл", "вакыт"].map(async (word) => (await env.DB.prepare("SELECT id FROM notes WHERE word = ?").bind(word).first<{ id: number }>())!.id));
+      await setAudio(unchecked!, "VOICE-AVYL");
+      await setAudio(next!, "VOICE-VAKYT");
       await h.press(`v:${secret}`, cardMsg);
-      await h.press(`v:${closed}`, cardMsg);
+      await h.press(`v:${unchecked}`, cardMsg);
+      await h.press(`v:${next}`, cardMsg);
       await h.press("v:999999", cardMsg);
       expect(h.tg.of("sendVoice")).toEqual([]);
-      expect(answers(h)).toEqual([ru.staleButton, ru.staleButton, ru.staleButton]);
+      expect(answers(h)).toEqual([ru.staleButton, ru.staleButton, ru.staleButton, ru.staleButton]);
       expect(JSON.stringify(h.tg.calls)).not.toContain("VOICE-SECRET");
       expect((await repo.getSession((await repo.getUserByTg(42))!.id))!.lastVoiceMessageId).toBeNull();
     });
@@ -118,8 +122,8 @@ describe("bot handlers", () => {
   });
 
   it("a note stored with fields longer than a message is still sent as a card, in every checked level", async () => {
-    await seedUser(env.DB, { now: T, level: 1, levels: levelBit(1) | levelBit(2), words: 1, tgId: 42 });
-    await seedLevels(env.DB, { 2: ["авыл"] }, { 1: 31 });
+    await seedUser(env.DB, { now: T, words: 1, tgId: 42, patch: { levels: levelBit(1) | levelBit(2) } });
+    await seedCatalog(env.DB, levelWords(2, ["авыл"]));
     await env.DB.prepare("UPDATE notes SET translation = ?, example_tt = ?, example_ru = ?").bind("я".repeat(5000), "ә".repeat(5000), "я".repeat(5000)).run();
     const h = harness(env.DB, { now: T });
     await h.text("/learn");
@@ -152,8 +156,8 @@ describe("bot handlers", () => {
 
     /** A learner with autoplay on, levels 1 and 2 checked, two words left in level 1 and level 2 behind it; every word has a voice. */
     async function autoplaySession(direction: "tt_ru" | "both" = "tt_ru") {
-      await seedUser(env.DB, { now: T, level: 1, levels: levelBit(1) | levelBit(2), words: 2, tgId: 42, patch: { autoplay: true, direction } });
-      await seedLevels(env.DB, { 2: ["авыл", "су"] }, { 1: 31 });
+      await seedUser(env.DB, { now: T, words: 2, tgId: 42, patch: { autoplay: true, direction, levels: levelBit(1) | levelBit(2) } });
+      await seedCatalog(env.DB, levelWords(2, ["авыл", "су"]));
       await env.DB.prepare("UPDATE notes SET audio_file_id = 'voice-of-' || word").run();
       const db = countingDb(env.DB);
       const h = harness(db, { now: T });
@@ -662,7 +666,7 @@ describe("bot handlers", () => {
     });
 
     it("counting a message costs no D1 call beyond the budget of the update", async () => {
-      await seedCatalog(env.DB);
+      await catalog(env.DB);
       const db = countingDb(env.DB);
       const h = harness(db, { now: T, fetch: echoLlm() });
       await h.text("/start");
@@ -745,8 +749,8 @@ describe("bot handlers", () => {
     });
 
     it("escapes the word, translation and example in the admin message", async () => {
-      const { h, repo, cardMsg } = await startSession();
-      const [id] = await repo.insertNotes((await repo.getDeckBySlug("l01"))!.id, [
+      const { h, repo, u, cardMsg } = await startSession();
+      const [id] = await repo.insertNotes(await repo.customDeck(u.id, T), [
         { word: "<b>x&y", transcription: null, pos: "n", translation: "a<i>b", exampleTt: "<u>q", exampleRu: "r&s" },
       ]);
       await h.press(`r:${id}`, cardMsg);
@@ -779,24 +783,25 @@ describe("bot handlers", () => {
       expect(JSON.stringify(h.tg.calls)).not.toContain("серсүз");
     });
 
-    it("lets the user report a note they have a card for even after leaving its deck", async () => {
+    it("lets the user report a catalog word they have a card for, and no word of the level that was not shown yet", async () => {
       const { h, repo, u, cardMsg } = await startSession();
       const id = await noteId("китап");
       expect(await repo.getCardByNote(u.id, id, "tt_ru")).not.toBeNull();
-      await env.DB.prepare("DELETE FROM user_decks WHERE user_id = ?").bind(u.id).run();
+      expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM user_decks").first()).toEqual({ n: 0 });
       await h.press(`r:${id}`, cardMsg);
-      expect(answers(h)).toEqual([ru.reportSent]);
+      await h.press(`r:${await noteId("вакыт")}`, cardMsg);
+      expect(answers(h)).toEqual([ru.reportSent, ru.staleButton]);
+      expect((await repo.recentReports(10)).map((r) => r.word)).toEqual(["китап"]);
     });
 
     it("stays within the Telegram and D1 budget and does not redraw the card", async () => {
-      await seedCatalog(env.DB);
+      await catalog(env.DB);
       const db = countingDb(env.DB);
       const h = harness(db, { now: T });
       await h.text("/start");
       const repo = new Repo(env.DB);
       const u = (await repo.getUserByTg(42))!;
       await repo.updateUser(u.id, { onboardingStep: null });
-      await repo.subscribe(u.id, (await repo.getDeckBySlug("l01"))!.id, T);
       await h.text("/learn");
       const id = await noteId("китап");
       const tgBefore = h.tg.calls.length;

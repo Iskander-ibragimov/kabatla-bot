@@ -12,8 +12,8 @@
 import { STREAM_LIMIT, type Spans } from "../levels/order";
 import { type NewMode, tseqOf } from "../levels/scale";
 import {
-  type Asked, CARD_COLS, type CardRow, type Direction, NEW_CARDS, type NewNote, askedDirection, hasNewRow, hasRow, noteCols, noteFields, ownedCopy, ownsWord,
-  rowToCard, wordNotBuried,
+  type Asked, CARD_COLS, type CardRow, type Direction, NEW_CARDS, type NewNote, askedDirection, hasNewRow, hasRow, noteCols, noteFields, ownsWord, rowToCard,
+  wordNotBuried,
 } from "./sql";
 
 export interface DayWindow { dayStartMs: number; dayEndMs: number; today: string; directions: Direction[]; limitEach?: number }
@@ -43,7 +43,8 @@ export interface Queue {
 /** 1 when a card of this direction was started, over the cards `c` of one note. */
 const startedIn = (direction: Direction) => `COALESCE(MAX(c.direction = '${direction}' AND c.state != 'new'), 0)`;
 /**
- * How the queue finds the new cards without reading every open deck. Two facts hold for every deck and each direction:
+ * How the queue finds the new cards of the decks a learner owns («Мои слова», the AI decks) without reading every such
+ * deck whole. Two facts hold for every one of them and each direction:
  *
  * 1. New cards are given in the order of the note ids, and a card is passed over only while its word is buried for
  *    the day. The grade that buries a word creates its other card (state 'new') when it does not exist. So a card
@@ -58,15 +59,15 @@ const startedIn = (direction: Direction) => `COALESCE(MAX(c.direction = '${direc
  * plus the cards waiting in state 'new' at the end of the deck.
  *
  * `tailOpenIn`: 1 when the deck has a card of this direction that has no row yet. The walk goes from the last note
- * backwards, passes the notes whose card of this direction is a row in state 'new' and the level words the user owns
- * a copy of, and stops at the first other note: that note either has no card of this direction — then the deck has
- * such cards, and this one can be given today — or its card is started, and then by (1) every card of this direction
- * that is still to give in this deck is a row in state 'new'. Read through idx_notes_deck.
+ * backwards, passes the notes whose card of this direction is a row in state 'new', and stops at the first other
+ * note: that note either has no card of this direction — then the deck has such cards, and this one can be given
+ * today — or its card is started, and then by (1) every card of this direction that is still to give in this deck is
+ * a row in state 'new'. Read through idx_notes_deck.
  */
 const tailOpenIn = (user: string, deck: string, direction: Direction, a: Asked) =>
   `COALESCE((SELECT NOT ${hasRow(user, "x.id", direction)} FROM notes x WHERE x.deck_id = ${deck}.id
       AND CASE WHEN ${hasNewRow(user, "x.id", direction)} THEN 0 WHEN ${hasRow(user, "x.id", direction)} THEN 1
-               ELSE NOT ${ownedCopy(user, deck, "x")} AND ${wordNotBuried(user, "x.id", a)} END
+               ELSE ${wordNotBuried(user, "x.id", a)} END
     ORDER BY x.id DESC LIMIT 1), 0)`;
 /** 1 when the deck has a card without a row in a direction the user asks for (see `tailOpenIn`): the deck must be read note by note. */
 const tailOpen = (user: string, deck: string, a: Asked) =>
@@ -78,10 +79,10 @@ const inNoteRange = (f: string, deck: string) =>
 const anyNewRow = (user: string, a: Asked) =>
   `EXISTS (SELECT 1 FROM ${NEW_CARDS} WHERE f.user_id = ${user} AND f.state = 'new' AND ${askedDirection("f", a)})`;
 /**
- * A deck whose note ids are not one run — words typed over months, a level that got a word later — has the notes of
- * other decks between its first and its last note. Up to this many rows in state 'new' between them are read from the
- * index; when there are more (a learner who switched to both directions late has one for every word repeated since),
- * the deck is read note by note instead, so the cost is bounded by the deck and not by the cards of other decks.
+ * A deck whose note ids are not one run — words typed over months — has the notes of other decks between its first
+ * and its last note. Up to this many rows in state 'new' between them are read from the index; when there are more
+ * (a learner who switched to both directions late has one for every word repeated since), the deck is read note by
+ * note instead, so the cost is bounded by the deck and not by the cards of other decks.
  */
 const MANY_NEW_ROWS = 50;
 /** True when the user has more than MANY_NEW_ROWS cards in state 'new' between the first and the last note of the deck. Index only. */
@@ -89,13 +90,13 @@ const manyNewRowsIn = (user: string, deck: string) =>
   `(SELECT COUNT(*) FROM (SELECT 1 FROM ${NEW_CARDS} WHERE f.user_id = ${user} AND f.state = 'new' AND ${inNoteRange("f", deck)} LIMIT ${MANY_NEW_ROWS + 1})) > ${MANY_NEW_ROWS}`;
 /**
  * True when the deck has a row in state 'new' that can be given today: a card of a direction the user asks for whose
- * word is not buried today and is not a level word the user owns a copy of. The index is read between the smallest
- * and the largest id of the deck's notes, and a card of another deck whose note id falls in between is recognised by
- * its note and passed. The first MANY_NEW_ROWS + 1 rows are tried; when none of them will do and there are more
- * (`manyNewRowsIn`), the notes of the deck are asked one by one instead.
+ * word is not buried today. The index is read between the smallest and the largest id of the deck's notes, and a
+ * card of another deck whose note id falls in between is recognised by its note and passed. The first
+ * MANY_NEW_ROWS + 1 rows are tried; when none of them will do and there are more (`manyNewRowsIn`), the notes of the
+ * deck are asked one by one instead.
  */
 const newRowIn = (user: string, deck: string, a: Asked) => {
-  const ok = `${askedDirection("f", a)} AND ${wordNotBuried(user, "fn.id", a)} AND NOT ${ownedCopy(user, deck, "fn")}`;
+  const ok = `${askedDirection("f", a)} AND ${wordNotBuried(user, "fn.id", a)}`;
   const first = `(SELECT f.note_id, f.direction FROM ${NEW_CARDS} WHERE f.user_id = ${user} AND f.state = 'new' AND ${inNoteRange("f", deck)} ORDER BY f.note_id, f.direction LIMIT ${MANY_NEW_ROWS + 1})`;
   return `CASE WHEN EXISTS (SELECT 1 FROM ${first} f CROSS JOIN notes fn ON fn.id = f.note_id WHERE fn.deck_id = ${deck}.id AND ${ok}) THEN 1
     WHEN ${manyNewRowsIn(user, deck)}
@@ -125,7 +126,7 @@ const newInOwnDecks = (user: string, a: Asked, limit: string) => {
   const cols = `n.id AS note_id, ${noteCols(user, "dk.owner_id")}, ${startedIn("tt_ru")} AS seen_tt, ${startedIn("ru_tt")} AS seen_ru`;
   const open = `GROUP BY n.id HAVING COALESCE(MAX(c.buried_day IS ${a.today}), 0) = 0 AND (seen_tt < ${a.tt} OR seen_ru < ${a.ru})`;
   return `WITH todo AS MATERIALIZED (
-          SELECT dk.id, dk.kind FROM user_decks ud JOIN decks dk ON dk.id = ud.deck_id
+          SELECT dk.id FROM user_decks ud JOIN decks dk ON dk.id = ud.deck_id
           WHERE ud.user_id = ${user} AND dk.owner_id IS NOT NULL AND ${hasNewToday(user, "dk", a)}),
         work AS MATERIALIZED (SELECT t.id, ${readWhole(user, "t", a)} AS whole FROM todo t),
         fresh AS (

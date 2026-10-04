@@ -43,8 +43,7 @@ const directionsOf = (d: DirectionSetting): Direction[] => (d === "both" ? BOTH 
 const ordOf = (mode: NewMode) => (n: CatalogNote) => (mode === "freq" ? n.seq : n.tseq);
 
 /**
- * A learner (Telegram id 42) with all five levels in the scope and ten own words, subscribed to the five level decks in
- * the old way as well, as the learners who came before the checkboxes are.
+ * A learner (Telegram id 42) with all five levels in the scope and ten own words.
  * `start`: nothing is started. `middle`: the first 1 900 catalog words in the order of `startedIn` (the mode of the
  * case unless given: a learner who changed the mode in the middle of a level started them in another order) and five
  * own words are started. `end`: every catalog word is started but the last two of the scope, and five own words.
@@ -57,7 +56,6 @@ const ordOf = (mode: NewMode) => (n: CatalogNote) => (mode === "freq" ? n.seq : 
 async function learner(catalog: CatalogNote[], c: Case) {
   const { repo, user } = await seedLearner(env.DB, { now, tgId: 42, patch: { direction: c.direction, newPerDay: 20, levels: 31 } });
   const own = await repo.insertNotes(await repo.customDeck(user.id, now), Array.from({ length: 10 }, (_, i) => note(`үзем${i + 1}`)));
-  await env.DB.prepare("INSERT INTO user_decks (user_id, deck_id, added_at) SELECT ?1, id, ?2 FROM decks WHERE kind = 'catalog'").bind(user.id, now).run();
   const directions = directionsOf(c.direction);
   const order = mergeStreams([catalog], c.mode);
   // The scope of a chosen topic: the topic of the case, or any themed topic when the case leaves the choice open.

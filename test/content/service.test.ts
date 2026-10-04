@@ -9,12 +9,13 @@ import { consume, remaining } from "../../src/entitlements/service";
 import { ru } from "../../src/i18n/ru";
 import { hub, topicLines } from "../../src/levels/service";
 import { ReviewService } from "../../src/review/service";
+import { newMem } from "../../src/srs/fsrs";
 import { tt } from "../../src/i18n/tt";
 import { dayWindow } from "../../src/users/service";
 import { countingDb } from "../helpers/countingDb";
 import { type FakeFetch, card, client, fakeFetch, failingLlm, llmReturning, provider, userPrompt } from "../helpers/llm";
 import { gradedMem } from "../helpers/review";
-import { note, seedCatalog, seedLearner, seedLevels, seedTopics, seedUser } from "../helpers/seed";
+import { levelWords, note, seedCatalog, seedLearner, seedTopics, seedUser } from "../helpers/seed";
 
 const T = Date.UTC(2026, 8, 30, 6, 0);
 const STRESS = "́";
@@ -45,6 +46,8 @@ async function newWords(repo: Repo, userId: number, levels: number[]): Promise<s
   const q = await repo.queue(userId, { ...dayWindow(180, T), directions: ["tt_ru"] }, { levels, posCodes: null, mode: "freq", topicNo: null, spans: {}, spansVersion: 0 });
   return [...q.ownNew, ...levels.flatMap((level) => q.streams[level] ?? [])].map((n) => n.word);
 }
+/** The learner was shown these catalog words: the card of each exists and was never graded. From then on the word is the learner's. */
+const shown = async (repo: Repo, userId: number, ...noteIds: number[]) => { for (const id of noteIds) await repo.ensureNewCard(userId, id, "tt_ru", newMem(T)); };
 const jobsCount = async () => (await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs").first<{ n: number }>())!.n;
 /** The preview after a translation was typed for it; throws when the text was not applied. */
 const edit = async (svc: ContentService, user: User, text: string) => {
@@ -77,26 +80,48 @@ describe("content service: own words", () => {
     expect(await jobsCount()).toBe(0);
   });
 
-  it("a duplicate in an open level is not added again, and the shared catalog note gets no link", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+  it("a catalog word the learner was shown is not added again, and the shared catalog note gets no link", async () => {
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
+    await shown(repo, user.id, noteIds[0]!);
     const llm = failingLlm();
     const svc = service(repo, llm);
     const r = await svc.prepareAdd(user, " Китап  https://x.com/v", []);
     // The reply does not claim a link it has not stored.
-    expect(r).toEqual({ kind: "duplicates-only", duplicates: [{ word: "Китап", deckTitle: "Уровень 1", linkAdded: false }] });
+    expect(r).toEqual({ kind: "duplicates-only", duplicates: [{ word: "Китап", deckTitle: "A1", linkAdded: false }] });
     expect(await catalogLinks()).toEqual([{ word: "китап", source_url: null }]);
     const notes = await env.DB.prepare("SELECT COUNT(*) AS n FROM notes").first<{ n: number }>();
     expect(notes!.n).toBe(1);
     const inTatar = await svc.prepareAdd({ ...user, lang: "tt" }, "китап", []);
-    expect(inTatar).toMatchObject({ kind: "duplicates-only", duplicates: [{ word: "китап", deckTitle: "1 нче дәрәҗә", linkAdded: false }] });
+    expect(inTatar).toMatchObject({ kind: "duplicates-only", duplicates: [{ word: "китап", deckTitle: "A1", linkAdded: false }] });
     expect(llm.urls).toEqual([]);
   });
 
+  it("a word of a checked level that was not shown yet is no duplicate: its ready card is copied, and the level does not give it again", async () => {
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 3 }); // A1: китап, вакыт, авыл
+    const llm = failingLlm();
+    const svc = service(repo, llm);
+    const r = await preview(svc, user, "вакыт https://example.com/v");
+    expect(r.duplicates).toEqual([]);
+    expect(r.items.map((i) => [i.word, i.translation, i.sourceUrl, i.ai])).toEqual([["вакыт", "время", "https://example.com/v", false]]);
+    expect(llm.urls).toEqual([]);
+    await svc.confirmAdd(user, r.previewId);
+    // The own copy comes first, then the next word of A1; once that one is started, A1 gives its third word, not «вакыт».
+    expect(await newWords(repo, user.id, [1])).toEqual(["вакыт", "китап"]);
+    await repo.insertCard(user.id, noteIds[0]!, "tt_ru", gradedMem(T));
+    expect(await newWords(repo, user.id, [1])).toEqual(["вакыт", "авыл"]);
+    // Typed again, both are words the learner has: the own copy, and the card of the level.
+    expect(await svc.prepareAdd(user, "вакыт\nкитап", [])).toEqual({ kind: "duplicates-only", duplicates: [
+      { word: "вакыт", deckTitle: "Мои слова", linkAdded: false }, { word: "китап", deckTitle: "A1", linkAdded: false },
+    ] });
+    expect(await catalogLinks()).toEqual([{ word: "китап", source_url: null }, { word: "вакыт", source_url: null }, { word: "авыл", source_url: null }]);
+  });
+
   it("a link sent by one learner for a level word is not shown on another learner's card", async () => {
-    const a = await seedUser(env.DB, { now: T, words: 1, tgId: 1 }); // l01: китап
+    const a = await seedUser(env.DB, { now: T, words: 1, tgId: 1 }); // A1: китап
     const b = await seedUser(env.DB, { now: T, words: 1, tgId: 2 });
+    await shown(a.repo, a.user.id, a.noteIds[0]!);
     const r = await service(a.repo, failingLlm()).prepareAdd(a.user, "китап https://private.example/a", [{ type: "url", offset: 6, length: 25 }]);
-    expect(r).toEqual({ kind: "duplicates-only", duplicates: [{ word: "китап", deckTitle: "Уровень 1", linkAdded: false }] });
+    expect(r).toEqual({ kind: "duplicates-only", duplicates: [{ word: "китап", deckTitle: "A1", linkAdded: false }] });
     for (const { repo, user } of [b, a]) {
       const screen = await new ReviewService(repo, T).nextScreen(user);
       if (screen.kind !== "card") throw new Error(screen.kind);
@@ -110,10 +135,9 @@ describe("content service: own words", () => {
 
   it("a link that was left on a catalog note is shown to nobody and is not copied", async () => {
     const STRAY = "https://stray.example/left-by-someone";
-    const a = await seedUser(env.DB, { now: T, level: 1, words: 1, tgId: 1 }); // l01: китап
-    // One new word a day: once «китап» is graded the limit is spent, so level 5 (the next level the catalog has) stays closed for b.
-    const b = await seedUser(env.DB, { now: T, level: 1, words: 1, tgId: 2, patch: { newPerDay: 1 } });
-    await seedLevels(env.DB, { 5: ["бәхет", "шатлык"] });
+    const a = await seedUser(env.DB, { now: T, words: 1, tgId: 1 }); // A1: китап
+    const b = await seedUser(env.DB, { now: T, words: 1, tgId: 2 });
+    await seedCatalog(env.DB, levelWords(5, ["бәхет", "шатлык"]));
     await env.DB.prepare("UPDATE notes SET source_url = ? WHERE deck_id IN (SELECT id FROM decks WHERE owner_id IS NULL)").bind(STRAY).run();
     const svc = service(b.repo, failingLlm());
 
@@ -129,8 +153,8 @@ describe("content service: own words", () => {
     expect(renderCard(screen.view, screen.counts, screen.intervals, true, "ru").text).not.toMatch(/🔗|stray/);
 
     // (b) the duplicate line, with and without a link of the user's own
-    expect(await svc.prepareAdd(b.user, "китап", [])).toEqual({ kind: "duplicates-only", duplicates: [{ word: "китап", deckTitle: "Уровень 1", linkAdded: false }] });
-    expect(await svc.prepareAdd(b.user, "китап https://b.example/x", [])).toEqual({ kind: "duplicates-only", duplicates: [{ word: "китап", deckTitle: "Уровень 1", linkAdded: false }] });
+    expect(await svc.prepareAdd(b.user, "китап", [])).toEqual({ kind: "duplicates-only", duplicates: [{ word: "китап", deckTitle: "A1", linkAdded: false }] });
+    expect(await svc.prepareAdd(b.user, "китап https://b.example/x", [])).toEqual({ kind: "duplicates-only", duplicates: [{ word: "китап", deckTitle: "A1", linkAdded: false }] });
 
     // (c) a copy into My words takes only the link typed with the word
     const mine = service(a.repo, failingLlm());
@@ -179,9 +203,9 @@ describe("content service: own words", () => {
     expect(late.items[0]!.sourceUrl).toBeNull();
   });
 
-  it("takes a ready card from a level that is not open yet, without calling the AI", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1 });
-    await seedLevels(env.DB, { 5: ["бәхет"] });
+  it("takes a ready card from a level that is not checked, without calling the AI", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T });
+    await seedCatalog(env.DB, levelWords(5, ["бәхет"]));
     await env.DB.prepare("UPDATE notes SET audio_file_id = 'voice-5', transcription = 'бәхе́т' WHERE word_key = 'бәхет'").run();
     const llm = failingLlm();
     const r = await service(repo, llm).prepareAdd(user, "бәхет", []);
@@ -195,27 +219,28 @@ describe("content service: own words", () => {
   });
 
   it("finds a catalog phrase that is stored with punctuation when it is typed without", async () => {
-    // Level 1 (open) and level 5 (not open yet) keep their phrases the way they are shown: «Рәхмәт!», «Хәлләр ничек?».
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1 });
-    await seedLevels(env.DB, { 1: ["Рәхмәт!"], 5: ["Хәлләр ничек?"] });
+    // A1 (a phrase the learner was shown) and C1 (not checked) keep their phrases the way they are shown: «Рәхмәт!», «Хәлләр ничек?».
+    const { repo, user } = await seedUser(env.DB, { now: T });
+    const [thanks] = await seedCatalog(env.DB, [...levelWords(1, ["Рәхмәт!"]), ...levelWords(5, ["Хәлләр ничек?"])]);
+    await shown(repo, user.id, thanks!);
     const llm = failingLlm();
     const svc = service(repo, llm);
-    expect(await svc.prepareAdd(user, "рәхмәт", [])).toEqual({ kind: "duplicates-only", duplicates: [{ word: "рәхмәт", deckTitle: "Уровень 1", linkAdded: false }] });
+    expect(await svc.prepareAdd(user, "рәхмәт", [])).toEqual({ kind: "duplicates-only", duplicates: [{ word: "рәхмәт", deckTitle: "A1", linkAdded: false }] });
     const r = await preview(svc, user, "хәлләр ничек");
     expect(r.items).toEqual([{
       word: "Хәлләр ничек?", transcription: null, pos: "n", translation: "Хәлләр ничек?-ru", exampleTt: "Хәлләр ничек?.", exampleRu: "Хәлләр ничек?-ru.",
       exampleSrc: "own", audioFileId: null, sourceUrl: null, ai: false,
     }]);
     expect(llm.urls).toEqual([]);
-    // The copy keeps the catalog spelling, and the level word is not shown again when level 5 is checked.
+    // The copy keeps the catalog spelling, and the level word is not shown again when C1 is checked.
     await svc.confirmAdd(user, r.previewId);
     expect((await ownNotes(user.id)).map((n) => n.word)).toEqual(["Хәлләр ничек?"]);
     expect((await newWords(repo, user.id, [1, 5])).filter((word) => word === "Хәлләр ничек?")).toHaveLength(1);
   });
 
   it("copies the catalog card with its voice into My words under the user's link, in the catalog spelling", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1 });
-    await seedLevels(env.DB, { 5: ["бәхет"] });
+    const { repo, user } = await seedUser(env.DB, { now: T });
+    await seedCatalog(env.DB, levelWords(5, ["бәхет"]));
     await env.DB.prepare("UPDATE notes SET audio_file_id = 'voice-5' WHERE word_key = 'бәхет'").run();
     const svc = service(repo, failingLlm());
     const r = await preview(svc, user, "Бәхет https://example.com/song");
@@ -230,27 +255,26 @@ describe("content service: own words", () => {
   });
 
   it("does not show the word twice when its level is checked later", async () => {
-    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, level: 1, words: 1 }); // l01: китап
-    const l5 = (await seedLevels(env.DB, { 5: ["бәхет", "шатлык"] }))[5]!;
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 }); // A1: китап
+    await seedCatalog(env.DB, levelWords(5, ["бәхет", "шатлык"]));
     const svc = service(repo, failingLlm());
     const r = await preview(svc, user, "бәхет");
     await svc.confirmAdd(user, r.previewId);
-    await repo.subscribe(user.id, l5, T);
-    // The own copy comes first; then the next word of each checked level: level 5 gives its other word, not «бәхет».
+    // The own copy comes first; then the next word of each checked level: C1 gives its other word, not «бәхет».
     expect(await newWords(repo, user.id, [1, 5])).toEqual(["бәхет", "китап", "шатлык"]);
-    // Once level 1 is done, level 5 still gives only its other word.
+    // Once A1 is done, C1 still gives only its other word.
     await repo.insertCard(user.id, noteIds[0]!, "tt_ru", gradedMem(T));
     expect(await newWords(repo, user.id, [1, 5])).toEqual(["бәхет", "шатлык"]);
     // Typed again, it is a word the user already learns: the own copy, which is the one that is shown, gets the link.
     expect(await svc.prepareAdd(user, "бәхет https://example.com/x", [])).toEqual(
       { kind: "duplicates-only", duplicates: [{ word: "бәхет", deckTitle: "Мои слова", linkAdded: true }] });
     expect((await ownNotes(user.id)).map((n) => n.source_url)).toEqual(["https://example.com/x"]);
-    expect(await env.DB.prepare("SELECT source_url FROM notes WHERE deck_id = ? AND word_key = 'бәхет'").bind(l5).first()).toEqual({ source_url: null });
+    expect(await env.DB.prepare("SELECT source_url FROM notes WHERE level = 5 AND word_key = 'бәхет'").first()).toEqual({ source_url: null });
   });
 
   it("finds the catalog card after the AI restores Tatar letters", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1 });
-    await seedLevels(env.DB, { 5: ["әни"] });
+    const { repo, user } = await seedUser(env.DB, { now: T });
+    await seedCatalog(env.DB, levelWords(5, ["әни"]));
     const llm = llmReturning([{ input: "эни", lang: "tt", word: "әни", pos: "n", translation: "мать", exampleTt: "Әни килде.", exampleRu: "Мама пришла." }]);
     const r = await service(repo, llm).prepareAdd(user, "эни", []);
     expect(r.kind === "preview" && r.items[0]).toMatchObject({ word: "әни", translation: "әни-ru", ai: false });
@@ -260,11 +284,12 @@ describe("content service: own words", () => {
   });
 
   it("reports a duplicate when the restored word is already being learned", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 7 }); // l01 has «өй»
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 7 }); // A1 has «өй»
+    await shown(repo, user.id, noteIds[6]!);
     const llm = llmReturning([{ input: "ой", lang: "tt", word: "өй", pos: "n", translation: "дом", exampleTt: "Өй зур.", exampleRu: "Дом большой." }]);
     const r = await service(repo, llm).prepareAdd(user, "ой https://example.com/h", []);
-    // «өй» is a word of the open level: a shared note, so the link is not stored and the reply does not claim it.
-    expect(r).toEqual({ kind: "duplicates-only", duplicates: [{ word: "өй", deckTitle: "Уровень 1", linkAdded: false }] });
+    // «өй» is a word of A1 the learner was shown: a shared note, so the link is not stored and the reply does not claim it.
+    expect(r).toEqual({ kind: "duplicates-only", duplicates: [{ word: "өй", deckTitle: "A1", linkAdded: false }] });
     expect((await catalogLinks()).filter((n) => n.source_url !== null)).toEqual([]);
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM previews").first()).toEqual({ n: 0 });
   });
@@ -287,8 +312,9 @@ describe("content service: own words", () => {
   });
 
   it("takes the model's spelling of a half-restored word and looks it up in the catalog", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 7 }); // l01 has «көн»
-    await seedLevels(env.DB, { 5: ["күңел"] });
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 7 }); // A1 has «көн»
+    await shown(repo, user.id, noteIds[5]!);
+    await seedCatalog(env.DB, levelWords(5, ["күңел"]));
     const llm = llmReturning([
       { input: "күнел", lang: "tt", word: "күңел", pos: "n", translation: "душа", exampleTt: "Күңел тыныч.", exampleRu: "На душе спокойно." },
       { input: "сәгат", lang: "tt", word: "сәгать", pos: "n", translation: "час, часы", exampleTt: "Сәгать ничә?", exampleRu: "Который час?" },
@@ -305,13 +331,13 @@ describe("content service: own words", () => {
       exampleSrc: "ai", audioFileId: null, sourceUrl: null, ai: true,
     });
     expect(r.items).toHaveLength(2);
-    // «көн» is a word of the open level: a duplicate, found only by the restored spelling.
-    expect(r.duplicates).toEqual([{ word: "көн", deckTitle: "Уровень 1", linkAdded: false }]);
+    // «көн» is a word the learner was shown: a duplicate, found only by the restored spelling.
+    expect(r.duplicates).toEqual([{ word: "көн", deckTitle: "A1", linkAdded: false }]);
     expect(r.manual).toEqual([]);
   });
 
   it("puts a typed verb form on the card of its dictionary form", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 1 });
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
     const llm = llmReturning([{ input: "киләм", lang: "tt", word: "килү", pos: "v", translation: "приходить", exampleTt: "Мин иртәгә киләм.", exampleRu: "Я приду завтра." }]);
     const svc = service(repo, llm);
     const r = await preview(svc, user, "киләм");
@@ -319,8 +345,8 @@ describe("content service: own words", () => {
       word: "килү", transcription: transcribe("килү"), pos: "v", translation: "приходить", exampleTt: "Мин иртәгә киләм.", exampleRu: "Я приду завтра.",
       exampleSrc: "ai", audioFileId: null, sourceUrl: null, ai: true,
     }]);
-    // When «килү» is in the catalog, the typed form leads to its reviewed card, so the word is not shown twice when the level opens.
-    await seedLevels(env.DB, { 3: ["килү"] });
+    // When «килү» is in the catalog, the typed form leads to its reviewed card, so the word is not shown twice when its level is checked.
+    await seedCatalog(env.DB, levelWords(3, ["килү"]));
     const again = await preview(svc, user, "киләм");
     expect(again.items.map((i) => [i.word, i.translation, i.ai])).toEqual([["килү", "килү-ru", false]]);
   });
@@ -344,25 +370,27 @@ describe("content service: own words", () => {
   });
 
   it("matches the AI cards to the lines by the echoed input, whatever their order and case", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
+    await shown(repo, user.id, noteIds[0]!);
     const llm = llmReturning([
       { input: " РАХМАТ ", lang: "tt", word: "рәхмәт", pos: "intj", translation: "спасибо", exampleTt: "Зур рәхмәт!", exampleRu: "Большое спасибо!" },
       // Echoes the answer instead of the line: this card belongs to no line.
       { input: "әни", lang: "tt", word: "әни", pos: "n", translation: "мама", exampleTt: "Әни өйдә.", exampleRu: "Мама дома." },
       { input: "мама", lang: "ru", word: "әни", pos: "n", translation: "мама", exampleTt: "Әни килде.", exampleRu: "Мама пришла." },
-      // A card for a line the model was not asked about: «китап» is a word of the open level.
+      // A card for a line the model was not asked about: «китап» is a word the learner has.
       { input: "китап", lang: "tt", word: "китаб", pos: "n", translation: "книга", exampleTt: "Бу китаб.", exampleRu: "Это книга." },
     ]);
     const r = await preview(service(repo, llm), user, "мама\nэни\nкитап\nрахмат");
     expect(r.items.map((i) => [i.word, i.exampleTt])).toEqual([["әни", "Әни килде."], ["рәхмәт", "Зур рәхмәт!"]]);
     expect(r.manual).toEqual(["эни"]);
-    expect(r.duplicates).toEqual([{ word: "китап", deckTitle: "Уровень 1", linkAdded: false }]);
+    expect(r.duplicates).toEqual([{ word: "китап", deckTitle: "A1", linkAdded: false }]);
     expect(userPrompt(llm)).toBe("Lines:\nмама\nэни\nрахмат");
   });
 
   it("shows a word once when two lines lead to it", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 7 }); // l01 has «өй»
-    await seedLevels(env.DB, { 5: ["әни"] });
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 7 }); // A1 has «өй»
+    await shown(repo, user.id, noteIds[6]!);
+    await seedCatalog(env.DB, levelWords(5, ["әни"]));
     const llm = llmReturning([
       { input: "эни", lang: "tt", word: "әни", pos: "n", translation: "мама", exampleTt: "Әни өйдә.", exampleRu: "Мама дома." },
       { input: "мама", lang: "ru", word: "әни", pos: "n", translation: "мама", exampleTt: "Әни килде.", exampleRu: "Мама пришла." },
@@ -372,19 +400,20 @@ describe("content service: own words", () => {
     ]);
     const r = await preview(service(repo, llm), user, "әни\nэни\nмама\nөй\nой\nрахмат\nспасибо");
     expect(r.items.map((i) => [i.word, i.ai])).toEqual([["әни", false], ["рәхмәт", true]]);
-    expect(r.duplicates).toEqual([{ word: "өй", deckTitle: "Уровень 1", linkAdded: false }]);
+    expect(r.duplicates).toEqual([{ word: "өй", deckTitle: "A1", linkAdded: false }]);
     expect(r.manual).toEqual([]);
     // Only the lines that neither the user's decks nor the catalog know go to the model.
     expect(userPrompt(llm)).toBe("Lines:\nэни\nмама\nой\nрахмат\nспасибо");
   });
 
   it("strips a typed stress mark before the lookup, the AI request, the transcription and the storage", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 1 }); // l01: китап
-    await seedLevels(env.DB, { 5: ["бәхет"] });
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 }); // A1: китап
+    await shown(repo, user.id, noteIds[0]!);
+    await seedCatalog(env.DB, levelWords(5, ["бәхет"]));
     const llm = llmReturning([card("рәхмәт", "спасибо")]);
     const svc = service(repo, llm);
     const r = await preview(svc, user, `кита${STRESS}п\nбәхе${STRESS}т\nрәхмә${STRESS}т\nрәхмә̀т`);
-    expect(r.duplicates).toEqual([{ word: "китап", deckTitle: "Уровень 1", linkAdded: false }]);
+    expect(r.duplicates).toEqual([{ word: "китап", deckTitle: "A1", linkAdded: false }]);
     expect(r.items.map((i) => [i.word, i.ai, i.transcription])).toEqual([["бәхет", false, null], ["рәхмәт", true, "рәхмә́т"]]);
     expect(userPrompt(llm)).toBe("Lines:\nрәхмәт");
     await svc.confirmAdd(user, r.previewId);
@@ -393,8 +422,8 @@ describe("content service: own words", () => {
   });
 
   it("marks an AI preview and leaves a catalog-only preview unmarked", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 1 });
-    await seedLevels(env.DB, { 5: ["бәхет", "шатлык"] });
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    await seedCatalog(env.DB, levelWords(5, ["бәхет", "шатлык"]));
     const NOTE = "перевод сделан AI, проверьте";
     expect(ru.aiNote).toContain(NOTE);
 
@@ -474,8 +503,8 @@ describe("content service: own words", () => {
   });
 
   it("the next message with words clears a wait that has ended, in the call that the message makes anyway", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 1 });
-    await seedLevels(env.DB, { 5: ["бәхет"] });
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    await seedCatalog(env.DB, levelWords(5, ["бәхет"]));
     await service(repo, failingLlm()).prepareAdd(user, "матур", []);
     const stale = await fresh(repo, user);
     expect(stale.pendingEdit).not.toBeNull();
@@ -488,8 +517,9 @@ describe("content service: own words", () => {
   });
 
   it("keeps the catalog cards in the preview when the AI is down and lists the rest as untranslated", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 1 });
-    await seedLevels(env.DB, { 5: ["бәхет"] });
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
+    await shown(repo, user.id, noteIds[0]!);
+    await seedCatalog(env.DB, levelWords(5, ["бәхет"]));
     const r = await preview(service(repo, failingLlm()), user, "китап\nматур\nбәхет\nсәер");
     expect(r.items.map((i) => i.word)).toEqual(["бәхет"]);
     expect(r.manual).toEqual(["матур", "сәер"]);
@@ -600,8 +630,9 @@ describe("content service: own words", () => {
 
   it("20 lines cost one LLM request and at most 7 D1 calls", async () => {
     // The longest path: a remembered link, duplicates in own decks that get it, catalog words, restored words found in both lookups, AI cards.
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 7, patch: { pendingUrl: "https://youtu.be/q", pendingUrlAt: T } });
-    await seedLevels(env.DB, { 5: ["бәхет", "шатлык", "әни"] });
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 7, patch: { pendingUrl: "https://youtu.be/q", pendingUrlAt: T } });
+    await shown(repo, user.id, noteIds[0]!, noteIds[6]!); // «китап», «өй»
+    await seedCatalog(env.DB, levelWords(5, ["бәхет", "шатлык", "әни"]));
     await repo.insertNotes(await repo.customDeck(user.id, T), [note("дус"), note("күңел")]);
     const own = Array.from({ length: 12 }, (_, i) => `сүз${"абвгдежзиклм"[i]}`);
     const lines = ["китап", "ой", "бәхет", "шатлык", "эни", "дус", "кунел", "күбәләк", ...own];
@@ -613,7 +644,7 @@ describe("content service: own words", () => {
     expect(r.items.filter((i) => !i.ai).map((i) => i.word)).toEqual(["бәхет", "шатлык", "әни"]);
     expect(r.items.every((i) => i.sourceUrl === "https://youtu.be/q")).toBe(true);
     expect(r.duplicates).toEqual([
-      { word: "китап", deckTitle: "Уровень 1", linkAdded: false }, { word: "өй", deckTitle: "Уровень 1", linkAdded: false },
+      { word: "китап", deckTitle: "A1", linkAdded: false }, { word: "өй", deckTitle: "A1", linkAdded: false },
       { word: "дус", deckTitle: "Мои слова", linkAdded: true }, { word: "күңел", deckTitle: "Мои слова", linkAdded: true },
     ]);
     expect(llm.urls).toEqual(["https://llm/v1/chat/completions"]);
@@ -690,7 +721,8 @@ describe("content service: the daily limit of messages with words (ruling F2)", 
   });
 
   it("counts a message even when the caller holds a stale copy of the user: fifty-one at once are fifty", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 1 });
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
+    await shown(repo, user.id, noteIds[0]!);
     const svc = service(repo, failingLlm());
     const results = await Promise.all(Array.from({ length: 51 }, () => svc.prepareAdd(user, "китап", [])));
     expect(results.filter((r) => r.kind === "limit")).toHaveLength(1);
@@ -699,7 +731,8 @@ describe("content service: the daily limit of messages with words (ruling F2)", 
   });
 
   it("does not count a message that is refused for its form: empty, or with a line that is too long", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
+    await shown(repo, user.id, noteIds[0]!);
     const svc = service(repo, failingLlm());
     expect((await svc.prepareAdd(user, "  \n ", [])).kind).toBe("empty");
     expect((await svc.prepareAdd(user, "сүз ".repeat(20) + "я", [])).kind).toBe("too-long");
@@ -736,7 +769,8 @@ describe("content service: AI decks", () => {
     expect(r.items.map((i) => i.transcription)).toEqual(r.items.map((i) => transcribe(i.word)));
     const d = await svc.confirmDeck(user, r.previewId);
     expect(d.count).toBe(12);
-    expect(await repo.userDeckIds(user.id)).toContain(d.deckId);
+    // The deck is one the learner learns: the session gives its words.
+    expect(await env.DB.prepare("SELECT deck_id FROM user_decks WHERE user_id = ?").bind(user.id).first()).toEqual({ deck_id: d.deckId });
     expect((await repo.ownDecks(user.id)).find((deck) => deck.id === d.deckId)).toMatchObject({ kind: "ai", titleRu: "🤖 собеседование в IT", titleTt: "🤖 собеседование в IT", levelNo: null, coveragePct: null, total: 12 });
     const { results } = await env.DB.prepare("SELECT word, transcription, example_src, audio_file_id FROM notes WHERE deck_id = ? ORDER BY id").bind(d.deckId).all<Record<string, string | null>>();
     expect(results).toHaveLength(12);
@@ -748,26 +782,26 @@ describe("content service: AI decks", () => {
   });
 
   it("leaves out the words the catalog has and the words the learner already has, in two D1 calls", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 2 }); // open level 1: китап, вакыт
-    await seedLevels(env.DB, { 7: ["Сәяхәт!", "поезд"] }); // a level that is not open
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 2 }); // A1, checked: китап, вакыт; neither was shown yet
+    await seedCatalog(env.DB, levelWords(5, ["Сәяхәт!", "поезд"])); // a level that is not checked
     await repo.insertNotes(await repo.customDeck(user.id, T), [note("чемодан")]);
     const words = ["сәяхәт", "китап", "юл", "Чемодан", "билет", "вокзал", "поезд", "диңгез", "тау", "вакыт"];
     const llm = llmReturning(words.map((w, i) => card(w, `слово ${i}`)));
     const db = countingDb(env.DB);
     const r = await new ContentService(new Repo(db), { llm: client(llm) }, T).generateDeck(user, "сәяхәт", 10);
     if (r.kind !== "preview") throw new Error(r.kind);
-    // «сәяхәт» and «поезд» are words of level 7, «китап» and «вакыт» of the open level 1, «чемодан» is in «Мои слова».
+    // «сәяхәт» and «поезд» are words of C1, «китап» and «вакыт» of A1, «чемодан» is in «Мои слова».
     expect(r.items.map((i) => i.word)).toEqual(["юл", "билет", "вокзал", "диңгез", "тау"]);
     expect(db.calls).toBe(4); // the daily unit, the two lookups, the preview
     const d = await service(repo, llm).confirmDeck(user, r.previewId);
     expect(d.count).toBe(5);
-    // The reviewed card of level 7 is not shadowed by a card of the model: «сәяхәт» is still a new word of its level.
+    // The reviewed card of C1 is not shadowed by a card of the model: «сәяхәт» is still a new word of its level.
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM notes WHERE word_key IN ('сәяхәт', 'поезд', 'китап', 'вакыт', 'чемодан')").first<{ n: number }>())!.n).toBe(5);
     expect((await fresh(repo, user)).gensCount).toBe(1);
   });
 
   it("fails and gives the daily unit back when fewer than 5 new words are left", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 2 }); // китап, вакыт
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 2 }); // китап, вакыт
     const words = ["китап", "вакыт", "юл", "билет", "вокзал", "тау"];
     const r = await service(repo, llmReturning(words.map((w, i) => card(w, `слово ${i}`)))).generateDeck(user, "сәяхәт", 10);
     expect(r).toEqual({ kind: "failed" });
@@ -845,14 +879,18 @@ describe("content service: an own copy of a catalog word counts that word as sta
     expect(await a1(repo, user)).toEqual([0, 3]);
   });
 
-  it("adding a catalog word whose card is started already moves nothing", async () => {
+  it("adding a catalog word whose card is started already moves nothing: the word was previewed, then met in the session, then added", async () => {
     const { repo, user } = await learnerWithCatalog();
+    const svc = service(repo, failingLlm());
+    // «бәхет» is the first word of A1 and was not shown yet: a ready card to copy.
+    const r = await preview(svc, user, "бәхет");
     const first = await new ReviewService(repo, T).nextScreen(user);
     if (first.kind !== "card") throw new Error(first.kind);
+    expect(first.view.word).toBe("бәхет");
     await new ReviewService(repo, T).grade(user, first.view.cardId, 0, 3);
     expect(await repo.progress(user.id)).toEqual([{ level: 1, topicNo: 3, started: 1 }]);
-    const svc = service(repo, failingLlm());
-    const r = await preview(svc, await fresh(repo, user), first.view.word);
+    // Typed now, it is a word the learner has; the preview made before can still be confirmed.
+    expect((await svc.prepareAdd(await fresh(repo, user), "бәхет", [])).kind).toBe("duplicates-only");
     await svc.confirmAdd(user, r.previewId);
     expect((await ownNotes(user.id)).map((n) => n.word)).toEqual([first.view.word]);
     expect(await repo.progress(user.id)).toEqual([{ level: 1, topicNo: 3, started: 1 }]);
@@ -882,18 +920,18 @@ describe("content service: an own copy of a catalog word counts that word as sta
 
 describe("repo.findCatalogNotes", () => {
   it("finds catalog notes of any level by word key in one D1 call, and nothing else", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 2 }); // l01: китап, вакыт
-    await seedLevels(env.DB, { 5: ["бәхет"], 7: ["Әни"] });
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 2 }); // A1: китап, вакыт
+    await seedCatalog(env.DB, [...levelWords(4, ["бәхет"]), ...levelWords(5, ["Әни"])]);
     await repo.insertNotes(await repo.customDeck(user.id, T), [note("рәхмәт"), note("бәхет", "своё")]);
     const db = countingDb(env.DB);
     const found = await new Repo(db).findCatalogNotes([" Бәхет ", "ӘНИ", "китап", "рәхмәт", "юк", "китап"]);
     expect(db.calls).toBe(1);
     expect([...found.keys()].sort()).toEqual(["бәхет", "китап", "әни"].sort());
-    expect(found.get("бәхет")).toMatchObject({ word: "бәхет", translation: "бәхет-ru", levelNo: 5, exampleSrc: "own", audioFileId: null });
-    expect(found.get("әни")).toMatchObject({ word: "Әни", levelNo: 7 });
-    expect(found.get("китап")).toMatchObject({ translation: "книга", levelNo: 1 });
+    expect(found.get("бәхет")).toMatchObject({ word: "бәхет", translation: "бәхет-ru", level: 4, exampleSrc: "own", audioFileId: null });
+    expect(found.get("әни")).toMatchObject({ word: "Әни", level: 5 });
+    expect(found.get("китап")).toMatchObject({ translation: "книга", level: 1 });
     expect(found.get("бәхет")!.id).toBeGreaterThan(0);
-    expect(found.get("бәхет")!.deckId).toBe((await repo.getDeckBySlug("l05"))!.id);
+    expect(found.get("бәхет")!.deckId).toBe((await repo.getDeckBySlug("b2"))!.id);
   });
   it("asks nothing for an empty list", async () => {
     const db = countingDb(env.DB);

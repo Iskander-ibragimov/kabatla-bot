@@ -10,9 +10,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { parseCsv } from "../src/content/csv";
 import { wordKey } from "../src/db/repo";
-import { levelSlug } from "../src/users/service";
 import { FILES, LEVELS_DIR, levelNumbers, readLevel, readLines, readText, readWordforms, writeLevel, writeMeta, writeText } from "./lib/files";
-import { LEVEL_COUNT, LEVEL_SIZE, type LevelMeta, POS_CODES, type Row, coverage, coverageDrops, levelFile, parseLevel } from "./lib/levels";
+import { LEVEL_COUNT, LEVEL_SIZE, type LevelMeta, POS_CODES, type Row, coverage, coverageDrops, levelFile, levelSlug, parseLevel } from "./lib/levels";
 import {
   type Cognate, WORDLIST_HEADER, type WordlistRow, attestedForms, buildCandidates, checkWordlist, cutLevels, findExamples, formatCandidates, formatDroppedVerbs,
   lookupPos, lostWords, parseDix, parseLemmas, parseTatoeba, reviewWordlist, verbInfinitives,

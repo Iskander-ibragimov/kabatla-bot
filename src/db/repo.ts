@@ -20,8 +20,6 @@ export interface User {
   retention: number;
   direction: DirectionSetting;
   autoplay: boolean;
-  /** Current level, 1…20; 21 means every level is done. */
-  level: number;
   streak: number;
   lastStudyDay: string | null;
   active: boolean;
@@ -61,7 +59,7 @@ export type NoteInput = Pick<NoteFields, "word" | "transcription" | "pos" | "tra
     level?: number; topicNo?: number; seq?: number;
   };
 export interface NoteRow extends NoteFields { id: number; deckId: number }
-/** A note of a deck the user is subscribed to, with the titles of that deck; `owned`: the deck is the user's own, not a level. */
+/** A note the user already learns, with the titles of its deck; `owned`: the deck is the user's own, not a level of the catalog. */
 export interface UserNote extends NoteRow { deckTitleRu: string; deckTitleTt: string; owned: boolean }
 /** The words a user has started in one pair (level, topic); own words are the pair (0, 0). */
 export interface PairStarted { level: number; topicNo: number; started: number }
@@ -84,9 +82,6 @@ export interface ReviewLogRow {
   id: number; cardId: number; userId: number; rating: number; stateBefore: Mem; intervalBeforeDays: number; intervalAfterMs: number;
   reviewedAt: number; wasNew: boolean; learnedNow: boolean; streakBefore: number; lastStudyDayBefore: string | null; undone: boolean;
 }
-
-/** The catalog has levels 1…LAST_LEVEL; `users.level` one above it means every level is done. A deck with a higher number is not a level. */
-export const LAST_LEVEL = 20;
 
 const snake = (k: string) => k.replace(/[A-Z]/g, (c) => "_" + c.toLowerCase());
 const camel = (k: string) => k.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
@@ -358,27 +353,32 @@ export class Repo {
     ]);
     return res.slice(1, rows.length + 1).map((r) => r.results[0]!.id);
   }
-  subscribeStmt(userId: number, deckId: number, now: number): D1PreparedStatement {
-    return this.db.prepare("INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) VALUES (?, ?, ?)").bind(userId, deckId, now);
-  }
-  async subscribe(userId: number, deckId: number, now: number): Promise<void> { await this.subscribeStmt(userId, deckId, now).run(); }
-  async userDeckIds(userId: number): Promise<number[]> {
-    const { results } = await this.db.prepare("SELECT deck_id FROM user_decks WHERE user_id = ? ORDER BY added_at, deck_id").bind(userId).all<{ deck_id: number }>();
-    return results.map((r) => r.deck_id);
+  /** Puts a deck of the user's own among the decks the user learns («Мои слова», an AI deck): the session gives the words of those. */
+  async subscribe(userId: number, deckId: number, now: number): Promise<void> {
+    await this.db.prepare("INSERT OR IGNORE INTO user_decks (user_id, deck_id, added_at) VALUES (?, ?, ?)").bind(userId, deckId, now).run();
   }
   /**
-   * The notes with these words in the decks the user is subscribed to: one D1 call for many words, keyed by wordKey.
-   * When a word is both in a deck the user owns and in an open level, the own note wins: the queue shows that one and skips the level's.
-   * `owned` is true for a note in a deck of the user's own; a level note is shared by every learner.
+   * The notes with these words that the user already learns: one D1 call for many words, keyed by wordKey. A note of a
+   * deck of the user's own («Мои слова», an AI deck) is one; a catalog note is one when the user has a card for it —
+   * the word was shown. A catalog word that was not shown yet is not: it can be copied (`findCatalogNotes`).
+   * When a word is both, the own note wins: the queue shows that one and skips the catalog's.
+   * `owned` is true for a note in a deck of the user's own; a catalog note is shared by every learner.
+   * Read by the decks of the user and by the word key in the catalog, never by the same word in other learners' decks.
    */
   async findNotesForUser(userId: number, words: string[]): Promise<Map<string, UserNote>> {
     const keys = [...new Set(words.map(wordKey))];
     const out = new Map<string, UserNote>();
     if (!keys.length) return out;
+    const cols = `n.id AS id, n.deck_id, n.word_key, ${noteCols("?1", "d.owner_id")}, d.title_ru, d.title_tt`;
     const { results } = await this.db.prepare(
-      `SELECT n.id, n.deck_id, n.word_key, ${noteCols("?1")}, d.title_ru, d.title_tt, d.owner_id IS ?1 AS owned FROM notes n
-       JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ?1 JOIN decks d ON d.id = n.deck_id
-       WHERE n.word_key IN (SELECT value FROM json_each(?2)) ORDER BY (d.owner_id IS NULL), n.id`,
+      `SELECT ${cols}, 1 AS owned
+       FROM user_decks ud CROSS JOIN decks d ON d.id = ud.deck_id CROSS JOIN json_each(?2) k CROSS JOIN notes n ON n.deck_id = d.id AND n.word_key = k.value
+       WHERE ud.user_id = ?1 AND d.owner_id = ?1
+       UNION ALL
+       SELECT ${cols}, 0
+       FROM json_each(?2) k CROSS JOIN notes n INDEXED BY idx_notes_catalog_key ON n.word_key = k.value JOIN decks d ON d.id = n.deck_id
+       WHERE n.level IS NOT NULL AND EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ?1 AND c.note_id = n.id)
+       ORDER BY owned DESC, id`,
     ).bind(userId, JSON.stringify(keys)).all<Record<string, unknown>>();
     for (const r of results) {
       const k = r.word_key as string;
@@ -388,26 +388,29 @@ export class Repo {
     }
     return out;
   }
-  /** The reviewed cards of the catalog for these words, from any level, open or not: one D1 call, keyed by wordKey. A catalog note has no link to give. */
-  async findCatalogNotes(words: string[]): Promise<Map<string, NoteRow & { levelNo: number }>> {
+  /**
+   * The reviewed cards of the catalog for these words, of any level, checked or not, each with its level: one D1 call,
+   * keyed by wordKey. A word key is one note of the catalog. A catalog note has no link to give.
+   */
+  async findCatalogNotes(words: string[]): Promise<Map<string, NoteRow & { level: number }>> {
     const keys = [...new Set(words.map(wordKey))];
-    const out = new Map<string, NoteRow & { levelNo: number }>();
+    const out = new Map<string, NoteRow & { level: number }>();
     if (!keys.length) return out;
     const { results } = await this.db.prepare(
-      `SELECT n.id, n.deck_id, n.word_key, ${noteCols(null)}, d.level_no FROM notes n JOIN decks d ON d.id = n.deck_id
-       WHERE d.kind = 'catalog' AND d.level_no <= ${LAST_LEVEL} AND n.word_key IN (SELECT value FROM json_each(?)) ORDER BY d.level_no, n.id`,
+      `SELECT n.id, n.deck_id, n.word_key, ${noteCols(null)}, n.level
+       FROM json_each(?) k CROSS JOIN notes n INDEXED BY idx_notes_catalog_key ON n.word_key = k.value WHERE n.level IS NOT NULL`,
     ).bind(JSON.stringify(keys)).all<Record<string, unknown>>();
-    for (const r of results) {
-      const k = r.word_key as string;
-      if (!out.has(k)) out.set(k, { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, levelNo: r.level_no as number });
-    }
+    for (const r of results) out.set(r.word_key as string, { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, level: r.level as number });
     return out;
   }
-  /** The note when the user can see it: it is in one of their decks or they have a card for it. */
+  /**
+   * The note when the user can see it: it is in a deck of the user's own, or the user has a card for it. A catalog note
+   * is the user's to see once it was shown; another learner's own word is not.
+   */
   async visibleNote(userId: number, noteId: number): Promise<NoteRow | null> {
     const r = await this.db.prepare(
       `SELECT n.id, n.deck_id, ${noteCols("?2")} FROM notes n WHERE n.id = ?1
-       AND (n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?2)
+       AND (EXISTS (SELECT 1 FROM user_decks ud JOIN decks d ON d.id = ud.deck_id WHERE ud.user_id = ?2 AND ud.deck_id = n.deck_id AND d.owner_id = ?2)
             OR EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ?2 AND c.note_id = ?1))`,
     ).bind(noteId, userId).first<Record<string, unknown>>();
     return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number } : null;

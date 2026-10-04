@@ -5,7 +5,6 @@
 import { type Rename, parseCsv, toCsv } from "../../src/content/csv";
 import { isTatarText } from "../../src/content/tatar";
 import { wordKey } from "../../src/db/repo";
-import { levelSlug } from "../../src/users/service";
 import { verbStems } from "./tatar-verbs";
 
 export const CSV_HEADER = ["word", "transcription", "pos", "translation", "example_tt", "example_ru", "example_src", "audio_file_id"] as const;
@@ -14,6 +13,8 @@ export const POS_CODES: readonly string[] = ["n", "v", "adj", "adv", "pron", "nu
 export const LEVEL_SIZE = 100;
 export const LEVEL_COUNT = 20;
 
+/** Slug of the catalog deck that held a level by hundreds: l01 … l20. */
+export const levelSlug = (level: number) => `l${String(level).padStart(2, "0")}`;
 /** File name of a level inside data/levels: l01.csv … l20.csv, the deck slug plus `.csv`. */
 export const levelFile = (n: number): string => `${levelSlug(n)}.csv`;
 /** The level a file name stands for, or null: only l01.csv … l20.csv are level files. */

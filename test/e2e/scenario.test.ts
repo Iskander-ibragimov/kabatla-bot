@@ -8,7 +8,7 @@ import { tick } from "../../src/reminders/service";
 import { easyButton, harness } from "../helpers/botHarness";
 import { countingDb } from "../helpers/countingDb";
 import { fakeTelegram } from "../helpers/fakeTelegram";
-import { seedCatalog, seedLevels } from "../helpers/seed";
+import { levelWords, seedCatalog } from "../helpers/seed";
 
 const MIN = 60_000, DAY = 86_400_000;
 const T = Date.UTC(2026, 8, 30, 6, 0); // 09:00 Moscow
@@ -59,7 +59,7 @@ describe("first day and next day", () => {
     const u = (await repo.getUserByTg(42))!;
     expect(u.streak).toBe(1);
     expect(u).toMatchObject({ levels: 1, direction: "tt_ru", onboardingStep: null, hintsSeen: HINT.update | HINT.front | HINT.again | HINT.good | HINT.order });
-    expect(await repo.userDeckIds(u.id)).toEqual([]);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM user_decks").first()).toEqual({ n: 0 });
     const tg = fakeTelegram();
     const nextMorning = T + DAY + MIN;
     await tick({ repo, tg, now: nextMorning });
@@ -82,7 +82,8 @@ describe("first day and next day", () => {
 
   it("Tatar interface: the introduction → 100 words of A1 → the session ends; A2 is not checked by the bot", async () => {
     const words100 = Array.from({ length: 100 }, (_, i) => `сүз${i + 1}`);
-    await seedLevels(env.DB, { 1: words100, 2: ["авыл"] }, { 1: 31 });
+    await seedCatalog(env.DB, [...levelWords(1, words100), ...levelWords(2, ["авыл"])]);
+    await env.DB.prepare("UPDATE decks SET coverage_pct = 31 WHERE level_no = 1").run();
     const db = countingDb(env.DB);
     const h = harness(db, { now: T });
     let maxTelegramCallsPerUpdate = 0, maxD1CallsPerUpdate = 0;
@@ -132,7 +133,7 @@ describe("first day and next day", () => {
     const repo = new Repo(env.DB);
     const u = (await repo.getUserByTg(42))!;
     expect(u).toMatchObject({ lang: "tt", levels: 1, newPerDay: 10, onboardingStep: null, hintsSeen: HINT.update | HINT.front | HINT.easy | HINT.order });
-    expect(await repo.userDeckIds(u.id)).toEqual([]);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM user_decks").first()).toEqual({ n: 0 });
     const log = await env.DB.prepare("SELECT COUNT(*) AS n, SUM(was_new) AS fresh, MIN(rating) AS lo FROM review_log WHERE user_id = ?").bind(u.id).first<{ n: number; fresh: number; lo: number }>();
     expect(log).toEqual({ n: 100, fresh: 100, lo: 4 });
   });

@@ -311,7 +311,7 @@ describe("the introduction", () => {
       await b.text("/start");
       const repo = new Repo(env.DB);
       // What the migration leaves of such a learner: the step, and the answers given before it.
-      await repo.updateUser((await b.user()).id, { onboardingStep: "levels", lang: "tt", level: 4, newPerDay: 20, remindAt: "19:00" });
+      await repo.updateUser((await b.user()).id, { onboardingStep: "levels", lang: "tt", newPerDay: 20, remindAt: "19:00" });
       const know = await b.press("ob:1", 55);
       expect(know.methods).toEqual(["editMessageText", "answerCallbackQuery"]);
       expect(know.calls[0]!.payload).toMatchObject({ message_id: 55, text: tt.obLevels });

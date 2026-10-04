@@ -8,18 +8,12 @@ import { formatInterval, newMem } from "../../src/srs/fsrs";
 import { ALL_HINTS, HINT } from "../../src/tutorial/hints";
 import { countingDb } from "../helpers/countingDb";
 import { asCard, gradeShown } from "../helpers/review";
-import { WORDS, note, seedCatalog, seedLearner } from "../helpers/seed";
+import { WORDS, note, seedCatalog, seedLearner, seedUser } from "../helpers/seed";
 import { applySeed } from "../helpers/seedSql";
 import { study } from "../helpers/sim";
 
 const MIN = 60_000, DAY = 86_400_000;
 const T = Date.UTC(2026, 8, 30, 6, 0); // 09:00 local (+03:00)
-
-/** A learner with A1 checked and the first `words` (default 5) entries of WORDS as the words of A1, in that order. */
-async function seedUser(db: D1Database, o: { now: number; words?: number; patch?: Partial<User> }) {
-  const noteIds = await seedCatalog(db, WORDS.slice(0, o.words ?? 5).map(([word, translation]) => ({ level: 1, word, translation })));
-  return { ...(await seedLearner(db, { now: o.now, patch: o.patch })), noteIds };
-}
 
 describe("review service", () => {
   it("first card shows reference intervals", async () => {

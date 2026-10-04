@@ -471,7 +471,7 @@ describe("repo.queue: own words", () => {
     await repo.insertNotes(ai, [note("дүрт")]);
     await repo.insertCard(user.id, own[0]!, "tt_ru", gradedMem(T - DAY));
     await repo.insertCard(user.id, own[1]!, "tt_ru", gradedMem(T), TODAY);
-    // A deck of somebody else, and a level deck the learner is subscribed to in the old way: neither is an own deck.
+    // A deck of somebody else is not an own deck.
     const other = await seedLearner(env.DB, { now: T, tgId: 2 });
     await repo.insertNotes(await repo.customDeck(other.user.id, T), [note("чужое")]);
     // «бер» is started Tatar → Russian; «ике» was graded today and is hidden until tomorrow.
@@ -484,8 +484,6 @@ describe("repo.queue: own words", () => {
       word: "өч", transcription: null, pos: "n", translation: "өч-ru", exampleTt: "өч.", exampleRu: "өч-ru.", exampleSrc: "own", audioFileId: null, sourceUrl: null,
     });
 
-    await repo.subscribe(user.id, (await repo.getDeckBySlug("a1"))!.id, T);
-    expect((await repo.queue(user.id, win(BOTH), scope())).ownNew).toEqual(q.ownNew);
     expect((await repo.queue(user.id, { ...win(BOTH), limitEach: 2 }, scope())).ownNew).toEqual(q.ownNew.slice(0, 2));
   });
 });
