@@ -84,7 +84,8 @@ describe("reminders tick", () => {
       await finishedLevel1(2);
       expect(await pushes()).toEqual([]);
       // A level below the current one is a skipped level: a tap on the reminder would not open it.
-      const { repo, user } = await seedUser(env.DB, { now: local(30, 8, 0), level: 3, words: 1, tgId: 2 });
+      await seedLevels(env.DB, { 3: ["бер"] }); // a catalog word key is unique across levels, so level 3 may not reuse WORDS[0]
+      const { repo, user } = await seedUser(env.DB, { now: local(30, 8, 0), level: 3, tgId: 2 });
       await repo.insertCard(user.id, (await env.DB.prepare("SELECT id FROM notes WHERE deck_id = (SELECT id FROM decks WHERE level_no = 3)").first<{ id: number }>())!.id, "tt_ru", gradedMem(local(29, 12, 0)));
       expect(await pushes(local(30, 9, 2))).toEqual([]);
     });

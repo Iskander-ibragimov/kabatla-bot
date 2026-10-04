@@ -142,7 +142,7 @@ describe("levels view", () => {
     // Production today: level 1 is the only level published.
     const { repo, user } = await seedUser(env.DB, { now: T, level: 1, words: 3 });
     expect(await levelsView(repo, user)).toEqual({ passed: [], inProgress: [{ levelNo: 1, seen: 0, total: 3 }], ahead: 0, own: [], coveragePct: null, skipped: [] });
-    const ids = await seedLevels(env.DB, { 2: ["авыл"], 3: ["су"], 7: ["юл"] });
+    const ids = await seedLevels(env.DB, { 2: ["ике"], 3: ["су"], 7: ["юл"] });
     expect((await levelsView(repo, user)).ahead).toBe(3);
     // On level 3, with its deck open, only level 7 is ahead.
     await repo.updateUser(user.id, { level: 3 });

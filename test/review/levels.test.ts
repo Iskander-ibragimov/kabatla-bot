@@ -542,7 +542,7 @@ describe("levels", () => {
       expect(none.newNotes).toEqual([]);
       expect(none.counts.newAvailable).toBe(0);
       expect(none.nextLevelExists).toBe(false);
-      await seedLevels(env.DB, { 2: ["авыл"] });
+      await seedLevels(env.DB, { 2: ["ике"] });
       expect((await repo.candidateCards(user.id, { ...window(), directions: ["tt_ru"] })).nextLevelExists).toBe(true);
     });
   });

@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Repo } from "../../src/db/repo";
-import { WORDS, seedLevels, seedUser } from "./seed";
+import { WORDS, seedCatalog, seedLevels, seedUser } from "./seed";
 
 const T = Date.UTC(2026, 8, 30, 6);
 
@@ -45,5 +45,42 @@ describe("seed helpers", () => {
     expect(second.noteIds).toEqual(first.noteIds);
     expect(await first.repo.getDeckBySlug("l04")).toMatchObject({ id: ids[4], total: 2 });
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM decks").first<{ n: number }>())!.n).toBe(1);
+  });
+});
+
+describe("seedCatalog and the new columns", () => {
+  it("numbers seq per level in call order, derives tseq and keeps catalog_groups in step", async () => {
+    const ids = await seedCatalog(env.DB, [
+      { level: 1, word: "бер", topic: 2 }, { level: 1, word: "ике", topic: 2 }, { level: 1, word: "өч" }, { level: 2, word: "дүрт", topic: 5 },
+    ]);
+    expect(ids).toHaveLength(4);
+    const rows = await env.DB.prepare("SELECT level, topic_no, seq, tseq FROM notes ORDER BY id").all();
+    expect(rows.results).toEqual([
+      { level: 1, topic_no: 2, seq: 1, tseq: 2_000_001 }, { level: 1, topic_no: 2, seq: 2, tseq: 2_000_002 },
+      { level: 1, topic_no: 0, seq: 3, tseq: 3 }, { level: 2, topic_no: 5, seq: 1, tseq: 5_000_001 },
+    ]);
+    const groups = await env.DB.prepare("SELECT level, topic_no, total FROM catalog_groups ORDER BY level, topic_no").all();
+    expect(groups.results).toEqual([{ level: 1, topic_no: 0, total: 1 }, { level: 1, topic_no: 2, total: 2 }, { level: 2, topic_no: 5, total: 1 }]);
+    const repo = new Repo(env.DB);
+    expect(await repo.getDeckBySlug("a1")).toMatchObject({ levelNo: 1, total: 3 });
+    expect(await repo.getDeckBySlug("a2")).toMatchObject({ levelNo: 2, total: 1 });
+  });
+
+  it("seedLevels fills level, topic 0, seq and catalog_groups for any level number", async () => {
+    await seedLevels(env.DB, { 1: ["бер", "ике"], 12: ["өч"] });
+    const rows = await env.DB.prepare("SELECT level, topic_no, seq, tseq FROM notes ORDER BY id").all();
+    expect(rows.results).toEqual([
+      { level: 1, topic_no: 0, seq: 1, tseq: 1 }, { level: 1, topic_no: 0, seq: 2, tseq: 2 }, { level: 12, topic_no: 0, seq: 1, tseq: 1 },
+    ]);
+    const groups = await env.DB.prepare("SELECT level, topic_no, total FROM catalog_groups ORDER BY level").all();
+    expect(groups.results).toEqual([{ level: 1, topic_no: 0, total: 2 }, { level: 12, topic_no: 0, total: 1 }]);
+  });
+
+  it("seedUser sets the level mask from the level, or takes an explicit one", async () => {
+    await seedLevels(env.DB, { 2: ["ике"], 3: ["өч"], 7: ["җиде"] }); // distinct words: a catalog word key is unique across levels
+    expect((await seedUser(env.DB, { now: T, level: 2 })).user.levels).toBe(2);
+    expect((await seedUser(env.DB, { now: T, level: 3, tgId: 2 })).user.levels).toBe(4);
+    expect((await seedUser(env.DB, { now: T, level: 1, tgId: 3, levels: 31 })).user.levels).toBe(31);
+    expect((await seedUser(env.DB, { now: T, level: 7, tgId: 4 })).user.levels).toBe(1);
   });
 });

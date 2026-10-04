@@ -1,3 +1,4 @@
+import { type NewMode, tseqOf } from "../levels/scale";
 import type { CardState, Mem } from "../srs/fsrs";
 
 export type Lang = "ru" | "tt";
@@ -38,6 +39,16 @@ export interface User {
   createdAt: number;
   nextDailyAt: number | null;
   nextEveningAt: number | null;
+  /** Bit mask of the checked levels (bit 0 = A1 … bit 4 = C1). */
+  levels: number;
+  /** Bit mask of the checked part-of-speech groups. */
+  posGroups: number;
+  newMode: NewMode;
+  topicNo: number | null;
+  /** Bit mask of the hints the user has already seen. */
+  hintsSeen: number;
+  /** JSON of the read positions per level; see the design spec. */
+  newCursors: string | null;
 }
 
 export interface NoteFields {
@@ -52,7 +63,10 @@ export interface NoteFields {
   sourceUrl: string | null;
 }
 export type NoteInput = Pick<NoteFields, "word" | "transcription" | "pos" | "translation" | "exampleTt" | "exampleRu"> &
-  Partial<Pick<NoteFields, "exampleSrc" | "audioFileId" | "sourceUrl">>;
+  Partial<Pick<NoteFields, "exampleSrc" | "audioFileId" | "sourceUrl">> & {
+    /** Catalog position: only catalog notes have it; own and AI notes leave all three out. */
+    level?: number; topicNo?: number; seq?: number;
+  };
 export interface NoteRow extends NoteFields { id: number; deckId: number }
 /** A note of a deck the user is subscribed to, with the titles of that deck; `owned`: the deck is the user's own, not a level. */
 export interface UserNote extends NoteRow { deckTitleRu: string; deckTitleTt: string; owned: boolean }
@@ -434,10 +448,13 @@ export class Repo {
     if (!rows.length) return [];
     const stmts = rows.map((n) =>
       this.db.prepare(
-        `INSERT INTO notes (deck_id, word, word_key, transcription, pos, translation, example_tt, example_ru, example_src, audio_file_id, source_url)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (deck_id, word_key) DO UPDATE SET word = excluded.word RETURNING id`,
+        `INSERT INTO notes (deck_id, word, word_key, transcription, pos, translation, example_tt, example_ru, example_src, audio_file_id, source_url,
+                            level, topic_no, seq, tseq)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (deck_id, word_key) DO UPDATE SET word = excluded.word RETURNING id`,
       ).bind(deckId, n.word.trim(), wordKey(n.word), n.transcription ?? null, n.pos, n.translation, n.exampleTt, n.exampleRu,
-        n.exampleSrc ?? "", n.audioFileId ?? null, n.sourceUrl ?? null),
+        n.exampleSrc ?? "", n.audioFileId ?? null, n.sourceUrl ?? null,
+        n.level ?? null, n.topicNo ?? null, n.seq ?? null,
+        n.level != null && n.topicNo != null && n.seq != null ? tseqOf(n.topicNo, n.seq) : null),
     );
     stmts.push(this.db.prepare("UPDATE decks SET total = (SELECT COUNT(*) FROM notes WHERE deck_id = ?1) WHERE id = ?1").bind(deckId));
     const res = await this.db.batch<{ id: number }>(stmts);
