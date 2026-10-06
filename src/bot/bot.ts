@@ -15,7 +15,7 @@ import type { Rating } from "../srs/fsrs";
 import { cumulative } from "../stats/service";
 import type { TgApi } from "../tg/client";
 import { HINTS_KEPT_ON_REPLAY } from "../tutorial/hints";
-import { REMIND_TIMES, RETENTIONS, TZ_OFFSETS, advanceOnboarding, getOrCreate, langFromTelegram, setSetting, startOnboarding } from "../users/service";
+import { REMIND_TIMES, RETENTIONS, TZ_OFFSETS, advanceOnboarding, getOrCreate, langFromTelegram, onLanguageStep, setSetting, startOnboarding } from "../users/service";
 import {
   learnKeyboard, renderGenPreview, renderHub, renderIntro, renderLevelChecks, renderModes, renderOnboarding, renderPosChecks, renderSettings, renderStats, renderTimeZones,
   renderTopics,
@@ -113,6 +113,19 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   });
 
   /*
+   * Before a language is chosen, whatever a learner sends is answered with the language screen as a new message: the
+   * bot may have just met this learner, whose first move is a button of an old message, /learn or a word as often as
+   * /start, and then there is no screen above to point at. Only /start and the two buttons of the screen go on to
+   * their handlers.
+   */
+  c.use(async (ctx, next) => {
+    const choice = ctx.callbackQuery?.data === "ob:ru" || ctx.callbackQuery?.data === "ob:tt";
+    if (!onLanguageStep(ctx.user) || choice || ctx.hasCommand("start") || !(ctx.message || ctx.callbackQuery)) return next();
+    await send(ctx, renderOnboarding({ kind: "lang" }, ctx.user.lang));
+    await toast(ctx);
+  });
+
+  /*
    * The introduction: the language, two screens about the bot and the levels to study follow one another in one
    * message; «Начать» takes the buttons off that message and sends the first card.
    */
@@ -194,8 +207,8 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   /** A button the learner has no use for any more: the tap says so, and its message becomes the hub. */
   const staleToHub = async (ctx: Ctx) => redraw(ctx, await hubScreen(ctx), dict(ctx.user.lang).staleButton);
 
-  // During the introduction the buttons of the settings screens change nothing: the tap is answered with the hint.
-  c.callbackQuery(/^(levels$|hub|lv:|ps:|md:|tp:|tz:|fix:|tut:|set:(hub|tz|back|tut)$)/, async (ctx, next) => {
+  // During the introduction the buttons of the settings screens, every row of /settings among them, change nothing: the tap is answered with the hint.
+  c.callbackQuery(/^(levels$|hub|lv:|ps:|md:|tp:|tz:|fix:|tut:|set:)/, async (ctx, next) => {
     if (ctx.user.onboardingStep) return toast(ctx, dict(ctx.user.lang).chooseAbove);
     await next();
   });

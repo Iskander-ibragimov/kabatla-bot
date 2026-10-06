@@ -12,6 +12,9 @@ describe("admin", () => {
   it("non-admin cannot use admin commands", async () => {
     const h = harness(env.DB, { now: T });
     await h.text("/start");
+    // Before a language is chosen every message is answered with the language screen, /admin as any other.
+    const repo = new Repo(env.DB);
+    await repo.updateUser((await repo.getUserByTg(42))!.id, { onboardingStep: null });
     const before = h.tg.calls.length;
     await h.text("/admin");
     expect(h.tg.calls.length).toBe(before);

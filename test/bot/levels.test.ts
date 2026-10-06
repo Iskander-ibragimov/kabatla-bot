@@ -167,13 +167,19 @@ describe("/levels: the hub", () => {
     await learnerInA1(env.DB);
     const repo = new Repo(env.DB);
     const user = (await repo.getUserByTg(42))!;
-    await repo.updateUser(user.id, { onboardingStep: "goal" });
     const b = bot();
-    for (const data of ["levels", "hub", "hub:lv", "lv:t:3", "hub:pos", "ps:t:0", "hub:mode", "md:freq", "hub:tp", "tp:1", "fix:pos", "fix:lv:3", "fix:topic", "set:hub", "set:tz", "tz:300", "set:back", "lv:skip"]) {
-      const u = await b.press(data);
-      expect(u.calls.map((c) => [c.method, c.payload.text]), data).toEqual([["answerCallbackQuery", ru.chooseAbove]]);
+    // The steps after the language; on the language step every update is answered with its screen (tutorial.test.ts).
+    for (const step of ["intro1", "intro2", "levels"]) {
+      await repo.updateUser(user.id, { onboardingStep: step });
+      for (const data of [
+        "levels", "hub", "hub:lv", "lv:t:3", "hub:pos", "ps:t:0", "hub:mode", "md:freq", "hub:tp", "tp:1", "fix:pos", "fix:lv:3", "fix:topic", "set:hub", "set:tz", "tz:300", "set:back", "lv:skip",
+        "set:lang", "set:ret", "set:new", "set:rem", "set:dir", "set:auto",
+      ]) {
+        const u = await b.press(data);
+        expect(u.calls.map((c) => [c.method, c.payload.text]), `${step} ${data}`).toEqual([["answerCallbackQuery", ru.chooseAbove]]);
+      }
+      expect(await repo.getUser(user.id)).toEqual({ ...user, onboardingStep: step });
     }
-    expect(await repo.getUser(user.id)).toEqual({ ...user, onboardingStep: "goal" });
   });
 });
 

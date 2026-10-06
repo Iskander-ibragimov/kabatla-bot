@@ -106,6 +106,8 @@ const STEPS = ["lang", "intro1", "intro2", "levels"] as const;
 type Step = (typeof STEPS)[number];
 /** The step a learner stands on. A stored step the introduction does not have is its first one, so nobody is left on a step that takes no answer. */
 const stepOf = (user: Pick<User, "onboardingStep">): Step => STEPS.find((s) => s === user.onboardingStep) ?? "lang";
+/** No language is chosen yet: the learner the bot has just met, and the one who left the language screen unanswered. */
+export const onLanguageStep = (user: Pick<User, "onboardingStep">): boolean => user.onboardingStep != null && stepOf(user) === "lang";
 
 export type OnboardingScreen =
   | { kind: "lang" }

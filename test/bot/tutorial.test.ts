@@ -250,14 +250,15 @@ describe("the introduction", () => {
     /** The buttons of the introduction that is gone: «Знаю», «Не знаю», the words a day, the hour, the time zone. */
     const OLD = ["ob:1", "ob:0", "ob:10", "ob:09:00", "ob:180"];
 
-    it("an old button pressed on a step is answered with «Выберите вариант кнопкой выше», its message becomes the screen of the step, and nothing is written", async () => {
+    it("an old button pressed on a step after the language is answered with «Выберите вариант кнопкой выше», its message becomes the screen of the step, and nothing is written", async () => {
       await catalog(env.DB);
       const b = bot();
       await b.text("/start");
       const repo = new Repo(env.DB);
-      const steps: [answer: string | null, foreign: string[]][] = [[null, ["ob:n1", "ob:n2", "ob:next", "ob:go", "ob:lv:1"]], ["ob:ru", ["ob:ru", "ob:n2", "ob:next", "ob:go", "ob:lv:1"]], ["ob:n1", ["ob:tt", "ob:n1", "ob:next", "ob:go"]], ["ob:n2", ["ob:ru", "ob:n1", "ob:n2", "ob:next", "ob:lv:9"]]];
+      // The language step answers with its own screen as a new message: «a learner who has not chosen a language yet» below.
+      const steps: [answer: string, foreign: string[]][] = [["ob:ru", ["ob:ru", "ob:n2", "ob:next", "ob:go", "ob:lv:1"]], ["ob:n1", ["ob:tt", "ob:n1", "ob:next", "ob:go"]], ["ob:n2", ["ob:ru", "ob:n1", "ob:n2", "ob:next", "ob:lv:9"]]];
       for (const [answer, foreign] of steps) {
-        if (answer) await b.press(answer, 100);
+        await b.press(answer, 100);
         const user = await b.user();
         const screen = renderOnboarding(await startOnboarding(repo, user), "ru");
         // Message 77 is an old message of the introduction, with buttons this step does not have.
@@ -271,12 +272,12 @@ describe("the introduction", () => {
       }
     });
 
-    it("typed text, a command and a button of the settings on a step are answered the same way and change nothing", async () => {
+    it("typed text, a command and a button of the settings on a step after the language are answered the same way and change nothing", async () => {
       await catalog(env.DB);
       const b = bot();
       await b.text("/start");
-      for (const answer of [null, "ob:ru", "ob:n1", "ob:n2"]) {
-        if (answer) await b.press(answer, 100);
+      for (const answer of ["ob:ru", "ob:n1", "ob:n2"]) {
+        await b.press(answer, 100);
         const user = await b.user();
         for (const typed of ["14:35", "рәхмәт", "/learn", "/levels", "/settings", "/stats", "/undo"]) {
           const u = await b.text(typed);
@@ -285,6 +286,12 @@ describe("the introduction", () => {
         for (const data of ["set:tut", "tut:2", "tut:ok", "hub", "lv:t:2", "learn"]) {
           const u = await b.press(data, 100);
           expect(u.calls.map((c) => c.payload.text), data).toEqual([ru.chooseAbove]);
+        }
+        // The rows of /settings that change a value at a tap are buttons of the settings like the others: the tap is answered, and the row is only read.
+        for (const data of ["set:lang", "set:ret", "set:new", "set:rem", "set:dir", "set:auto"]) {
+          const u = await b.press(data, 100);
+          expect(u.calls.map((c) => [c.method, c.payload.text]), data).toEqual([["answerCallbackQuery", ru.chooseAbove]]);
+          expect(u.d1, data).toBe(1);
         }
         expect(await b.user()).toEqual(user);
       }
@@ -329,16 +336,100 @@ describe("the introduction", () => {
       await new Repo(env.DB).updateUser((await b.user()).id, { onboardingStep: stored, onboardingData: JSON.stringify({ i: 3, known: 2 }) });
       for (const data of ["ob:1", "ob:10", "ob:09:00", "ob:180", "ob:n1", "ob:n2", "ob:go"]) {
         const u = await b.press(data, 100);
+        expect(u.methods, data).toEqual(["sendMessage", "answerCallbackQuery"]);
         expect(u.calls[0]!.payload, data).toMatchObject({ text: ru.welcome });
-        expect(u.toast, data).toBe(ru.chooseAbove);
+        expect(u.toast, data).toBeUndefined();
       }
-      expect((await b.text("14:35")).calls.map((c) => c.payload.text)).toEqual([ru.chooseAbove]);
+      expect((await b.text("14:35")).calls.map((c) => [c.method, c.payload.text])).toEqual([["sendMessage", ru.welcome]]);
       await b.text("/start");
       expect(b.h.lastText()).toBe(ru.welcome);
       edited(await b.press("ob:ru"), b.h.tg.lastMessageId());
       expect(b.h.lastText()).toBe(ru.intro1);
       expect((await b.user()).onboardingStep).toBe("intro1");
     });
+  });
+});
+
+/*
+ * Every learner starts again with the levels A1–C1, and the first thing a returning learner does is seldom /start: a
+ * button of an old message, /learn, a word. The bot knows nobody yet, so whatever comes is answered with the language
+ * screen, as a new message.
+ */
+describe("a learner who has not chosen a language yet", () => {
+  const LANG_SCREEN = { text: ru.welcome, parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: "Русский", callback_data: "ob:ru" }, { text: "Татарча", callback_data: "ob:tt" }]] } };
+  const count = async (table: string) => (await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>())!.n;
+  /** What the bot holds of learners: the rows of the users, and everything a learner's action could have made. */
+  const held = async () => Object.fromEntries(await Promise.all(["users", "cards", "sessions", "previews", "review_log", "decks WHERE kind <> 'catalog'"].map(async (t) => [t.split(" ")[0]!, await count(t)])));
+  const NOTHING_BUT_THE_ROW = { users: 1, cards: 0, sessions: 0, previews: 0, review_log: 0, decks: 0 };
+  /** A new learner as the bot stores one before any answer. */
+  const NEW_ROW = { onboardingStep: "lang", lang: "ru", levels: 0b1, newPerDay: 10, remindAt: "09:00", retention: 0.9, direction: "tt_ru", autoplay: false, pendingEdit: null };
+  /** One message, the language screen, sent and not edited; a tap is answered after it, with no words. */
+  const languageScreen = (u: Awaited<ReturnType<ReturnType<typeof bot>["press"]>>, tap: boolean, why: string) => {
+    expect(u.methods, why).toEqual(tap ? ["sendMessage", "answerCallbackQuery"] : ["sendMessage"]);
+    expect(u.calls[0]!.payload, why).toMatchObject(LANG_SCREEN);
+    expect(u.toast, why).toBeUndefined();
+  };
+
+  const FIRST: [what: string, kind: "tap" | "text", update: string][] = [
+    ["«▶ Учить» of an old message", "tap", "learn"],
+    ["/learn", "text", "/learn"],
+    ["a typed word", "text", "рәхмәт"],
+    ["a grade button of an old card", "tap", "g:5:0:3"],
+    ["a row of the old settings that changed a value at a tap", "tap", "set:new"],
+    ["a row of the settings the bot no longer has", "tap", "set:new:10"],
+    ["«Язык» of the old settings", "tap", "set:lang"],
+    ["/levels", "text", "/levels"],
+    ["/settings", "text", "/settings"],
+    ["«Отменить» of an old card", "tap", "u"],
+    ["a button of the old introduction", "tap", "ob:1"],
+    ["/help", "text", "/help"],
+  ];
+  it.each(FIRST)("%s from a learner the bot does not know: the language screen as one new message, a row on the language step and nothing else; then the language is chosen as after /start", async (what, kind, update) => {
+    await catalog(env.DB);
+    expect(await count("users")).toBe(0);
+    const b = bot();
+    // Message 77 is a message of the bot as it was before the levels A1–C1.
+    const first = kind === "tap" ? await b.press(update, 77) : await b.text(update);
+    languageScreen(first, kind === "tap", what);
+    // D1 calls: the row is looked for, written and read. Nothing else is asked of the database.
+    expect(first.d1).toBe(3);
+    expect(await held()).toEqual(NOTHING_BUT_THE_ROW);
+    expect(await b.user()).toMatchObject(NEW_ROW);
+
+    // The same once more, before a language is chosen: the screen again, and nothing else.
+    const second = kind === "tap" ? await b.press(update, 77) : await b.text(update);
+    languageScreen(second, kind === "tap", what);
+    expect(second.d1).toBe(1);
+    expect(await held()).toEqual(NOTHING_BUT_THE_ROW);
+    expect(await b.user()).toMatchObject(NEW_ROW);
+
+    // «Русский» of the screen sent last goes on as it does after /start: the first screen about the bot, in that message.
+    const screen = b.h.tg.lastMessageId();
+    const chosen = await b.press("ob:ru", screen);
+    edited(chosen, screen);
+    expect(b.h.lastText()).toBe(ru.intro1);
+    expect(buttons(b.h.lastMarkup())).toEqual([["Дальше", "ob:n1"]]);
+    expect(await b.user()).toMatchObject({ ...NEW_ROW, onboardingStep: "intro1" });
+    expect(await held()).toEqual(NOTHING_BUT_THE_ROW);
+  });
+
+  it("a learner who left the language screen of /start unanswered gets it again for anything but a language; «Татарча» of an old screen is still the choice", async () => {
+    await catalog(env.DB);
+    const b = bot();
+    const start = await b.text("/start");
+    expect(start.methods).toEqual(["sendMessage"]);
+    const row = await b.user();
+    for (const [, kind, update] of FIRST) {
+      const u = kind === "tap" ? await b.press(update, 77) : await b.text(update);
+      languageScreen(u, kind === "tap", update);
+      expect(u.d1, update).toBe(1);
+    }
+    expect(await b.user()).toEqual(row);
+    expect(await held()).toEqual(NOTHING_BUT_THE_ROW);
+    // The first screen of all, sent by /start, still takes the answer.
+    edited(await b.press("ob:tt", 100), 100);
+    expect(b.h.lastText()).toBe(tt.intro1);
+    expect(await b.user()).toMatchObject({ lang: "tt", onboardingStep: "intro1" });
   });
 });
 
