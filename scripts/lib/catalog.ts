@@ -1,17 +1,31 @@
 /**
- * Catalog files (data/catalog/a1.csv … c1.csv, one per CEFR level, and data/topics.csv): their format and the rules
- * they must keep. Pure: no I/O, so the same code runs in the scripts and in the Workers test runtime.
+ * Catalog files (data/catalog/a1.csv … c1.csv, one per CEFR level, data/topics.csv and data/renames.csv): their format,
+ * the rules they must keep, and the digest the seed knows a changed catalog by. Pure: no I/O, so the same code runs in
+ * the scripts and in the Workers test runtime.
  */
+import { createHash } from "node:crypto";
 import { type Rename, parseCsv } from "../../src/content/csv";
+import { isTatarText } from "../../src/content/tatar";
 import { wordKey } from "../../src/db/repo";
 import { LEVELS } from "../../src/levels/scale";
-import { type LevelMeta, POS_CODES, TRANSCRIPTION_EXTRA, coverageDrops, foreign, isAttested, show, tokenize, wordForm } from "./levels";
+import { isAttested, tokenize, wordForm } from "./forms";
 
 export const CATALOG_HEADER = ["word", "transcription", "pos", "translation", "example_tt", "example_ru", "example_src", "topic", "audio_file_id"] as const;
 export const TOPICS_HEADER = ["no", "slug", "title_ru", "title_tt"] as const;
+/** Columns of data/renames.csv: a corrected headword. `level` is the number of the level, 1–5, the word stood in when the line was written. */
+export const RENAMES_HEADER = ["level", "old_word", "new_word"] as const;
+export const POS_CODES: readonly string[] = ["n", "v", "adj", "adv", "pron", "num", "post", "conj", "part", "intj", "phr"];
 const TOPICS_FILE = "topics.csv";
+const RENAMES_FILE = "renames.csv";
 /** Topics are numbered 0 (`core`) … 20. */
 const LAST_TOPIC = 20;
+
+/** Signs a transcription may hold besides Tatar letters and punctuation. */
+const TRANSCRIPTION_EXTRA = "wʼ́";
+/** The characters once each, as they are named in a violation. */
+const show = (chars: string[]): string => [...new Set(chars)].map((c) => JSON.stringify(c).slice(1, -1)).join("");
+/** Characters of a Tatar field that are neither Tatar Cyrillic nor allowed punctuation. */
+const foreign = (text: string, extra = ""): string[] => [...text].filter((c) => !isTatarText(c) && !extra.includes(c));
 
 type Row = Record<(typeof CATALOG_HEADER)[number], string>;
 
@@ -51,7 +65,22 @@ export interface CatalogCheck {
   meta: LevelMeta[];
 }
 
+/** One entry of data/catalog/meta.json: the share of running text, in whole percent, that the words up to and including the level cover. */
+export interface LevelMeta { level: number; coveragePct: number }
+
+/** The name of the file of a level without `.csv`: a1 … c1; a number that is no level stands as it is. */
 const levelName = (level: number): string => LEVELS.find((l) => l.no === level)?.slug ?? String(level);
+
+/** The levels whose coverage is lower than that of the level before, as `b1: покрытие 39% меньше, чем у a2 (41%)`. */
+export function coverageDrops(meta: readonly LevelMeta[]): string[] {
+  const byLevel = [...meta].sort((a, b) => a.level - b.level);
+  return byLevel.flatMap((m, i) => {
+    const before = byLevel[i - 1];
+    return before && m.coveragePct < before.coveragePct
+      ? [`${levelName(m.level)}: покрытие ${m.coveragePct}% меньше, чем у ${levelName(before.level)} (${before.coveragePct}%)`]
+      : [];
+  });
+}
 
 /**
  * Checks the catalog files and the topics. Returns the violations, one per line: `a1:5 <what is wrong>` — the file of
@@ -129,6 +158,63 @@ export function checkCatalog(levels: CatalogLevel[], o: CatalogCheck): string[] 
   for (const { level } of levels) {
     if (!o.meta.some((m) => m.level === level)) errors.push(`${levelName(level)}: нет покрытия в meta.json`);
   }
-  errors.push(...coverageDrops(o.meta, levelName));
+  errors.push(...coverageDrops(o.meta));
   return errors;
+}
+
+/**
+ * Checks data/renames.csv against the level files. A line says: the catalog word that was stored as `old_word` is now
+ * `new_word`. The seed applies it to the whole catalog, whatever level the line names (`catalogRenames`), so the words
+ * are looked for in every level file: the new word must stand in the catalog and the old one must no longer; an old
+ * word is renamed once. `level` must be the number of a level, 1–5, that has a file. Words are compared by their keys,
+ * like notes: a change of case or of the punctuation at the edges is not a rename, the seed updates such a word in place.
+ * Returns the violations as `renames.csv:2 <what is wrong>`, the number being the line of the file. An empty text
+ * (no file) and a file with the header only have none.
+ */
+export function checkRenames(text: string, levels: CatalogLevel[]): string[] {
+  const header = headerLine(text);
+  if (header === "") return [];
+  if (header !== RENAMES_HEADER.join(",")) return [`${RENAMES_FILE}:1 заголовок «${header}», нужен «${RENAMES_HEADER.join(",")}»`];
+  const errors: string[] = [];
+  /** Word key → where the word stands in the level files. */
+  const words = new Map<string, string>();
+  for (const { level, rows } of levels) {
+    rows.forEach((row, j) => {
+      const key = wordKey(row.word ?? "");
+      if (key !== "" && !words.has(key)) words.set(key, `${levelName(level)}:${j + 2}`);
+    });
+  }
+  /** Old word key → the line that renames it. */
+  const renamed = new Map<string, number>();
+  parseCsv(text).forEach((r, i) => {
+    const at = `${RENAMES_FILE}:${i + 2}`;
+    const given = (r.level ?? "").trim();
+    const scale = /^\d+$/.test(given) ? LEVELS.find((l) => l.no === Number(given)) : undefined;
+    if (!scale) { errors.push(`${at} уровня «${given}» нет: уровни 1–${LEVELS.length}`); return; }
+    if (!levels.some((l) => l.level === scale.no)) { errors.push(`${at} файла уровня ${scale.no} (${scale.slug}.csv) нет`); return; }
+    const [oldWord, newWord] = [(r.old_word ?? "").trim(), (r.new_word ?? "").trim()];
+    const [oldKey, newKey] = [wordKey(oldWord), wordKey(newWord)];
+    if (oldKey === "") { errors.push(`${at} пустое old_word`); return; }
+    if (newKey === "") { errors.push(`${at} пустое new_word`); return; }
+    const first = renamed.get(oldKey);
+    if (first !== undefined) { errors.push(`${at} старое слово «${oldWord}» уже переименовано в строке ${first}`); return; }
+    renamed.set(oldKey, i + 2);
+    if (!words.has(newKey)) errors.push(`${at} нового слова «${newWord}» нет в каталоге`);
+    const still = words.get(oldKey);
+    if (still !== undefined) errors.push(`${at} старое слово «${oldWord}» всё ещё стоит в ${still}`);
+  });
+  return errors;
+}
+
+/**
+ * sha256, in hex, of what the catalog in the database is made from: the version of the rule that orders the words of a
+ * level in the guided order (`GUIDED_RULE_VERSION`), and every file by its path and content, in the order given. The
+ * seed stores it and raises the catalog version when it differs from the stored one (`catalogToSql`): the version
+ * moves when a file changes, and also when the files are the same but a new rule places their words differently.
+ */
+export function catalogDigest(files: { path: string; bytes: Uint8Array }[], ruleVersion: number): string {
+  const hash = createHash("sha256").update(`guided rule ${ruleVersion}\n`);
+  // The length before the bytes keeps the files apart: the same bytes cut into files at another place give another digest.
+  for (const { path, bytes } of files) hash.update(`${path} ${bytes.length}\n`).update(bytes);
+  return hash.digest("hex");
 }

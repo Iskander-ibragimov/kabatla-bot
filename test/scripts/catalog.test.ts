@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { CATALOG_HEADER, type CatalogLevel, TOPICS_HEADER, type Topic, catalogRenames, checkCatalog, parseCatalogLevel, parseTopics } from "../../scripts/lib/catalog";
-import { tokenize } from "../../scripts/lib/levels";
+import {
+  CATALOG_HEADER, type CatalogLevel, RENAMES_HEADER, TOPICS_HEADER, type Topic, catalogDigest, catalogRenames, checkCatalog, checkRenames, coverageDrops,
+  parseCatalogLevel, parseTopics,
+} from "../../scripts/lib/catalog";
+import { tokenize } from "../../scripts/lib/forms";
 import { toCsv } from "../../src/content/csv";
 import { transcribe } from "../../src/content/transcribe";
 
@@ -45,6 +48,7 @@ describe("catalog files", () => {
   it("keeps the agreed columns", () => {
     expect([...CATALOG_HEADER]).toEqual(["word", "transcription", "pos", "translation", "example_tt", "example_ru", "example_src", "topic", "audio_file_id"]);
     expect([...TOPICS_HEADER]).toEqual(["no", "slug", "title_ru", "title_tt"]);
+    expect([...RENAMES_HEADER]).toEqual(["level", "old_word", "new_word"]);
   });
 
   it("reads a level file: the header as written, the rows by column", () => {
@@ -132,6 +136,10 @@ describe("checkCatalog", () => {
     expect(check(withRow(0, { transcription: "wаʼзы́м" }))).toEqual([]);
   });
 
+  it("rejects a line break inside a Tatar field", () => {
+    expect(check(withRow(0, { example_tt: `Бу —\n${word(0)}.` }))).toEqual(["a1:2 example_tt: чужие буквы или знаки «\\n»"]);
+  });
+
   it("requires example_src to be own or tatoeba:<number>", () => {
     expect(check(withRow(0, { example_src: "tatoeba" }))).toEqual(["a1:2 example_src «tatoeba»: нужно own или tatoeba:<число>"]);
     expect(check(withRow(0, { example_src: "" }))).toEqual(["a1:2 example_src «»: нужно own или tatoeba:<число>"]);
@@ -149,6 +157,12 @@ describe("checkCatalog", () => {
 
   it("requires every word of the example to be an attested form", () => {
     expect(check(withRow(0, { example_tt: `Бу — ${word(0)} әкәмәт.` }))).toEqual(["a1:2 example_tt: слова «әкәмәт» нет в списке словоформ"]);
+  });
+
+  it("takes a hyphenated word whose parts are attested, and compares without regard to case", () => {
+    expect(check(withRow(0, { example_tt: `Бу-мин — ${word(0)}.` }))).toEqual([]);
+    expect(check(withRow(0, { example_tt: `Бу-әкәмәт — ${word(0)}.` }))).toEqual(["a1:2 example_tt: слова «бу-әкәмәт» нет в списке словоформ"]);
+    expect(check(withRow(0, { example_tt: `МИН — ${word(0)}.` }))).toEqual([]);
   });
 
   it("requires the example of a word to hold a form of it, and does not ask that of a phrase", () => {
@@ -169,8 +183,86 @@ describe("checkCatalog", () => {
     expect(check(levels, { meta: [{ level: 1, coveragePct: 45 }, { level: 2, coveragePct: 45 }] })).toEqual([]);
   });
 
+  it("names every fall of the coverage by the files of the two levels, whatever the order of the entries", () => {
+    const meta = (...pct: number[]) => pct.map((coveragePct, i) => ({ level: i + 1, coveragePct }));
+    expect(coverageDrops(meta(30, 28, 35, 34))).toEqual(["a2: покрытие 28% меньше, чем у a1 (30%)", "b2: покрытие 34% меньше, чем у b1 (35%)"]);
+    expect(coverageDrops(meta(30, 41, 39).reverse())).toEqual(["b1: покрытие 39% меньше, чем у a2 (41%)"]);
+    expect(coverageDrops(meta(30, 30, 31))).toEqual([]);
+    expect(coverageDrops([])).toEqual([]);
+  });
+
   it("reports every broken row, each with its file and line", () => {
     const levels = [level(1, a1().map((r, i) => (i === 3 ? { ...r, translation: "" } : r))), level(2, next().map((r) => ({ ...r, topic: "sport" })))];
     expect(check(levels)).toEqual(["a1:5 пустой перевод", "a2:2 темы «sport» нет в topics.csv", "a2:3 темы «sport» нет в topics.csv", "a2:4 темы «sport» нет в topics.csv"]);
+  });
+});
+
+describe("checkRenames: data/renames.csv", () => {
+  /** The files of A1 and B1; there is no file of A2. */
+  const levels = [level(1, a1()), level(3, next())];
+  const [inA1, alsoInA1, inB1] = [word(0), word(3), word(600)];
+  const file = (...lines: string[]) => ["level,old_word,new_word", ...lines].join("\n") + "\n";
+
+  it("passes a file with the header only, and an absent file", () => {
+    expect(checkRenames(file(), levels)).toEqual([]);
+    expect(checkRenames("", levels)).toEqual([]);
+  });
+
+  it("passes a rename whose new word stands in the catalog and whose old word does not", () => {
+    expect(checkRenames(file(`1,батим,${inA1}`, `3,"со, су",${inB1}`), levels)).toEqual([]);
+    // A rename holds for the whole catalog: the word may have moved to another level since the line was written.
+    expect(checkRenames(file(`1,батим,${inB1}`), levels)).toEqual([]);
+  });
+
+  it("requires the three columns in the header", () => {
+    expect(checkRenames("level,old,new\n", levels)).toEqual(["renames.csv:1 заголовок «level,old,new», нужен «level,old_word,new_word»"]);
+  });
+
+  it("requires a level of the scale, by its number, that has a file", () => {
+    expect(checkRenames(file(`6,батим,${inA1}`), levels)).toEqual(["renames.csv:2 уровня «6» нет: уровни 1–5"]);
+    expect(checkRenames(file(`,батим,${inA1}`, `a1,батим,${inA1}`, `1.5,батим,${inA1}`, `0,батим,${inA1}`), levels)).toEqual([
+      "renames.csv:2 уровня «» нет: уровни 1–5", "renames.csv:3 уровня «a1» нет: уровни 1–5", "renames.csv:4 уровня «1.5» нет: уровни 1–5", "renames.csv:5 уровня «0» нет: уровни 1–5",
+    ]);
+    expect(checkRenames(file(`2,батим,${inA1}`), levels)).toEqual(["renames.csv:2 файла уровня 2 (a2.csv) нет"]);
+  });
+
+  it("requires the new word to stand in the catalog", () => {
+    expect(checkRenames(file("1,батим,яңасүз"), levels)).toEqual(["renames.csv:2 нового слова «яңасүз» нет в каталоге"]);
+  });
+
+  it("requires the old word to be gone from the catalog, whatever level it stands in", () => {
+    expect(checkRenames(file(`1,${alsoInA1},${inA1}`), levels)).toEqual([`renames.csv:2 старое слово «${alsoInA1}» всё ещё стоит в a1:5`]);
+    expect(checkRenames(file(`1,${inB1},${inA1}`), levels)).toEqual([`renames.csv:2 старое слово «${inB1}» всё ещё стоит в b1:2`]);
+    // The same word with other punctuation or case is not a rename: such a fix needs no line here.
+    expect(checkRenames(file(`1,${inA1.toUpperCase()}!,${inA1}`), levels)).toEqual([`renames.csv:2 старое слово «${inA1.toUpperCase()}!» всё ещё стоит в a1:2`]);
+  });
+
+  it("requires both words, and renames an old word once in the whole file", () => {
+    expect(checkRenames(file(`1,,${inA1}`), levels)).toEqual(["renames.csv:2 пустое old_word"]);
+    expect(checkRenames(file("1,батим,"), levels)).toEqual(["renames.csv:2 пустое new_word"]);
+    expect(checkRenames(file(`1,батим,${inA1}`, `3,Батим,${inB1}`), levels)).toEqual(["renames.csv:3 старое слово «Батим» уже переименовано в строке 2"]);
+  });
+});
+
+describe("catalogDigest", () => {
+  const bytes = (text: string) => new TextEncoder().encode(text);
+  const files = (a1Text = "word\nсу\n") => [{ path: "data/catalog/a1.csv", bytes: bytes(a1Text) }, { path: "data/topics.csv", bytes: bytes("no,slug\n0,core\n") }];
+
+  it("is a sha256 in hex, the same for the same files and the same version of the order rule", () => {
+    expect(catalogDigest(files(), 1)).toMatch(/^[0-9a-f]{64}$/);
+    expect(catalogDigest(files(), 1)).toBe(catalogDigest(files(), 1));
+  });
+
+  it("differs for two versions of the order rule over the same files", () => {
+    expect(catalogDigest(files(), 2)).not.toBe(catalogDigest(files(), 1));
+  });
+
+  it("differs when a file changes its content or its path, or when two files share their bytes otherwise", () => {
+    const base = catalogDigest(files(), 1);
+    expect(catalogDigest(files("word\nсу\nюл\n"), 1)).not.toBe(base);
+    expect(catalogDigest(files().map((f, i) => (i === 0 ? { ...f, path: "data/catalog/a2.csv" } : f)), 1)).not.toBe(base);
+    const [first, second] = [bytes("word\n"), bytes("су\n")];
+    expect(catalogDigest([{ path: "a", bytes: bytes("word\nсу\n") }, { path: "b", bytes: bytes("") }], 1))
+      .not.toBe(catalogDigest([{ path: "a", bytes: first }, { path: "b", bytes: second }], 1));
   });
 });

@@ -3,32 +3,25 @@
  * Node only (node:fs): the tests run in the Workers runtime and never import this module.
  * Paths are relative to the repository root, where the scripts are run from.
  */
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { GUIDED_RULE_VERSION } from "../../src/levels/order";
 import { LEVELS } from "../../src/levels/scale";
-import { type CatalogLevel, type Topic, parseCatalogLevel, parseTopics } from "./catalog";
-import { type LevelMeta, type Row, formatLevel, levelFile, levelNumber, parseLevel } from "./levels";
+import { type CatalogLevel, type LevelMeta, type Topic, catalogDigest, parseCatalogLevel, parseTopics } from "./catalog";
 
-export const LEVELS_DIR = "data/levels";
 /** The catalog by CEFR level: a1.csv … c1.csv and meta.json. */
 export const CATALOG_DIR = "data/catalog";
 export const FILES = {
-  /** The authored list, in learning order. */
-  wordlist: "data/wordlist.csv",
-  /** Everyday core: `word, pos, group`. */
-  core: "data/core.csv",
-  /** Example word forms the corpus knows; written by `build-wordlist cut`. */
+  /** Example word forms the corpus knows; written by `build-wordlist attest`. */
   attested: "data/attested.txt",
   /** Word forms approved by hand (names), one per line. */
   attestedExtra: "data/attested-extra.txt",
-  meta: `${LEVELS_DIR}/meta.json`,
   /** Topics of the catalog: `no, slug, title_ru, title_tt`. */
   topics: "data/topics.csv",
   /** Coverage of running text by the words up to each CEFR level. */
   catalogMeta: `${CATALOG_DIR}/meta.json`,
-  /** Corrected headwords: `level, old_word, new_word` (see `checkRenames`; for the catalog by CEFR level, `catalogRenames`). */
+  /** Corrected headwords: `level, old_word, new_word` (see `checkRenames` and `catalogRenames`). */
   renames: "data/renames.csv",
   seed: "seed/catalog.sql",
   // Not in git (data/work/): the sources and what is built from them.
@@ -40,7 +33,6 @@ export const FILES = {
   cognates: "data/work/cognates.json",
   /** Verb rows of the corpus that `candidates` dropped: `count, stem, infinitive, reason`. */
   droppedVerbs: "data/work/dropped-verbs.tsv",
-  review: "data/work/review.tsv",
 } as const;
 
 export function readText(path: string, hint = ""): string {
@@ -60,32 +52,6 @@ export const readRenames = (): string => (existsSync(FILES.renames) ? readFileSy
 export function readLines(path: string): string[] {
   if (!existsSync(path)) return [];
   return readFileSync(path, "utf8").split("\n").map((line) => line.trim()).filter((line) => line !== "");
-}
-
-const levelPath = (n: number): string => `${LEVELS_DIR}/${levelFile(n)}`;
-
-const levelsDir = (): string[] => (existsSync(LEVELS_DIR) ? readdirSync(LEVELS_DIR) : []);
-
-/** Numbers of the level files on disk (l01.csv … l20.csv), ascending. */
-export function levelNumbers(): number[] {
-  return levelsDir().map(levelNumber).filter((n) => n !== null).sort((a, b) => a - b);
-}
-
-/** Files that look like a level but are not one of l01.csv … l20.csv (l00.csv, l21.csv, l5.csv). */
-export function strayLevelFiles(): string[] {
-  return levelsDir().filter((name) => /^l\d+\.csv$/i.test(name) && levelNumber(name) === null).sort();
-}
-
-export const readLevel = (n: number): Row[] => parseLevel(readText(levelPath(n)));
-export const writeLevel = (n: number, rows: Row[]): void => writeText(levelPath(n), formatLevel(rows));
-
-/** Coverage of the levels as `build-wordlist cut` computed it; empty when there is no meta.json yet. */
-export function readMeta(): LevelMeta[] {
-  return existsSync(FILES.meta) ? (JSON.parse(readFileSync(FILES.meta, "utf8")) as LevelMeta[]) : [];
-}
-
-export function writeMeta(meta: LevelMeta[]): void {
-  writeText(FILES.meta, `[\n${meta.map((m) => `  ${JSON.stringify(m)}`).join(",\n")}\n]\n`);
 }
 
 const catalogPath = (slug: string): string => `${CATALOG_DIR}/${slug}.csv`;
@@ -112,19 +78,15 @@ export function readCatalogMeta(): LevelMeta[] {
 }
 
 /**
- * sha256 of the level files of the catalog and of the topics file, by path and content. The seed stores it and raises
- * the catalog version when it differs from the stored one (see `catalogToSql`).
+ * The digest of the catalog as it stands on disk: the level files that exist, the topics file and the version of the
+ * guided-order rule (`catalogDigest`). The seed stores it and raises the catalog version when it differs from the
+ * stored one (see `catalogToSql`).
  */
 export function catalogHash(): string {
-  const hash = createHash("sha256");
-  for (const path of [...catalogPaths().map((f) => f.path), FILES.topics]) {
-    const bytes = readFileSync(path);
-    hash.update(`${path} ${bytes.length}\n`).update(bytes);
-  }
-  return hash.digest("hex");
+  return catalogDigest([...catalogPaths().map((f) => f.path), FILES.topics].map((path) => ({ path, bytes: readFileSync(path) })), GUIDED_RULE_VERSION);
 }
 
-/** The word forms the level examples may use: data/attested.txt plus the forms approved by hand, lower-cased. */
+/** The word forms the examples of the catalog may use: data/attested.txt plus the forms approved by hand, lower-cased. */
 export function readAttested(): Set<string> {
   return new Set([...readLines(FILES.attested), ...readLines(FILES.attestedExtra)].map((form) => form.toLowerCase()));
 }

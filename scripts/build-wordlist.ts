@@ -1,23 +1,18 @@
 /**
- * Builds the catalog wordlist. Run from the repository root:
+ * Helps to fill the catalog. Run from the repository root:
  *   npx tsx scripts/build-wordlist.ts candidates          corpus lemmas → data/work/candidates.tsv, cognates.json, dropped-verbs.tsv
  *   npx tsx scripts/build-wordlist.ts examples <слово> [pos] [--min N]   Tatoeba pairs with a form of the word
- *   npx tsx scripts/build-wordlist.ts cut [--force]       data/wordlist.csv → data/levels/l01.csv …, meta.json, data/attested.txt
- *   npx tsx scripts/build-wordlist.ts review              doubtful rows of data/wordlist.csv → data/work/review.tsv
+ *   npx tsx scripts/build-wordlist.ts attest              examples of data/catalog/*.csv → data/attested.txt
  * The sources (branch `sources`) are expected in data/work/sources/, the Apertium dictionary in data/work/tat-rus.dix.
  */
-import { execFileSync } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
-import { parseCsv } from "../src/content/csv";
-import { wordKey } from "../src/db/repo";
-import { FILES, LEVELS_DIR, levelNumbers, readLevel, readLines, readText, readWordforms, writeLevel, writeMeta, writeText } from "./lib/files";
-import { LEVEL_COUNT, LEVEL_SIZE, type LevelMeta, POS_CODES, type Row, coverage, coverageDrops, levelFile, levelSlug, parseLevel } from "./lib/levels";
+import { existsSync } from "node:fs";
+import { POS_CODES } from "./lib/catalog";
+import { FILES, readCatalog, readLines, readText, readWordforms, writeText } from "./lib/files";
 import {
-  type Cognate, WORDLIST_HEADER, type WordlistRow, attestedForms, buildCandidates, checkWordlist, cutLevels, findExamples, formatCandidates, formatDroppedVerbs,
-  lookupPos, lostWords, parseDix, parseLemmas, parseTatoeba, reviewWordlist, verbInfinitives,
+  type Cognate, attestedForms, buildCandidates, findExamples, formatCandidates, formatDroppedVerbs, lookupPos, parseDix, parseLemmas, parseTatoeba, verbInfinitives,
 } from "./lib/wordlist";
 
-const USAGE = "подкоманды: candidates | examples <слово> [pos] [--min N] | cut [--force] | review";
+const USAGE = "подкоманды: candidates | examples <слово> [pos] [--min N] | attest";
 const CANDIDATE_LIMIT = 3500;
 const SOURCES_HINT = "распакуйте ветку sources в data/work/sources/";
 const DIX_HINT = "скачайте apertium-tat-rus.tat-rus.dix в data/work/tat-rus.dix";
@@ -27,13 +22,6 @@ interface CognatesFile { total: number; cognates: (Cognate & { by?: string })[] 
 
 const readCognates = (): CognatesFile | null => (existsSync(FILES.cognates) ? (JSON.parse(readText(FILES.cognates)) as CognatesFile) : null);
 const readDix = () => parseDix(readText(FILES.dix, DIX_HINT));
-
-function readWordlist(): WordlistRow[] {
-  const text = readText(FILES.wordlist);
-  const header = (text.split(/\r?\n/, 1)[0] ?? "").replace(/^\uFEFF/, "");
-  if (header !== WORDLIST_HEADER.join(",")) throw new Error(`${FILES.wordlist}: заголовок «${header}», нужен «${WORDLIST_HEADER.join(",")}»`);
-  return parseCsv(text) as WordlistRow[];
-}
 
 /** Example tokens may also be forms approved by hand. */
 const corpusAndExtra = (): Set<string> => new Set([...readWordforms(), ...readLines(FILES.attestedExtra).map((form) => form.toLowerCase())]);
@@ -74,62 +62,17 @@ function examples(args: string[]): void {
   if (hits.length === 0) console.error(`пар с формой слова «${word}» нет`);
 }
 
-/** The level files as the last commit has them: what a deploy has already loaded, or will with the next push. */
-function committedLevels(): Row[][] {
-  const out: Row[][] = [];
-  for (let n = 1; n <= LEVEL_COUNT; n++) {
-    try {
-      out.push(parseLevel(execFileSync("git", ["show", `HEAD:${LEVELS_DIR}/${levelFile(n)}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })));
-    } catch {
-      break;
-    }
-  }
-  return out;
-}
-
-function cut(force: boolean): void {
-  const wordlist = readWordlist();
-  const problems = checkWordlist(wordlist);
-  if (problems.length) throw new Error(problems.join("\n"));
-  const cognates = readCognates();
-  if (!cognates) throw new Error(`нет файла ${FILES.cognates} — сначала build-wordlist.ts candidates`);
-  const forms = readWordforms();
-
-  const audio = new Map<string, string>();
-  for (const n of levelNumbers()) for (const row of readLevel(n)) if (row.audio_file_id) audio.set(wordKey(row.word), row.audio_file_id);
-  const { levels } = cutLevels(wordlist.slice(0, LEVEL_COUNT * LEVEL_SIZE), audio);
-
-  const lost = lostWords(committedLevels(), levels);
-  if (lost.length) {
-    console.error(`слова закоммиченных уровней меняют уровень или пропадают (после деплоя слово каталога не меняет уровень):\n${lost.map((l) => `  ${l}`).join("\n")}`);
-    if (!force) throw new Error("уровни не записаны; если эти уровни ещё не выкладывались, повторите с --force");
-  }
-
-  const counts = levels.map((_, i) => wordlist.slice(i * LEVEL_SIZE, (i + 1) * LEVEL_SIZE).map((r) => ({ count: Number(r.count) || 0, origin: r.origin.trim() })));
-  const meta: LevelMeta[] = coverage(counts, cognates.cognates, cognates.total).map((coveragePct, i) => ({ level: i + 1, coveragePct }));
-  const drops = coverageDrops(meta);
-  if (drops.length) throw new Error(`покрытие не должно падать от уровня к уровню; уровни не записаны:\n${drops.join("\n")}`);
-
-  levels.forEach((rows, i) => writeLevel(i + 1, rows));
-  for (const n of levelNumbers().filter((n) => n > levels.length)) {
-    rmSync(`${LEVELS_DIR}/${levelFile(n)}`);
-    console.log(`удалён ${levelFile(n)}: в списке нет полных ${n * LEVEL_SIZE} строк`);
-  }
-
-  writeMeta(meta);
-  const attested = attestedForms(wordlist, forms);
+/**
+ * Rewrites data/attested.txt: the word forms of the corpus that the examples of the catalog use. The check of the
+ * catalog reads this file, not the corpus, so that it runs where the sources are not at hand (CI, the deploy). Run it
+ * after an example is added or changed; a token the corpus does not know stays out, and the check names it.
+ */
+function attest(): void {
+  const catalog = readCatalog();
+  if (catalog.length === 0) throw new Error("каталога нет: нет файлов data/catalog/a1.csv … c1.csv");
+  const attested = attestedForms(catalog.flatMap((level) => level.rows.map((row) => ({ example_tt: row.example_tt ?? "" }))), readWordforms());
   writeText(FILES.attested, attested.map((form) => `${form}\n`).join(""));
-
-  console.log(`строк в списке: ${wordlist.length}; уровней записано: ${levels.length}; строк вне уровней: ${wordlist.length - levels.length * LEVEL_SIZE}`);
-  console.log(`покрытие: ${meta.map((m) => `${levelSlug(m.level)} ${m.coveragePct}%`).join(", ") || "—"}`);
-  console.log(`${FILES.attested}: ${attested.length} словоформ`);
-}
-
-function review(): void {
-  const lines = reviewWordlist(readWordlist(), readDix(), corpusAndExtra());
-  writeText(FILES.review, ["word\tkind\tdetail", ...lines.map((l) => [l.word, l.kind, l.detail].join("\t"))].join("\n") + "\n");
-  const of = (kind: string) => lines.filter((l) => l.kind === kind).length;
-  console.log(`${FILES.review}: строк ${lines.length} (перевод ${of("translation")}, токен ${of("token")}, форма ${of("form")})`);
+  console.log(`${FILES.attested}: ${attested.length} словоформ из примеров ${catalog.reduce((sum, level) => sum + level.rows.length, 0)} карточек`);
 }
 
 // `… examples слово | head` closes the pipe early: that is not an error.
@@ -139,8 +82,7 @@ const [command, ...args] = process.argv.slice(2);
 try {
   if (command === "candidates") candidates();
   else if (command === "examples") examples(args);
-  else if (command === "cut") cut(args.includes("--force"));
-  else if (command === "review") review();
+  else if (command === "attest") attest();
   else throw new Error(USAGE);
 } catch (e) {
   console.error(e instanceof Error ? e.message : e);

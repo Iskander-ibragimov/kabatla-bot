@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Row } from "../../scripts/lib/levels";
 import {
-  WORDLIST_HEADER, type WordlistRow, apertium, attestedForms, buildCandidates, checkWordlist, cutLevels, findExamples, formatCandidates, formatDroppedVerbs,
-  lookupPos, lostWords, parseDix, parseLemmas, parseTatoeba, reviewWordlist, verbInfinitives,
+  apertium, attestedForms, buildCandidates, findExamples, formatCandidates, formatDroppedVerbs, lookupPos, parseDix, parseLemmas, parseTatoeba, verbInfinitives,
 } from "../../scripts/lib/wordlist";
-import { transcribe } from "../../src/content/transcribe";
 
 const DIX = `<dictionary><section id="main" type="standard">
 <e>       <p><l>бар<s n="v"/><s n="iv"/></l>           <r>идти<s n="vblex"/><s n="impf"/><s n="iv"/></r></p><par n="impf__verb"/></e>
@@ -199,142 +196,11 @@ describe("lookupPos", () => {
   });
 });
 
-const wl = (word: string, over: Partial<WordlistRow> = {}): WordlistRow => ({
-  word, pos: "n", translation: `слово ${word}`, example_tt: `Бу — ${word}.`, example_ru: "Это слово.", example_src: "own", count: "10", origin: "corpus", transcription: "", ...over,
-});
-const made = (i: number) => `${"бтдкмнрслч"[i % 10]}а${"зшрлнмтдкб"[Math.floor(i / 10) % 10]}ы${"мнр"[Math.floor(i / 100)]}`;
-
-describe("cutLevels", () => {
-  it("keeps the agreed column order of the wordlist", () => {
-    expect([...WORDLIST_HEADER]).toEqual(["word", "pos", "translation", "example_tt", "example_ru", "example_src", "count", "origin", "transcription"]);
-  });
-
-  it("cuts the wordlist into levels of 100 in file order and reports the rest", () => {
-    const rows = Array.from({ length: 250 }, (_, i) => wl(made(i)));
-    const { levels, rest } = cutLevels(rows, new Map());
-    expect(levels.map((l) => l.length)).toEqual([100, 100]);
-    expect(rest).toBe(50);
-    expect(levels[1]![0]!.word).toBe(made(100));
-    expect(Object.keys(levels[0]![0]!)).toEqual(["word", "transcription", "pos", "translation", "example_tt", "example_ru", "example_src", "audio_file_id"]);
-  });
-
-  it("transcribes by rule unless the wordlist gives the transcription", () => {
-    const rows = Array.from({ length: 100 }, (_, i) => wl(made(i)));
-    rows[0] = wl("вакыт");
-    rows[1] = wl("сәгать", { transcription: "сәгъә́т" });
-    const level = cutLevels(rows, new Map()).levels[0]!;
-    expect(level[0]).toEqual({ word: "вакыт", transcription: transcribe("вакыт"), pos: "n", translation: "слово вакыт", example_tt: "Бу — вакыт.", example_ru: "Это слово.", example_src: "own", audio_file_id: "" });
-    expect(level[1]!.transcription).toBe("сәгъә́т");
-  });
-
-  describe("phrase cards drop the sentence-final sign from the computed transcription", () => {
-    const phr = (word: string, over: Partial<WordlistRow> = {}) => {
-      const rows = Array.from({ length: 100 }, (_, i) => wl(made(i)));
-      rows[0] = wl(word, { pos: "phr", ...over });
-      return cutLevels(rows, new Map()).levels[0]![0]!.transcription;
-    };
-
-    it.each([
-      ["Хәлләр ничек?", "хәллә́р ни́чек"],
-      ["Рәхмәт!", "рәхмә́т"],
-      ["Мин белмим.", "мин бе́лмим"],
-      ["Минем исемем …", "мине́м исеме́м"],
-      ["Ярар...", "йара́р"],
-      ["Алло — әйе … әйе?!", "алло́ — әйе́ … әйе́"],
-      ["Әйе, рәхмәт!", "әйе́, рәхмә́т"],
-    ])("%s", (word, expected) => {
-      expect(phr(word)).toBe(expected);
-    });
-
-    it("leaves a phrase without a final sign alone", () => {
-      expect(phr("Мин белмим")).toBe(transcribe("Мин белмим"));
-    });
-
-    it("leaves non-phrase rows unchanged", () => {
-      const rows = Array.from({ length: 100 }, (_, i) => wl(made(i)));
-      rows[0] = wl("Рәхмәт!", { pos: "part" });
-      expect(cutLevels(rows, new Map()).levels[0]![0]!.transcription).toBe(transcribe("Рәхмәт!"));
-    });
-
-    it("uses a manual override verbatim", () => {
-      expect(phr("Рәхмәт!", { transcription: "рәхмә́т!" })).toBe("рәхмә́т!");
-    });
-  });
-
-  it("keeps the audio already attached to a word", () => {
-    const rows = Array.from({ length: 100 }, (_, i) => wl(made(i)));
-    rows[5] = wl(" Китап ");
-    const level = cutLevels(rows, new Map([["китап", "AUD5"]])).levels[0]!;
-    expect(level[5]).toMatchObject({ word: "Китап", audio_file_id: "AUD5" });
-    expect(level[6]!.audio_file_id).toBe("");
-  });
-});
-
-describe("checkWordlist", () => {
-  it("passes corpus and core rows with a whole count or none", () => {
-    expect(checkWordlist([wl("китап"), wl("әни", { origin: "core", count: "" }), wl("зур рәхмәт", { origin: "core", count: "0" })])).toEqual([]);
-  });
-
-  it("names the rows whose count or origin would spoil the coverage, by the line of the file", () => {
-    expect(checkWordlist([wl("китап"), wl("су", { origin: "Core" }), wl("юл", { count: "12 345" }), wl("ил", { count: "-3", origin: "" })])).toEqual([
-      expect.stringMatching(/^wordlist:3 .*origin.*Core/),
-      expect.stringMatching(/^wordlist:4 .*count.*12 345/),
-      expect.stringMatching(/^wordlist:5 .*count.*-3/),
-      expect.stringMatching(/^wordlist:5 .*origin/),
-    ]);
-  });
-});
-
-describe("lostWords", () => {
-  const row = (word: string) => ({ word }) as Row;
-
-  it("names the words of a published level that the new cut moves or drops", () => {
-    const before = [[row("бер"), row("ике")], [row("өч")]];
-    const after = [[row("бер"), row("өч")], [row("Ике "), row("дүрт")]];
-    expect(lostWords(before, after)).toEqual(["l01: «ике» → l02", "l02: «өч» → l01"]);
-    expect(lostWords(before, [[row("бер")]])).toEqual(["l01: «ике» убрано", "l02: «өч» убрано"]);
-  });
-
-  it("is empty when every word stays in its level", () => {
-    expect(lostWords([[row("бер"), row("ике")]], [[row("ике"), row("бер")], [row("өч")]])).toEqual([]);
-  });
-});
-
 describe("attestedForms", () => {
   it("lists the example tokens the corpus knows, sorted, each once", () => {
     const rows = [{ example_tt: "Мин китап укыйм." }, { example_tt: "Мин Казанда, әти-әни — авылда." }, { example_tt: "" }];
     const forms = new Set(["мин", "китап", "әти", "әни", "авылда", "өстәл"]);
     expect(attestedForms(rows, forms)).toEqual(["авылда", "китап", "мин", "әни", "әти"]);
     expect(attestedForms(rows, new Set([...forms, "әти-әни"]))).toEqual(["авылда", "китап", "мин", "әти-әни"]);
-  });
-});
-
-describe("reviewWordlist", () => {
-  const attested = new Set(["бу", "мин", "китап", "укыйм", "барам", "мәктәпкә"]);
-  const review = (row: WordlistRow) => reviewWordlist([row], dix, attested);
-
-  it("passes a row that agrees with Apertium and the corpus", () => {
-    expect(review(wl("китап", { translation: "книга, том" }))).toEqual([]);
-    expect(review(wl("бару", { pos: "v", translation: "идти, ехать", example_tt: "Мин мәктәпкә барам." }))).toEqual([]);
-  });
-
-  it("lists a translation that shares no word with Apertium", () => {
-    expect(review(wl("китап", { translation: "том" }))).toEqual([{ word: "китап", kind: "translation", detail: "«том» — Apertium: книга" }]);
-  });
-
-  it("compares translations by their first letters, so that районная and районный agree", () => {
-    expect(review(wl("район", { translation: "районная часть", example_tt: "" }))).toEqual([]);
-  });
-
-  it("does not judge a translation Apertium has no entry for", () => {
-    expect(review(wl("мин", { translation: "я", example_tt: "Бу — мин." }))).toEqual([]);
-  });
-
-  it("lists an example token outside the attested forms", () => {
-    expect(review(wl("китап", { translation: "книга", example_tt: "Бу — китап түгел." }))).toEqual([{ word: "китап", kind: "token", detail: "түгел" }]);
-  });
-
-  it("lists an example without a form of the word", () => {
-    expect(review(wl("китап", { translation: "книга", example_tt: "Бу — мин." }))).toEqual([{ word: "китап", kind: "form", detail: "Бу — мин." }]);
   });
 });

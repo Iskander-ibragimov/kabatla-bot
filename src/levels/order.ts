@@ -33,6 +33,13 @@ export function guidedTseq(rows: { topicNo: number; seq: number }[]): number[] {
   return tseq;
 }
 
+/**
+ * The version of the rule above; raise when `guidedTseq` changes its output. The catalog seed counts it into the hash
+ * of the catalog (scripts/lib/catalog.ts `catalogDigest`): a new rule gives every word a new place, so the catalog
+ * version must move with it even when no catalog file changed, and the learners' read positions are taken as reset.
+ */
+export const GUIDED_RULE_VERSION = 1;
+
 /** The anchor of a place in the guided order: the topic whose run the word stands in; see `guidedTseq`. */
 export const anchorOf = (tseq: number): number => Math.floor(tseq / TSEQ_BASE);
 

@@ -95,24 +95,32 @@ jobs:
 
       - name: Detect catalog
         id: catalog
+        # The catalog is data/catalog/a1.csv … c1.csv, one file per level. The load runs whenever the folder holds any
+        # CSV file: a file with a wrong name is then named by the validation and fails the deploy, it is never skipped
+        # without a word.
         run: |
-          LEVELS=$(ls data/levels/l[0-9][0-9].csv 2>/dev/null | wc -l)
+          LEVELS=0
+          for slug in a1 a2 b1 b2 c1; do
+            if [ -f "data/catalog/$slug.csv" ]; then LEVELS=$((LEVELS + 1)); fi
+          done
+          FILES=$(find data/catalog -maxdepth 1 -type f -iname '*.csv' 2>/dev/null | wc -l)
           echo "levels=$LEVELS" >> "$GITHUB_OUTPUT"
-          if [ -f scripts/csv-to-sql.ts ] && [ "$LEVELS" -gt 0 ]; then
+          if [ "$FILES" -gt 0 ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Catalog: $LEVELS level files, $FILES CSV files in data/catalog"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "No catalog to load (script present: $([ -f scripts/csv-to-sql.ts ] && echo yes || echo no), levels: $LEVELS)"
+            echo "No catalog to load: data/catalog holds no CSV file"
           fi
 
       - name: Load catalog
         id: seed
         if: steps.catalog.outputs.run == 'true'
-        # The seed never deletes: a level with violations must not reach the live database. A failed validation fails
+        # The seed never deletes: a catalog with violations must not reach the live database. A failed validation fails
         # this step, so nothing is loaded and the worker is not redeployed.
         run: |
           set -o pipefail
-          npx tsx scripts/validate-levels.ts 2>&1 | tee "$RUNNER_TEMP/validate.log"
+          npx tsx scripts/validate-catalog.ts 2>&1 | tee "$RUNNER_TEMP/validate.log"
           npx tsx scripts/csv-to-sql.ts
           npx wrangler d1 execute kabatla --remote --file seed/catalog.sql --yes
 
@@ -280,7 +288,7 @@ jobs:
             echo
             echo "## Worker"
             echo "- LLM providers selected: ${PROVIDERS:-n/a}"
-            echo "- level files in repo: ${LEVELS:-n/a} (load catalog step: ${S_SEED})"
+            echo "- catalog levels in repo: ${LEVELS:-n/a} (load catalog step: ${S_SEED})"
             echo "- worker host: ${WORKER_HOST:-n/a}"
             echo
             echo "## catalog validation (first 10 of ${VALID_LINES} lines; load catalog step: ${S_SEED})"

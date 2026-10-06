@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CURSOR_STEP, STREAM_LIMIT, emptyReason, guidedTseq, mergeStreams, nextSpans, readSpans, scopeKey, writeSpans, type EmptyFacts } from "../../src/levels/order";
+import { CURSOR_STEP, GUIDED_RULE_VERSION, STREAM_LIMIT, emptyReason, guidedTseq, mergeStreams, nextSpans, readSpans, scopeKey, writeSpans, type EmptyFacts } from "../../src/levels/order";
 import { ALL_POS, tseqOf } from "../../src/levels/scale";
 
 /** A word of a level whose place in the guided order is `position` in the run of `anchor`. */
@@ -50,6 +50,11 @@ describe("guidedTseq", () => {
       // The next value is the next position of the same anchor, or position 1 of a later anchor.
       if (before !== undefined) expect(v === before + 1 || (v % 1_000_000 === 1 && Math.floor(v / 1_000_000) > Math.floor(before / 1_000_000))).toBe(true);
     }
+  });
+  it("the values expected above are those of version 1 of the rule: a change of them comes with a higher version", () => {
+    // The catalog seed stores the version with the hash of the catalog files (scripts/lib/catalog.ts `catalogDigest`), so
+    // that a new rule gives the catalog a new version and the learners' read positions are taken as reset.
+    expect(GUIDED_RULE_VERSION).toBe(1);
   });
 });
 

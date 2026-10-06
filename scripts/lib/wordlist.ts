@@ -1,10 +1,8 @@
 /**
- * Building the wordlist: candidates from the corpus lemma lists, example lookup in Tatoeba, cutting the reviewed
- * wordlist into levels, and the list of doubtful rows. Pure: no I/O; scripts/build-wordlist.ts reads and writes the files.
+ * Sources of new catalog words: candidates from the corpus lemma lists, example lookup in Tatoeba, and the list of
+ * word forms the examples of the catalog use. Pure: no I/O; scripts/build-wordlist.ts reads and writes the files.
  */
-import { transcribe } from "../../src/content/transcribe";
-import { wordKey } from "../../src/db/repo";
-import { LEVEL_SIZE, type Row, isAttested, levelSlug, tokenize, wordForm } from "./levels";
+import { isAttested, tokenize, wordForm } from "./forms";
 import type { LemmaRow, SentencePair } from "./sources";
 import { dictionaryForm, verbInfinitive } from "./tatar-verbs";
 
@@ -202,65 +200,6 @@ export function findExamples(
   return hits.slice(0, limit).map(({ tatId, tat, rus, form, unattested }) => ({ tatId, tat, rus, form, unattested }));
 }
 
-export const WORDLIST_HEADER = ["word", "pos", "translation", "example_tt", "example_ru", "example_src", "count", "origin", "transcription"] as const;
-export type WordlistRow = Record<(typeof WORDLIST_HEADER)[number], string>;
-
-/**
- * Rows of the wordlist whose `count` or `origin` would spoil the coverage figure, as `wordlist:5 <what is wrong>`
- * (the number is the line of the file). The fields that go into the level files are checked there, by `checkLevels`.
- */
-export function checkWordlist(rows: WordlistRow[]): string[] {
-  const errors: string[] = [];
-  rows.forEach((row, i) => {
-    if (!/^\d*$/.test(row.count.trim())) errors.push(`wordlist:${i + 2} count «${row.count}»: нужно целое число или пусто`);
-    if (!["corpus", "core"].includes(row.origin.trim())) errors.push(`wordlist:${i + 2} origin «${row.origin}»: нужно corpus или core`);
-  });
-  return errors;
-}
-
-/** Sentence-final signs (and the spaces around them) are not part of the transcription notation. */
-const FINAL_SIGNS = /[\s.!?…]+$/u;
-
-/** The transcription computed by rule; a phrase card loses its sentence-final punctuation. */
-function computedTranscription(word: string, pos: string): string {
-  const t = transcribe(word);
-  return pos === "phr" ? t.replace(FINAL_SIGNS, "") : t;
-}
-
-/**
- * Cuts the wordlist into levels of 100 in file order; `rest` is the number of rows after the last full level.
- * The transcription comes from the wordlist column or, when that is empty, from the rules (a phrase card without its final sign); `audio` (word key → file id)
- * carries over the audio already attached to a word.
- */
-export function cutLevels(wordlist: WordlistRow[], audio: ReadonlyMap<string, string>): { levels: Row[][]; rest: number } {
-  const rows = wordlist.map((r): Row => {
-    const word = r.word.trim();
-    return {
-      word, transcription: r.transcription.trim() || computedTranscription(word, r.pos.trim()), pos: r.pos.trim(), translation: r.translation.trim(),
-      example_tt: r.example_tt.trim(), example_ru: r.example_ru.trim(), example_src: r.example_src.trim(), audio_file_id: audio.get(wordKey(word)) ?? "",
-    };
-  });
-  const full = Math.floor(rows.length / LEVEL_SIZE);
-  return { levels: Array.from({ length: full }, (_, i) => rows.slice(i * LEVEL_SIZE, (i + 1) * LEVEL_SIZE)), rest: rows.length - full * LEVEL_SIZE };
-}
-
-/**
- * Words of the level files on disk that a new cut would move to another level or drop. Once a level is deployed
- * its words must stay in it: the seed never deletes or moves a note, so the old card would stay in the database.
- */
-export function lostWords(before: Row[][], after: Row[][]): string[] {
-  const now = new Map<string, number>();
-  after.forEach((rows, i) => { for (const row of rows) now.set(wordKey(row.word), i + 1); });
-  const out: string[] = [];
-  before.forEach((rows, i) => {
-    for (const row of rows) {
-      const level = now.get(wordKey(row.word));
-      if (level !== i + 1) out.push(`${levelSlug(i + 1)}: «${row.word.trim()}» ${level ? `→ ${levelSlug(level)}` : "убрано"}`);
-    }
-  });
-  return out;
-}
-
 /** The tokens of the examples that are among the corpus word forms, sorted, each once: the content of data/attested.txt. */
 export function attestedForms(rows: { example_tt: string }[], forms: ReadonlySet<string>): string[] {
   const out = new Set<string>();
@@ -270,30 +209,4 @@ export function attestedForms(rows: { example_tt: string }[], forms: ReadonlySet
     }
   }
   return [...out].sort();
-}
-
-export interface ReviewLine { word: string; kind: "translation" | "token" | "form"; detail: string }
-
-const russianWords = (text: string): string[] => text.toLowerCase().replace(/ё/g, "е").match(/[а-я]+/g) ?? [];
-/** Two Russian words agree when they are equal or share their first four letters (школа — школьный). */
-const agree = (a: string, b: string): boolean => a === b || (a.length >= 4 && b.length >= 4 && a.slice(0, 4) === b.slice(0, 4));
-
-/**
- * Rows of the wordlist a person should look at: a translation that shares no word with Apertium's, an example token
- * the corpus does not attest, an example without a form of the word.
- */
-export function reviewWordlist(rows: WordlistRow[], dix: Dix, attested: ReadonlySet<string>): ReviewLine[] {
-  const out: ReviewLine[] = [];
-  for (const row of rows) {
-    const word = row.word.trim();
-    const theirs = apertium(dix, wordKey(word), row.pos);
-    const ours = russianWords(row.translation);
-    if (theirs.length && !theirs.flatMap(russianWords).some((t) => ours.some((o) => agree(o, t)))) {
-      out.push({ word, kind: "translation", detail: `«${row.translation}» — Apertium: ${theirs.join("; ")}` });
-    }
-    if (row.example_tt.trim() === "") continue;
-    for (const token of new Set(tokenize(row.example_tt))) if (!isAttested(token, attested)) out.push({ word, kind: "token", detail: token });
-    if (wordForm(row.example_tt, word, row.pos) === null) out.push({ word, kind: "form", detail: row.example_tt });
-  }
-  return out;
 }
