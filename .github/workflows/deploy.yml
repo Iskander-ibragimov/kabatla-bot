@@ -145,34 +145,44 @@ jobs:
       - name: Check that no catalog headword is missing from the files
         id: headwords
         # Read-only, and before the migrations: when the live catalog holds a headword that is neither in the level files
-        # nor an old word of data/renames.csv, the run stops here and nothing in the database is changed. The load never
-        # deletes a note, so the card of a row that left the files would stay with the learners, outside the files.
-        # Only a real mismatch fails the run. On a database without the column `level` (a new one, or one of the catalog
-        # by hundreds) the query fails; when it fails, gives no answer within a minute, or its answer cannot be read, the
-        # check is skipped with a line in the log. The log gets the count and at most 20 of the missing headwords
-        # (catalog words are content of the repository) and nothing else from the database.
+        # nor an old word of data/renames.csv, or data/renames.csv would make two cards one, the run stops here and
+        # nothing in the database is changed. The load never deletes a note, so the card of a row that left the files
+        # would stay with the learners, outside the files.
+        # The check is skipped, with a line in the log, only when the QUERY gave nothing to compare: it failed (a database
+        # without the column `level` — a new one, or one of the catalog by hundreds), gave no answer within a minute, or
+        # its answer cannot be read. Once the database has answered, the script decides by its exit code: 0 lets the run
+        # go on, 1 (a headword is gone, or two cards would merge) stops it — also when the summary line cannot be read —
+        # and so does any other code: a comparison that could not be made is not taken for "nothing is missing".
+        # The numbers come from the script's line `missing=N merged=M` (`headwordsSummary`, scripts/lib/catalog.ts).
+        # The log gets the count and at most 20 of the missing headwords (catalog words are content of the repository)
+        # and nothing else from the database.
         run: |
-          MISSING=n/a CODE=0
+          MISSING=n/a MERGED=n/a STOP=""
           WORDS="$RUNNER_TEMP/db-headwords.txt" LOG="$RUNNER_TEMP/headwords.log"
           if OUT=$(timeout -k 10 60 npx wrangler d1 execute kabatla --remote --json --command "SELECT word FROM notes WHERE level IS NOT NULL" 2>/dev/null) && printf '%s' "$OUT" | jq -r '.[0].results[].word' > "$WORDS" 2>/dev/null; then
-            # The comparison is the script's: exit code 0 — every headword is in the files, 1 — some are not.
+            CODE=0
             npx tsx scripts/validate-catalog.ts --db-keys "$WORDS" > "$LOG" 2>/dev/null || CODE=$?
-            N=$(sed -n 's/^слов каталога в базе: [0-9]*, из них нет в файлах: \([0-9]*\)$/\1/p' "$LOG" | tail -n 1)
-            case "$N" in ''|*[!0-9]*) N="";; esac
-            if [ -n "$N" ] && [ "$CODE" -le 1 ]; then
-              MISSING=$N
-              cat "$LOG"
-            else
-              echo "The check did not run (the comparison ended with code $CODE)"
-              CODE=0
+            LINE=$(sed -n 's/^missing=\([0-9][0-9]*\) merged=\([0-9][0-9]*\)$/\1 \2/p' "$LOG" | tail -n 1)
+            if [ -n "$LINE" ]; then MISSING=${LINE% *} MERGED=${LINE#* }; fi
+            if [ "$CODE" -le 1 ]; then cat "$LOG"; fi
+            if [ "$CODE" -eq 1 ] && [ -z "$LINE" ]; then
+              STOP="The comparison ended with a mismatch (exit code 1), and its summary line could not be read."
+            elif [ "$CODE" -eq 1 ] && [ "$MISSING" -gt 0 ]; then
+              STOP="The live catalog holds headwords that are in no level file and are no old word of data/renames.csv (their number: $MISSING): put the row back into its level file, or write the corrected word into data/renames.csv."
+              if [ "$MERGED" -gt 0 ]; then STOP="$STOP Besides, data/renames.csv renames two old words to one new word (such lines, named above: $MERGED)."; fi
+            elif [ "$CODE" -eq 1 ]; then
+              STOP="No headword is missing, but data/renames.csv renames two old words to one new word (such lines, named above: $MERGED): two cards would become one. Give each old word a new word of its own."
+            elif [ "$CODE" -ne 0 ]; then
+              STOP="The database answered, but the comparison could not be made (exit code $CODE)."
             fi
           else
             echo "The check did not run (a database without catalog levels yet, no answer, or an answer that cannot be read)"
           fi
           echo "missing=$MISSING" >> "$GITHUB_OUTPUT"
-          echo "Catalog headwords missing from the files: $MISSING"
-          if [ "$CODE" -ne 0 ]; then
-            echo "The live catalog holds headwords the files do not account for. Nothing was changed: put the row back into its level file, or write the corrected word into data/renames.csv."
+          echo "merged=$MERGED" >> "$GITHUB_OUTPUT"
+          echo "Catalog headwords missing from the files: $MISSING; renames that would make two cards one: $MERGED"
+          if [ -n "$STOP" ]; then
+            echo "$STOP Nothing in the database was changed."
             exit 1
           fi
 
@@ -327,6 +337,7 @@ jobs:
           DB_VOICED_AFTER: ${{ steps.after.outputs.voiced }}
           DB_LEFT: ${{ steps.after.outputs.leftover }}
           DB_MISSING: ${{ steps.headwords.outputs.missing }}
+          DB_MERGED: ${{ steps.headwords.outputs.merged }}
           CAT_WARNING: ${{ steps.after.outputs.warning }}
           WORKER_URL: ${{ steps.deploy.outputs.url }}
           SC_NO: ${{ steps.selfcheck.outputs.no }}
@@ -404,7 +415,7 @@ jobs:
             echo "- catalog notes in the database: before ${DB_BEFORE:-n/a}, after ${DB_AFTER:-n/a}; rows in the files: ${CAT_ROWS:-n/a}"
             echo "- voiced catalog notes: before ${DB_VOICED_BEFORE:-n/a}, after ${DB_VOICED_AFTER:-n/a}"
             echo "- notes of the old catalog the load did not find in the files: ${DB_LEFT:-n/a}"
-            echo "- catalog headwords missing from the files: ${DB_MISSING:-n/a}"
+            echo "- catalog headwords missing from the files: ${DB_MISSING:-n/a}; renames that would make two cards one: ${DB_MERGED:-n/a}"
             if [ -n "$CAT_WARNING" ]; then echo; echo "WARNING: ${CAT_WARNING}"; fi
             echo
             echo "## catalog validation (first 10 of ${VALID_LINES} lines; check catalog step: ${S_CATALOG})"
