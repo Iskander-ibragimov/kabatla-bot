@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import { type Rename, parseCsv } from "../../src/content/csv";
 import { isTatarText } from "../../src/content/tatar";
+import { transcribe } from "../../src/content/transcribe";
 import { wordKey } from "../../src/db/repo";
 import { LEVELS } from "../../src/levels/scale";
 import { isAttested, tokenize, wordForm } from "./forms";
@@ -17,11 +18,34 @@ export const RENAMES_HEADER = ["level", "old_word", "new_word"] as const;
 export const POS_CODES: readonly string[] = ["n", "v", "adj", "adv", "pron", "num", "post", "conj", "part", "intj", "phr"];
 const TOPICS_FILE = "topics.csv";
 const RENAMES_FILE = "renames.csv";
+const META_FILE = "meta.json";
 /** Topics are numbered 0 (`core`) … 20. */
 const LAST_TOPIC = 20;
 
 /** Signs a transcription may hold besides Tatar letters and punctuation. */
 const TRANSCRIPTION_EXTRA = "wʼ́";
+/** The stress mark of a transcription, COMBINING ACUTE ACCENT. */
+const STRESS = /\u0301/g;
+/** Sentence-final signs (and the spaces around them) are not part of the transcription notation. */
+const FINAL_SIGNS = /[\s.!?…]+$/u;
+
+/**
+ * The transcription the catalog expects for a headword: the one the bot computes for a learner's own word
+ * (`transcribe`), and for a phrase card (`pos` is `phr`) without its sentence-final sign: «Хәлләр ничек?» → хәллә́р ни́чек.
+ */
+export function computedTranscription(word: string, pos: string): string {
+  const computed = transcribe(word.trim());
+  return pos === "phr" ? computed.replace(FINAL_SIGNS, "") : computed;
+}
+
+/**
+ * True if a transcription is the computed one or differs from it only in where the stress stands. The rule puts the
+ * stress on the last syllable, and the author moves it where the rule is wrong (ба́рлык, ке́регез, тата́рча — the
+ * guide, rule 10), so the marks may stand elsewhere; their number must be the same: none dropped, none set twice.
+ */
+const sameButStress = (given: string, computed: string): boolean =>
+  given.replace(STRESS, "") === computed.replace(STRESS, "") && (given.match(STRESS)?.length ?? 0) === (computed.match(STRESS)?.length ?? 0);
+
 /** The characters once each, as they are named in a violation. */
 const show = (chars: string[]): string => [...new Set(chars)].map((c) => JSON.stringify(c).slice(1, -1)).join("");
 /** Characters of a Tatar field that are neither Tatar Cyrillic nor allowed punctuation. */
@@ -61,8 +85,8 @@ export interface CatalogCheck {
   topics: Topic[];
   /** Lower-case word forms the corpus knows, plus the forms approved by hand. */
   attested: Set<string>;
-  /** data/catalog/meta.json: coverage of running text by the words up to each level. */
-  meta: LevelMeta[];
+  /** data/catalog/meta.json as it was read: coverage of running text by the words up to each level. Its shape is checked here (`checkMeta`). */
+  meta: unknown;
 }
 
 /** One entry of data/catalog/meta.json: the share of running text, in whole percent, that the words up to and including the level cover. */
@@ -70,6 +94,62 @@ export interface LevelMeta { level: number; coveragePct: number }
 
 /** The name of the file of a level without `.csv`: a1 … c1; a number that is no level stands as it is. */
 const levelName = (level: number): string => LEVELS.find((l) => l.no === level)?.slug ?? String(level);
+
+/** The number of the level a file name without `.csv` stands for: a1 → 1 … c1 → 5. Throws on anything else. */
+export function levelBySlug(slug: string): number {
+  const level = LEVELS.find((l) => l.slug === slug);
+  if (!level) throw new Error(`уровня «${slug}» нет: уровни ${LEVELS.map((l) => l.slug).join(", ")}`);
+  return level.no;
+}
+
+/** Word key → the name of the level file the word stands in (a1 … c1), for every row of the catalog with a word. */
+export function catalogKeys(levels: readonly CatalogLevel[]): Map<string, string> {
+  const keys = new Map<string, string>();
+  for (const { level, rows } of levels) {
+    for (const row of rows) {
+      const key = wordKey(row.word ?? "");
+      if (key !== "" && !keys.has(key)) keys.set(key, levelName(level));
+    }
+  }
+  return keys;
+}
+
+const isLevelNo = (value: unknown): value is number => typeof value === "number" && LEVELS.some((l) => l.no === value);
+const isPercent = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100;
+/** A value of meta.json as it is named in a violation: a text in quotes, anything else as JSON writes it. */
+const shown = (value: unknown): string => (typeof value === "number" ? String(value) : JSON.stringify(value) ?? "undefined");
+
+/**
+ * What is wrong with the shape of data/catalog/meta.json, as `meta.json: запись 2: …` (the entries are counted from
+ * 1): it must be a list of `{"level": 1–5, "coveragePct": a whole number 0–100}` with every level once. The seed
+ * writes the percent into SQL as it is, so a text there would break the load of the catalog after the migrations.
+ */
+export function checkMeta(meta: unknown): string[] {
+  if (!Array.isArray(meta)) return [`${META_FILE}: нужен список вида [{"level":1,"coveragePct":45}]`];
+  const errors: string[] = [];
+  /** Level → the entry that names it first. */
+  const seen = new Map<number, number>();
+  meta.forEach((entry: unknown, i) => {
+    const at = `${META_FILE}: запись ${i + 1}:`;
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) { errors.push(`${at} нужен объект с level и coveragePct`); return; }
+    const { level, coveragePct } = entry as Record<string, unknown>;
+    if (!isLevelNo(level)) errors.push(`${at} level «${shown(level)}»: нужен уровень от 1 до ${LEVELS.length}`);
+    else if (seen.has(level)) errors.push(`${at} уровень ${level} уже есть в записи ${seen.get(level)}`);
+    else seen.set(level, i + 1);
+    if (!isPercent(coveragePct)) errors.push(`${at} coveragePct «${shown(coveragePct)}»: нужно целое число от 0 до 100`);
+  });
+  return errors;
+}
+
+/** The entries of meta.json that `checkMeta` has nothing against: a level 1–5 named for the first time with a whole percent. */
+export function validMeta(meta: unknown): LevelMeta[] {
+  const out: LevelMeta[] = [];
+  for (const entry of Array.isArray(meta) ? (meta as unknown[]) : []) {
+    const { level, coveragePct } = (typeof entry === "object" && entry !== null ? entry : {}) as Record<string, unknown>;
+    if (isLevelNo(level) && isPercent(coveragePct) && !out.some((m) => m.level === level)) out.push({ level, coveragePct });
+  }
+  return out;
+}
 
 /** The levels whose coverage is lower than that of the level before, as `b1: покрытие 39% меньше, чем у a2 (41%)`. */
 export function coverageDrops(meta: readonly LevelMeta[]): string[] {
@@ -127,11 +207,20 @@ export function checkCatalog(levels: CatalogLevel[], o: CatalogCheck): string[] 
       if (first) errors.push(`${at} дубль слова «${word}»: уже есть в ${first}`);
       else words.set(key, at);
 
+      /** The word and the transcription are written with the right letters: only then are the two compared. */
+      let letters = true;
       for (const field of ["word", "example_tt", "transcription"] as const) {
         const bad = foreign(row[field], field === "transcription" ? TRANSCRIPTION_EXTRA : "");
         if (bad.length) errors.push(`${at} ${field}: чужие буквы или знаки «${show(bad)}»`);
+        if (bad.length && field !== "example_tt") letters = false;
       }
       if (row.transcription.trim() === "") errors.push(`${at} пустая транскрипция`);
+      else if (letters) {
+        const computed = computedTranscription(word, row.pos);
+        if (!sameButStress(row.transcription, computed)) {
+          errors.push(`${at} transcription «${row.transcription}»: по правилу «${computed}» (от правила может отличаться только место ударения)`);
+        }
+      }
       if (!POS_CODES.includes(row.pos)) errors.push(`${at} часть речи «${row.pos}» не из списка ${POS_CODES.join(", ")}`);
       if (row.translation.trim() === "") errors.push(`${at} пустой перевод`);
       if (!slugs.has(row.topic)) errors.push(`${at} темы «${row.topic}» нет в ${TOPICS_FILE}`);
@@ -155,10 +244,13 @@ export function checkCatalog(levels: CatalogLevel[], o: CatalogCheck): string[] 
     });
   }
 
+  errors.push(...checkMeta(o.meta));
+  // A level that meta.json names with a wrong percent has its line above: it is not said to have no coverage as well.
+  const named = new Set((Array.isArray(o.meta) ? (o.meta as unknown[]) : []).map((entry) => (entry as { level?: unknown } | null)?.level));
   for (const { level } of levels) {
-    if (!o.meta.some((m) => m.level === level)) errors.push(`${levelName(level)}: нет покрытия в meta.json`);
+    if (!named.has(level)) errors.push(`${levelName(level)}: нет покрытия в ${META_FILE}`);
   }
-  errors.push(...coverageDrops(o.meta));
+  errors.push(...coverageDrops(validMeta(o.meta)));
   return errors;
 }
 
@@ -204,6 +296,46 @@ export function checkRenames(text: string, levels: CatalogLevel[]): string[] {
     if (still !== undefined) errors.push(`${at} старое слово «${oldWord}» всё ещё стоит в ${still}`);
   });
   return errors;
+}
+
+/** What `vanishedHeadwords` found. */
+export interface Vanished {
+  /** The headwords that are neither in the level files nor an old word of data/renames.csv: each once, as given, in the order given. */
+  missing: string[];
+  /** The lines of data/renames.csv that rename a second old word to the new word of an earlier line, as `renames.csv:4 …`. */
+  merged: string[];
+}
+
+/**
+ * A headword must not vanish: the seed never deletes a note, so a row that leaves the files — or a corrected word
+ * without its line in data/renames.csv — leaves its card in the database, outside the files, for good. `before` are
+ * the headwords that were there (the level files of an earlier commit, or the catalog notes of the database); each
+ * must stand in the level files, in any level, or be an `old_word` of data/renames.csv. Two old words renamed to one
+ * new word are refused as well: the seed renames a note only while no note has the new key, so the second card would
+ * stay behind. Words are compared by their keys, like notes.
+ */
+export function vanishedHeadwords(before: Iterable<string>, levels: CatalogLevel[], renames: string): Vanished {
+  const present = new Set(levels.flatMap((l) => l.rows.map((row) => wordKey(row.word ?? ""))));
+  const merged: string[] = [];
+  /** New word key → the old word that became it and the line that says so. */
+  const sources = new Map<string, { oldWord: string; oldKey: string; line: number }>();
+  parseCsv(renames).forEach((r, i) => {
+    const [oldWord, newWord] = [(r.old_word ?? "").trim(), (r.new_word ?? "").trim()];
+    const [oldKey, newKey] = [wordKey(oldWord), wordKey(newWord)];
+    if (oldKey === "" || newKey === "" || oldKey === newKey) return;
+    present.add(oldKey);
+    const first = sources.get(newKey);
+    if (!first) sources.set(newKey, { oldWord, oldKey, line: i + 2 });
+    else if (first.oldKey !== oldKey) {
+      merged.push(`${RENAMES_FILE}:${i + 2} новое слово «${newWord}» уже получено из «${first.oldWord}» в строке ${first.line}: две карточки стали бы одной`);
+    }
+  });
+  const missing = new Map<string, string>();
+  for (const given of before) {
+    const key = wordKey(given);
+    if (key !== "" && !present.has(key) && !missing.has(key)) missing.set(key, given.trim());
+  }
+  return { missing: [...missing.values()], merged };
 }
 
 /**

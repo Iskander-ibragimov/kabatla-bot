@@ -7,7 +7,7 @@
  */
 import { type SeedLevel, catalogToSql } from "../src/content/csv";
 import { LEVELS } from "../src/levels/scale";
-import { catalogRenames } from "./lib/catalog";
+import { catalogRenames, validMeta } from "./lib/catalog";
 import { FILES, catalogHash, readCatalog, readCatalogMeta, readRenames, readTopics, writeText } from "./lib/files";
 
 const catalog = readCatalog();
@@ -15,7 +15,8 @@ if (catalog.length === 0) {
   writeText(FILES.seed, "");
   console.log("каталога нет");
 } else {
-  const coverage = new Map(readCatalogMeta().map((m) => [m.level, m.coveragePct]));
+  // The check of the catalog has refused a meta.json of another shape before this runs; an entry it would refuse is not loaded.
+  const coverage = new Map(validMeta(readCatalogMeta()).map((m) => [m.level, m.coveragePct]));
   const levels = catalog.map(({ level, rows }): SeedLevel => {
     const { slug, code } = LEVELS.find((l) => l.no === level)!;
     return { level, slug, titleRu: code, titleTt: code, coveragePct: coverage.get(level) ?? null, rows };

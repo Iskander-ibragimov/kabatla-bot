@@ -8,10 +8,12 @@ import { dirname } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { GUIDED_RULE_VERSION } from "../../src/levels/order";
 import { LEVELS } from "../../src/levels/scale";
-import { type CatalogLevel, type LevelMeta, type Topic, catalogDigest, parseCatalogLevel, parseTopics } from "./catalog";
+import { type CatalogLevel, type Topic, catalogDigest, parseCatalogLevel, parseTopics } from "./catalog";
 
 /** The catalog by CEFR level: a1.csv … c1.csv and meta.json. */
 export const CATALOG_DIR = "data/catalog";
+/** The texts of the KFU specifications (branch `kfu-specs`) and what is built from them. Not in git: the lists are another party's work. */
+export const KFU_DIR = "data/work/kfu";
 export const FILES = {
   /** Example word forms the corpus knows; written by `build-wordlist attest`. */
   attested: "data/attested.txt",
@@ -33,7 +35,13 @@ export const FILES = {
   cognates: "data/work/cognates.json",
   /** Verb rows of the corpus that `candidates` dropped: `count, stem, infinitive, reason`. */
   droppedVerbs: "data/work/dropped-verbs.tsv",
+  /** The KFU word lists by level and topic, and all their entries once with the kind, the frequency and the catalog (`kfu-lists`). */
+  kfuLists: `${KFU_DIR}/lists.json`,
+  kfuPool: `${KFU_DIR}/pool.tsv`,
 } as const;
+
+/** Where `candidates --level` writes the next words of a level: data/work/candidates-a1.tsv … candidates-c1.tsv. */
+export const levelCandidatesPath = (slug: string): string => `data/work/candidates-${slug}.tsv`;
 
 export function readText(path: string, hint = ""): string {
   if (!existsSync(path)) throw new Error(`нет файла ${path}${hint ? ` — ${hint}` : ""}`);
@@ -54,27 +62,39 @@ export function readLines(path: string): string[] {
   return readFileSync(path, "utf8").split("\n").map((line) => line.trim()).filter((line) => line !== "");
 }
 
-const catalogPath = (slug: string): string => `${CATALOG_DIR}/${slug}.csv`;
-/** Paths of the level files of the catalog that exist, A1 first. */
-const catalogPaths = (): { level: number; path: string }[] =>
-  LEVELS.map((l) => ({ level: l.no, path: catalogPath(l.slug) })).filter((f) => existsSync(f.path));
+/** Paths of the level files of a catalog folder that exist, A1 first. */
+const catalogPaths = (dir = CATALOG_DIR): { level: number; path: string }[] =>
+  LEVELS.map((l) => ({ level: l.no, path: `${dir}/${l.slug}.csv` })).filter((f) => existsSync(f.path));
 
 /** The level files of the catalog that exist (data/catalog/a1.csv … c1.csv), A1 first; none when the catalog is not there yet. */
-export function readCatalog(): CatalogLevel[] {
-  return catalogPaths().map((f) => parseCatalogLevel(f.level, readFileSync(f.path, "utf8")));
+export function readCatalog(dir = CATALOG_DIR): CatalogLevel[] {
+  return catalogPaths(dir).map((f) => parseCatalogLevel(f.level, readFileSync(f.path, "utf8")));
 }
 
 /** CSV files of data/catalog that are not a level (a3.csv, A1.csv): the seed would skip them without a word. */
-export function strayCatalogFiles(): string[] {
+export function strayCatalogFiles(dir = CATALOG_DIR): string[] {
   const levelFiles = new Set(LEVELS.map((l) => `${l.slug}.csv`));
-  return (existsSync(CATALOG_DIR) ? readdirSync(CATALOG_DIR) : []).filter((name) => /\.csv$/i.test(name) && !levelFiles.has(name)).sort();
+  return (existsSync(dir) ? readdirSync(dir) : []).filter((name) => /\.csv$/i.test(name) && !levelFiles.has(name)).sort();
 }
 
 export const readTopics = (): Topic[] => parseTopics(readText(FILES.topics, "темы каталога: no,slug,title_ru,title_tt"));
 
-/** Coverage by CEFR level; empty when there is no data/catalog/meta.json yet. */
-export function readCatalogMeta(): LevelMeta[] {
-  return existsSync(FILES.catalogMeta) ? (JSON.parse(readFileSync(FILES.catalogMeta, "utf8")) as LevelMeta[]) : [];
+/**
+ * data/catalog/meta.json as it is written — coverage by CEFR level; an empty list when there is no such file yet.
+ * What it holds is for `checkMeta` to judge and for `validMeta` to read. Throws, naming the file, when it is not JSON.
+ */
+export function readCatalogMeta(path: string = FILES.catalogMeta): unknown {
+  if (!existsSync(path)) return [];
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as unknown;
+  } catch (e) {
+    throw new Error(`meta.json: не JSON (${(e as Error).message})`);
+  }
+}
+
+/** The texts of the KFU specifications A1–C1 that keep the layout of the pages (`s_A1.layout.txt` …), lowest level first. */
+export function readKfuTexts(dir = KFU_DIR): { level: string; text: string }[] {
+  return LEVELS.map((l) => ({ level: l.slug, text: readText(`${dir}/s_${l.code}.layout.txt`, "тексты спецификаций КФУ лежат в ветке kfu-specs") }));
 }
 
 /**

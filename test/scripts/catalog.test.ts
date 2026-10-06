@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  CATALOG_HEADER, type CatalogLevel, RENAMES_HEADER, TOPICS_HEADER, type Topic, catalogDigest, catalogRenames, checkCatalog, checkRenames, coverageDrops,
-  parseCatalogLevel, parseTopics,
+  CATALOG_HEADER, type CatalogLevel, RENAMES_HEADER, TOPICS_HEADER, type Topic, catalogDigest, catalogKeys, catalogRenames, checkCatalog, checkMeta, checkRenames,
+  computedTranscription, coverageDrops, levelBySlug, parseCatalogLevel, parseTopics, validMeta, vanishedHeadwords,
 } from "../../scripts/lib/catalog";
 import { tokenize } from "../../scripts/lib/forms";
 import { toCsv } from "../../src/content/csv";
@@ -133,7 +133,42 @@ describe("checkCatalog", () => {
   });
 
   it("allows w, ʼ and the stress mark in the transcription", () => {
-    expect(check(withRow(0, { transcription: "wаʼзы́м" }))).toEqual([]);
+    const more = { attested: new Set([...attested, "вакыт", "мәсьәлә"]) };
+    expect(row(0, { word: "вакыт" }).transcription).toBe("wакъы́т");
+    expect(row(0, { word: "мәсьәлә" }).transcription).toBe("мәсʼәлә́");
+    expect(check(withRow(0, row(0, { word: "вакыт" })), more)).toEqual([]);
+    expect(check(withRow(0, row(0, { word: "мәсьәлә" })), more)).toEqual([]);
+  });
+
+  it("requires the transcription the rule gives for the word", () => {
+    const w = word(0);
+    expect(check(withRow(0, { transcription: transcribe(word(5)) }))).toEqual([`a1:2 transcription «${transcribe(word(5))}»: по правилу «${transcribe(w)}» (от правила может отличаться только место ударения)`]);
+    expect(check(withRow(0, { transcription: `${transcribe(w)} ` }))).toEqual([`a1:2 transcription «${transcribe(w)} »: по правилу «${transcribe(w)}» (от правила может отличаться только место ударения)`]);
+  });
+
+  it("lets the author put the stress elsewhere, but not drop it or set it twice", () => {
+    const w = word(0);
+    const bare = transcribe(w).replace("\u0301", "");
+    const first = `${bare.slice(0, 2)}\u0301${bare.slice(2)}`;
+    expect(first).not.toBe(transcribe(w));
+    expect(check(withRow(0, { transcription: first }))).toEqual([]);
+    expect(check(withRow(0, { transcription: bare }))).toEqual([expect.stringMatching(/^a1:2 transcription «.*»: по правилу «/)]);
+    expect(check(withRow(0, { transcription: `${first}\u0301` }))).toEqual([expect.stringMatching(/^a1:2 transcription /)]);
+  });
+
+  it("expects the transcription of a phrase without its final sign, and of any other row with every sign of the word", () => {
+    const more = { attested: new Set([...attested, "ничек"]) };
+    const phrase = row(1, { word: "Бу ничек?", pos: "phr", example_tt: "— Бу ничек? — Бу зур." });
+    expect(phrase.transcription).toBe("бу ни́чек?");
+    expect(check(withRow(1, phrase), more)).toEqual(["a1:3 transcription «бу ни́чек?»: по правилу «бу ни́чек» (от правила может отличаться только место ударения)"]);
+    expect(check(withRow(1, { ...phrase, transcription: "бу ни́чек" }), more)).toEqual([]);
+    expect(check(withRow(1, { ...phrase, pos: "adv", example_tt: "Бу ничек?" }), more)).toEqual([]);
+  });
+
+  it("says one thing about a transcription that is empty or has foreign letters, and nothing about it when the word has them", () => {
+    expect(check(withRow(0, { transcription: " " }))).toEqual(["a1:2 пустая транскрипция"]);
+    expect(check(withRow(0, { transcription: "qазым" }))).toEqual(["a1:2 transcription: чужие буквы или знаки «q»"]);
+    expect(check(withRow(0, { word: `${word(0)}h` }))).toEqual(["a1:2 word: чужие буквы или знаки «h»"]);
   });
 
   it("rejects a line break inside a Tatar field", () => {
@@ -181,6 +216,41 @@ describe("checkCatalog", () => {
     expect(check(levels, { meta: [{ level: 1, coveragePct: 45 }] })).toEqual(["a2: нет покрытия в meta.json"]);
     expect(check(levels, { meta: [{ level: 1, coveragePct: 45 }, { level: 2, coveragePct: 30 }] })).toEqual(["a2: покрытие 30% меньше, чем у a1 (45%)"]);
     expect(check(levels, { meta: [{ level: 1, coveragePct: 45 }, { level: 2, coveragePct: 45 }] })).toEqual([]);
+  });
+
+  it("refuses a meta.json that is not a list of levels with whole percents", () => {
+    const levels = [level(1, a1()), level(2, next())];
+    const ok = { level: 2, coveragePct: 50 };
+    expect(check(levels, { meta: { level: 1, coveragePct: 45 } })).toEqual(['meta.json: нужен список вида [{"level":1,"coveragePct":45}]', "a1: нет покрытия в meta.json", "a2: нет покрытия в meta.json"]);
+    expect(check(levels, { meta: [{ level: 1, coveragePct: "45" }, ok] })).toEqual(['meta.json: запись 1: coveragePct «"45"»: нужно целое число от 0 до 100']);
+    expect(check(levels, { meta: [{ level: 1, coveragePct: "сорок" }, ok] })).toEqual(['meta.json: запись 1: coveragePct «"сорок"»: нужно целое число от 0 до 100']);
+    expect(check(levels, { meta: [{ level: 1 }, ok] })).toEqual(["meta.json: запись 1: coveragePct «undefined»: нужно целое число от 0 до 100"]);
+    for (const coveragePct of [45.5, -1, 101, null, NaN]) {
+      expect(check(levels, { meta: [{ level: 1, coveragePct }, ok] })).toEqual([expect.stringMatching(/^meta\.json: запись 1: coveragePct «.*»: нужно целое число от 0 до 100$/)]);
+    }
+    expect(check(levels, { meta: [{ level: 1, coveragePct: 0 }, { level: 2, coveragePct: 100 }] })).toEqual([]);
+  });
+
+  it("refuses a level of meta.json that is not 1–5 or stands twice", () => {
+    const levels = [level(1, a1())];
+    const ok = { level: 1, coveragePct: 45 };
+    expect(check(levels, { meta: [ok, { level: 6, coveragePct: 50 }] })).toEqual(["meta.json: запись 2: level «6»: нужен уровень от 1 до 5"]);
+    expect(check(levels, { meta: [ok, { level: "2", coveragePct: 50 }] })).toEqual(['meta.json: запись 2: level «"2"»: нужен уровень от 1 до 5']);
+    expect(check(levels, { meta: [ok, { level: 1.5, coveragePct: 50 }, { level: 0, coveragePct: 50 }] })).toEqual([
+      "meta.json: запись 2: level «1.5»: нужен уровень от 1 до 5", "meta.json: запись 3: level «0»: нужен уровень от 1 до 5",
+    ]);
+    expect(check(levels, { meta: [ok, { level: 1, coveragePct: 50 }] })).toEqual(["meta.json: запись 2: уровень 1 уже есть в записи 1"]);
+    expect(check(levels, { meta: [ok, null, "a1", [1, 45]] })).toEqual([
+      "meta.json: запись 2: нужен объект с level и coveragePct", "meta.json: запись 3: нужен объект с level и coveragePct", "meta.json: запись 4: нужен объект с level и coveragePct",
+    ]);
+  });
+
+  it("keeps the entries of meta.json that are right", () => {
+    expect(validMeta([{ level: 1, coveragePct: 45 }, { level: 2, coveragePct: "50" }, { level: 1, coveragePct: 46 }, { level: 3, coveragePct: 60, note: "x" }, null])).toEqual([
+      { level: 1, coveragePct: 45 }, { level: 3, coveragePct: 60 },
+    ]);
+    expect(validMeta("45")).toEqual([]);
+    expect(checkMeta([])).toEqual([]);
   });
 
   it("names every fall of the coverage by the files of the two levels, whatever the order of the entries", () => {
@@ -241,6 +311,84 @@ describe("checkRenames: data/renames.csv", () => {
     expect(checkRenames(file(`1,,${inA1}`), levels)).toEqual(["renames.csv:2 пустое old_word"]);
     expect(checkRenames(file("1,батим,"), levels)).toEqual(["renames.csv:2 пустое new_word"]);
     expect(checkRenames(file(`1,батим,${inA1}`, `3,Батим,${inB1}`), levels)).toEqual(["renames.csv:3 старое слово «Батим» уже переименовано в строке 2"]);
+  });
+});
+
+describe("vanishedHeadwords: a headword must not vanish", () => {
+  /** The files of A1 and B1. */
+  const levels = [level(1, a1()), level(3, next())];
+  const [inA1, inB1] = [word(0), word(600)];
+  const renames = (...lines: string[]) => ["level,old_word,new_word", ...lines].join("\n") + "\n";
+
+  it("finds nothing when every word of before stands in the files, in whatever level, case or with whatever outer sign", () => {
+    expect(vanishedHeadwords([inA1, inB1, `${inA1.toUpperCase()}!`, ` ${word(3)} `], levels, "")).toEqual({ missing: [], merged: [] });
+    expect(vanishedHeadwords([], levels, renames())).toEqual({ missing: [], merged: [] });
+  });
+
+  it("names the words that are in no level file, each once, as they were given", () => {
+    expect(vanishedHeadwords([inA1, "Юкбар!", "икенче юк", "юкбар", ""], levels, "")).toEqual({ missing: ["Юкбар!", "икенче юк"], merged: [] });
+  });
+
+  it("takes a word that renames.csv renames for present", () => {
+    expect(vanishedHeadwords(["батим", "Юкбар!"], levels, renames(`1,Батим,${inA1}`))).toEqual({ missing: ["Юкбар!"], merged: [] });
+  });
+
+  it("refuses two old words renamed to one new word: two cards would become one", () => {
+    expect(vanishedHeadwords(["батим", "батым"], levels, renames(`1,батим,${inA1}`, `3,сатым,${inB1}`, `1,Батым,${inA1.toUpperCase()}`))).toEqual({
+      missing: [], merged: [`renames.csv:4 новое слово «${inA1.toUpperCase()}» уже получено из «батим» в строке 2: две карточки стали бы одной`],
+    });
+  });
+
+  it("does not take a line that only changes the case or the outer sign of a word for a rename", () => {
+    expect(vanishedHeadwords([inA1], levels, renames(`1,батим,${inA1}`, `1,${inA1}!,${inA1}`)).merged).toEqual([]);
+  });
+});
+
+describe("computedTranscription", () => {
+  it("is the transcription of the rule for a word", () => {
+    expect(computedTranscription("вакыт", "n")).toBe(transcribe("вакыт"));
+    expect(computedTranscription(" сәгать ", "n")).toBe("сәгъә́т");
+    expect(computedTranscription("ярдәм итү", "v")).toBe(transcribe("ярдәм итү"));
+  });
+
+  describe("drops the sentence-final sign of a phrase", () => {
+    it.each([
+      ["Хәлләр ничек?", "хәллә́р ни́чек"],
+      ["Рәхмәт!", "рәхмә́т"],
+      ["Мин белмим.", "мин бе́лмим"],
+      ["Минем исемем …", "мине́м исеме́м"],
+      ["Ярар...", "йара́р"],
+      ["Алло — әйе … әйе?!", "алло́ — әйе́ … әйе́"],
+      ["Әйе, рәхмәт!", "әйе́, рәхмә́т"],
+    ])("%s", (phrase, expected) => {
+      expect(computedTranscription(phrase, "phr")).toBe(expected);
+    });
+  });
+
+  it("leaves a phrase without a final sign alone", () => {
+    expect(computedTranscription("Мин белмим", "phr")).toBe(transcribe("Мин белмим"));
+  });
+
+  it("leaves the sign of a row that is no phrase", () => {
+    expect(computedTranscription("Рәхмәт!", "part")).toBe(transcribe("Рәхмәт!"));
+    expect(computedTranscription("Рәхмәт!", "part")).toMatch(/!$/);
+  });
+});
+
+describe("catalogKeys", () => {
+  it("gives the level file of every word of the catalog by its key", () => {
+    const keys = catalogKeys([level(1, [row(0, { word: "Сәлам!" }), row(1)]), level(3, [row(2), row(3, { word: " " })])]);
+    expect([...keys]).toEqual([["сәлам", "a1"], [word(1), "a1"], [word(2), "b1"]]);
+  });
+});
+
+describe("levelBySlug", () => {
+  it("gives the number of a level by the name of its file", () => {
+    expect(["a1", "a2", "b1", "b2", "c1"].map(levelBySlug)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("refuses anything else, naming the levels", () => {
+    for (const slug of ["A1", "a3", "1", ""]) expect(() => levelBySlug(slug)).toThrow(`уровня «${slug}» нет: уровни a1, a2, b1, b2, c1`);
   });
 });
 
