@@ -2,7 +2,7 @@
  * Sources of new catalog words: candidates from the corpus lemma lists, example lookup in Tatoeba, and the list of
  * word forms the examples of the catalog use. Pure: no I/O; scripts/build-wordlist.ts reads and writes the files.
  */
-import { isAttested, tokenize, wordForm } from "./forms";
+import { formStems, isAttested, tokenize, wordForm } from "./forms";
 import type { LemmaRow, SentencePair } from "./sources";
 import { dictionaryForm, verbInfinitive } from "./tatar-verbs";
 
@@ -106,15 +106,23 @@ function dropReason(lemma: string, pos: string | undefined, forms: ReadonlySet<s
   return forms.has(dictionaryForm(lemma, pos)) ? null : "unattested";
 }
 
+/** The lemma rows of the corpus joined by word. */
+interface Merged {
+  /** Word in dictionary form → project part of speech → count, in the order the words first stand in the lists. */
+  words: Map<string, Map<string, number>>;
+  total: number;
+  kept: number;
+  dropped: Record<DropReason, number>;
+  droppedVerbs: DroppedVerb[];
+}
+
 /**
- * Merges the corpus lemma lists into one list by frequency. Dropped: the lists of unrecognised tokens, proper nouns,
+ * Joins the rows of the corpus lemma lists by word. Dropped: the lists of unrecognised tokens, proper nouns,
  * abbreviations and ideograms; lemmas with a digit, a Latin letter, a capital, of one letter; lemmas whose dictionary
  * form is not among the corpus word forms (stem fragments). Verbs go to the infinitive. Rows of one word (ал `v` and
- * `vaux`, ул `prn` and `n`) are added up: the word gets the part of speech with the highest count, `also` names the rest.
- * A word that Apertium translates, in its main part of speech, by the same word goes to `cognates`, and so does every
- * word of `known` (cognates named by hand); neither is among the candidates.
+ * `vaux`, ул `prn` and `n`) are kept by part of speech.
  */
-export function buildCandidates(lemmas: LemmaRow[], forms: ReadonlySet<string>, dix: Dix, limit = 3500, known: ReadonlySet<string> = new Set()): Candidates {
+function mergeLemmas(lemmas: LemmaRow[], forms: ReadonlySet<string>): Merged {
   const dropped: Record<DropReason, number> = { list: 0, digits: 0, latin: 0, upper: 0, short: 0, symbols: 0, unattested: 0 };
   const droppedVerbs: DroppedVerb[] = [];
   const words = new Map<string, Map<string, number>>();
@@ -134,19 +142,49 @@ export function buildCandidates(lemmas: LemmaRow[], forms: ReadonlySet<string>, 
     const byPos = words.get(word) ?? new Map<string, number>();
     words.set(word, byPos.set(pos, (byPos.get(pos) ?? 0) + count));
   }
+  return { words, total, kept, dropped, droppedVerbs };
+}
 
+const byCount = (a: { count: number }, b: { count: number }) => b.count - a.count;
+/** The parts of speech of a merged word, the one with the highest count first, and the sum of their counts. */
+function wordCounts(byPos: Map<string, number>): { parts: [string, number][]; count: number } {
+  return { parts: [...byPos].sort((a, b) => b[1] - a[1]), count: [...byPos.values()].reduce((sum, c) => sum + c, 0) };
+}
+
+/**
+ * Merges the corpus lemma lists into one list by frequency (`mergeLemmas` says what is dropped). The rows of one word
+ * are added up: the word gets the part of speech with the highest count, `also` names the rest.
+ * A word that Apertium translates, in its main part of speech, by the same word goes to `cognates`, and so does every
+ * word of `known` (cognates named by hand); neither is among the candidates.
+ */
+export function buildCandidates(lemmas: LemmaRow[], forms: ReadonlySet<string>, dix: Dix, limit = 3500, known: ReadonlySet<string> = new Set()): Candidates {
+  const { words, total, kept, dropped, droppedVerbs } = mergeLemmas(lemmas, forms);
   const candidates: Candidate[] = [];
   const cognates: Cognate[] = [];
   for (const [word, byPos] of words) {
-    const [main, ...rest] = [...byPos].sort((a, b) => b[1] - a[1]);
-    const count = [...byPos.values()].reduce((sum, c) => sum + c, 0);
+    const { parts: [main, ...rest], count } = wordCounts(byPos);
     const exact = [...new Set([main!, ...rest].flatMap(([pos]) => dix.get(word)?.get(pos) ?? []))];
     const translations = exact.length ? exact : apertium(dix, word);
     if (known.has(word) || isCognate(word, dix.get(word)?.get(main![0]) ?? [])) cognates.push({ word, count });
     else candidates.push({ word, pos: main![0], count, apertium: translations, also: rest.map(([pos, c]) => `${pos} ${c}`).join(", ") });
   }
-  const byCount = (a: { count: number }, b: { count: number }) => b.count - a.count;
   return { candidates: candidates.sort(byCount).slice(0, limit), cognates: cognates.sort(byCount), total, kept, dropped, droppedVerbs: droppedVerbs.sort(byCount) };
+}
+
+/** A word of the corpus in dictionary form: its main part of speech, the count of all its rows, and its place in the frequency list, from 1. */
+export interface RankedWord { word: string; pos: string; count: number; rank: number }
+
+/**
+ * The frequency list of the corpus the levels are banded by (spec §3.6): every word `buildCandidates` keeps, the
+ * look-alikes of Russian among them, most frequent first. Words with one count stand in the order of the lists, as the
+ * candidates do, so a candidate is before another here exactly when it is in `candidates.tsv`.
+ */
+export function rankWords(lemmas: LemmaRow[], forms: ReadonlySet<string>): RankedWord[] {
+  const words = [...mergeLemmas(lemmas, forms).words].map(([word, byPos]) => {
+    const { parts, count } = wordCounts(byPos);
+    return { word, pos: parts[0]![0], count };
+  });
+  return words.sort(byCount).map((w, i) => ({ ...w, rank: i + 1 }));
 }
 
 export function formatCandidates(candidates: Candidate[]): string {
@@ -198,6 +236,36 @@ export function findExamples(
   }
   hits.sort((a, b) => a.rank - b.rank || a.words - b.words || a.tat.length - b.tat.length || a.tatId - b.tatId);
   return hits.slice(0, limit).map(({ tatId, tat, rus, form, unattested }) => ({ tatId, tat, rus, form, unattested }));
+}
+
+/**
+ * A counter of example sentences: for a word, the number of Tatoeba sentences `findExamples` looks through that hold
+ * a form of it — each Tatar sentence once, none longer than `maxWords`. Zero means `examples <слово>` prints nothing.
+ */
+export function exampleCounter(pairs: SentencePair[], maxWords = 8): (word: string, pos: string) => number {
+  const sentences = new Map<number, string>();
+  for (const pair of pairs) {
+    const length = tokenize(pair.tat).length;
+    if (length >= 1 && length <= maxWords && !sentences.has(pair.tatId)) sentences.set(pair.tatId, pair.tat);
+  }
+  /** Token → the sentences it stands in: a word of one token is counted over the distinct tokens, not over the sentences. */
+  const byToken = new Map<string, number[]>();
+  for (const [id, text] of sentences) {
+    for (const token of new Set(tokenize(text))) {
+      const ids = byToken.get(token);
+      if (ids) ids.push(id);
+      else byToken.set(token, [id]);
+    }
+  }
+  return (word, pos) => {
+    if (tokenize(word).length !== 1) return [...sentences.values()].filter((text) => wordForm(text, word, pos, true) !== null).length;
+    const stems = formStems(tokenize(word)[0]!, pos, true);
+    const found = new Set<number>();
+    for (const [token, ids] of byToken) {
+      if (stems.some((stem) => token.startsWith(stem))) for (const id of ids) found.add(id);
+    }
+    return found.size;
+  };
 }
 
 /** The tokens of the examples that are among the corpus word forms, sorted, each once: the content of data/attested.txt. */

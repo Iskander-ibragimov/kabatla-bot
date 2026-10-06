@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  apertium, attestedForms, buildCandidates, findExamples, formatCandidates, formatDroppedVerbs, lookupPos, parseDix, parseLemmas, parseTatoeba, verbInfinitives,
+  apertium, attestedForms, buildCandidates, exampleCounter, findExamples, formatCandidates, formatDroppedVerbs, lookupPos, parseDix, parseLemmas, parseTatoeba,
+  rankWords, verbInfinitives,
 } from "../../scripts/lib/wordlist";
 
 const DIX = `<dictionary><section id="main" type="standard">
@@ -133,6 +134,27 @@ describe("buildCandidates", () => {
   });
 });
 
+describe("rankWords", () => {
+  const ranked = rankWords(parseLemmas(LEMMAS), FORMS);
+
+  it("numbers the words of the corpus from the most frequent, the look-alikes of Russian among them", () => {
+    expect(ranked.map((w) => [w.rank, w.word, w.pos, w.count])).toEqual([
+      [1, "ул", "pron", 930], [2, "булу", "v", 800], [3, "район", "n", 700], [4, "бару", "v", 600], [5, "бар", "adj", 537], [6, "алу", "v", 400], [7, "китап", "n", 300],
+      [8, "ни", "pron", 64], [9, "хатын-кыз", "n", 40], [10, "май", "n", 35], [11, "гына", "adv", 20], [12, "һәм", "conj", 10], [13, "аһ", "intj", 5], [14, "белән", "post", 4],
+      [15, "бер", "num", 3], [16, "бу", "pron", 2],
+    ]);
+  });
+
+  it("keeps the order of the candidates: a candidate stands before another in both lists", () => {
+    const candidates = buildCandidates(parseLemmas(LEMMAS), FORMS, dix).candidates.map((c) => c.word);
+    expect(ranked.map((w) => w.word).filter((word) => candidates.includes(word))).toEqual(candidates);
+  });
+
+  it("gives words with one count their places in the order of the lists", () => {
+    expect(rankWords(parseLemmas("5\tбу\tdet\n5\tаһ\tij\n9\tбер\tnum\n"), FORMS).map((w) => [w.rank, w.word])).toEqual([[1, "бер"], [2, "бу"], [3, "аһ"]]);
+  });
+});
+
 const TATOEBA = [
   "1\tМин китап укыйм.\t11\tЯ читаю книгу.",
   "2\tБу китабы бик яхшы.\t12\tЭта его книга очень хорошая.",
@@ -175,6 +197,29 @@ describe("findExamples", () => {
   it("names the tokens of a sentence that the corpus does not attest", () => {
     const hits = findExamples(pairs, "китап", "n", { attested: new Set(["мин", "китап"]) });
     expect(hits.map((h) => h.unattested)).toEqual([[], ["укыйм"], ["китабым", "юк"], ["бу", "китабы", "бик", "яхшы"]]);
+  });
+});
+
+describe("exampleCounter", () => {
+  const count = exampleCounter(parseTatoeba(TATOEBA + "1\tМин китап укыйм.\t21\tЯ читаю книги.\n"));
+
+  it("counts the sentences `findExamples` looks through: with a form of the word, no longer than 8 words, each once", () => {
+    expect(count("китап", "n")).toBe(4);
+    expect(count("бару", "v")).toBe(2);
+    expect(count("эшләү", "v")).toBe(1);
+    expect(count("ярдәм итү", "v")).toBe(1);
+    expect(count("өстәл", "n")).toBe(0);
+  });
+
+  it("agrees with findExamples", () => {
+    const pairs = parseTatoeba(TATOEBA);
+    for (const [word, pos] of [["китап", "n"], ["бару", "v"], ["ул", "pron"], ["бик", "adv"], ["мин", ""]] as const) {
+      expect([word, exampleCounter(pairs)(word, pos)]).toEqual([word, findExamples(pairs, word, pos, { limit: 1000 }).length]);
+    }
+  });
+
+  it("takes another length limit", () => {
+    expect(exampleCounter(parseTatoeba(TATOEBA), 20)("китап", "n")).toBe(5);
   });
 });
 

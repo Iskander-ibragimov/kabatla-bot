@@ -18,7 +18,7 @@ export function isAttested(token: string, attested: ReadonlySet<string>): boolea
  * What a form of the word may begin with. Verbs: the stems of the infinitive. Other words: the first
  * max(3, length − 2) letters, or the whole word when `strict`; a whole word in -к, -п also matches voiced (аяк → аягым).
  */
-function stemsOf(word: string, pos: string, strict: boolean): string[] {
+export function formStems(word: string, pos: string, strict: boolean): string[] {
   if (pos === "v") return verbStems(word);
   const stem = strict ? word : word.slice(0, Math.max(3, word.length - 2));
   const voiced = stem === word && /[кп]$/.test(word) ? [word.slice(0, -1) + (word.endsWith("к") ? "г" : "б")] : [];
@@ -34,7 +34,7 @@ export function wordForm(example: string, word: string, pos: string, strict = fa
   const parts = tokenize(word);
   const last = parts.pop();
   if (last === undefined) return null;
-  const stems = stemsOf(last, pos, strict);
+  const stems = formStems(last, pos, strict);
   const tokens = tokenize(example);
   for (let i = 0; i + parts.length < tokens.length; i++) {
     const tail = tokens[i + parts.length]!;
