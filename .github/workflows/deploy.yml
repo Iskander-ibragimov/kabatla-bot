@@ -142,6 +142,40 @@ jobs:
           echo "voiced=$VOICED" >> "$GITHUB_OUTPUT"
           echo "Catalog notes before the migrations: $NOTES, voiced: $VOICED"
 
+      - name: Check that no catalog headword is missing from the files
+        id: headwords
+        # Read-only, and before the migrations: when the live catalog holds a headword that is neither in the level files
+        # nor an old word of data/renames.csv, the run stops here and nothing in the database is changed. The load never
+        # deletes a note, so the card of a row that left the files would stay with the learners, outside the files.
+        # Only a real mismatch fails the run. On a database without the column `level` (a new one, or one of the catalog
+        # by hundreds) the query fails; when it fails, gives no answer within a minute, or its answer cannot be read, the
+        # check is skipped with a line in the log. The log gets the count and at most 20 of the missing headwords
+        # (catalog words are content of the repository) and nothing else from the database.
+        run: |
+          MISSING=n/a CODE=0
+          WORDS="$RUNNER_TEMP/db-headwords.txt" LOG="$RUNNER_TEMP/headwords.log"
+          if OUT=$(timeout -k 10 60 npx wrangler d1 execute kabatla --remote --json --command "SELECT word FROM notes WHERE level IS NOT NULL" 2>/dev/null) && printf '%s' "$OUT" | jq -r '.[0].results[].word' > "$WORDS" 2>/dev/null; then
+            # The comparison is the script's: exit code 0 — every headword is in the files, 1 — some are not.
+            npx tsx scripts/validate-catalog.ts --db-keys "$WORDS" > "$LOG" 2>/dev/null || CODE=$?
+            N=$(sed -n 's/^слов каталога в базе: [0-9]*, из них нет в файлах: \([0-9]*\)$/\1/p' "$LOG" | tail -n 1)
+            case "$N" in ''|*[!0-9]*) N="";; esac
+            if [ -n "$N" ] && [ "$CODE" -le 1 ]; then
+              MISSING=$N
+              cat "$LOG"
+            else
+              echo "The check did not run (the comparison ended with code $CODE)"
+              CODE=0
+            fi
+          else
+            echo "The check did not run (a database without catalog levels yet, no answer, or an answer that cannot be read)"
+          fi
+          echo "missing=$MISSING" >> "$GITHUB_OUTPUT"
+          echo "Catalog headwords missing from the files: $MISSING"
+          if [ "$CODE" -ne 0 ]; then
+            echo "The live catalog holds headwords the files do not account for. Nothing was changed: put the row back into its level file, or write the corrected word into data/renames.csv."
+            exit 1
+          fi
+
       - name: Apply migrations
         id: migrations
         run: npx wrangler d1 migrations apply kabatla --remote
@@ -273,6 +307,7 @@ jobs:
           S_SUBDOMAIN: ${{ steps.subdomain.outcome }}
           S_D1: ${{ steps.d1.outcome }}
           S_CATALOG: ${{ steps.catalog.outcome }}
+          S_HEADWORDS: ${{ steps.headwords.outcome }}
           S_MIGRATIONS: ${{ steps.migrations.outcome }}
           S_SEED: ${{ steps.seed.outcome }}
           S_DEPLOY: ${{ steps.deploy.outcome }}
@@ -291,6 +326,7 @@ jobs:
           DB_AFTER: ${{ steps.after.outputs.notes }}
           DB_VOICED_AFTER: ${{ steps.after.outputs.voiced }}
           DB_LEFT: ${{ steps.after.outputs.leftover }}
+          DB_MISSING: ${{ steps.headwords.outputs.missing }}
           CAT_WARNING: ${{ steps.after.outputs.warning }}
           WORKER_URL: ${{ steps.deploy.outputs.url }}
           SC_NO: ${{ steps.selfcheck.outputs.no }}
@@ -347,6 +383,7 @@ jobs:
             echo "- workers.dev subdomain: ${S_SUBDOMAIN}"
             echo "- D1 database: ${S_D1}"
             echo "- check catalog: ${S_CATALOG}"
+            echo "- catalog headwords: ${S_HEADWORDS}"
             echo "- migrations: ${S_MIGRATIONS}"
             echo "- load catalog: ${S_SEED}"
             echo "- deploy worker: ${S_DEPLOY}"
@@ -367,6 +404,7 @@ jobs:
             echo "- catalog notes in the database: before ${DB_BEFORE:-n/a}, after ${DB_AFTER:-n/a}; rows in the files: ${CAT_ROWS:-n/a}"
             echo "- voiced catalog notes: before ${DB_VOICED_BEFORE:-n/a}, after ${DB_VOICED_AFTER:-n/a}"
             echo "- notes of the old catalog the load did not find in the files: ${DB_LEFT:-n/a}"
+            echo "- catalog headwords missing from the files: ${DB_MISSING:-n/a}"
             if [ -n "$CAT_WARNING" ]; then echo; echo "WARNING: ${CAT_WARNING}"; fi
             echo
             echo "## catalog validation (first 10 of ${VALID_LINES} lines; check catalog step: ${S_CATALOG})"
