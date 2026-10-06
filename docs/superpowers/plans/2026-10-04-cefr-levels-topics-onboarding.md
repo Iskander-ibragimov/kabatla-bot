@@ -370,7 +370,7 @@ Inputs the spec implies and no single task's happy path exercises; each is pinne
 **Files:** none in the repository beyond the merge.
 
 - [ ] **Step 1: Whole-branch review has passed** (controller).
-- [ ] **Step 2: Backup.** `gh workflow run backup.yml -R Iskander-ibragimov/kabatla-bot --ref master`; wait for success.
+- [ ] **Step 2: Backup.** `gh workflow run backup.yml -R Iskander-ibragimov/kabatla-bot --ref cefr`; wait for success. From `cefr`, not `master`: the repository is public, and until this branch is merged the `backup.yml` of `master` uploads the dump unencrypted (final review, C1). The artifact must be `kabatla-d1-backup-enc`.
 - [ ] **Step 3: Merge `cefr` into `master`** (fast-forward or a merge commit) and push. The push starts Deploy.
 - [ ] **Step 4: Verify.** `gh run watch`; then `git fetch origin deploy-report && git show origin/deploy-report:deploy.md`. Expected: every step success; migrations applied; catalog validation `уровней: 1, карточек: 400, нарушений нет`; webhook host matches; `last_error_message` empty; self-check as before; notes without audio: 0.
 - [ ] **Step 5: If Deploy is red** — read the report, fix on `cefr`, merge again; at most three runs, then stop and report. The backup of Step 2 is the way back for data.

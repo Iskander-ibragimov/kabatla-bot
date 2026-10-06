@@ -1,8 +1,9 @@
 name: voice-db
 # Voices every note without audio (catalog words and users' own words) in the production database; the Telegram
 # file_ids are saved to D1 every 20 notes. Started by the schedule, by hand (input `limit`), and by deploy.yml after a deploy.
-# The FIRST step counts pending notes (npx wrangler, no dependency install) and the job ends there when there are none
-# (private repository, 2000 Actions minutes a month: an empty run must be short).
+# The FIRST step counts pending notes (npx wrangler, no dependency install) and the job ends there when there are none:
+# the schedule starts it four times a day, so an empty run must be short. The repository is public: its log, like the
+# report, is read by anyone.
 # Publishes voice-db.md (counts and note ids only, never users' words) to the orphan branch `voice-db-report`.
 on:
   schedule:
@@ -45,6 +46,8 @@ jobs:
         run: |
           ID=$(npx --yes wrangler@4 d1 list --json | jq -r '.[] | select(.name=="kabatla") | .uuid')
           test -n "$ID"
+          # The id of the database is kept out of this public log, here and in every later step.
+          echo "::add-mask::$ID"
           sed -i "s/^database_id = .*/database_id = \"$ID\"/" wrangler.toml
           OUT=$(npx --yes wrangler@4 d1 execute kabatla --remote --json --command "SELECT COUNT(*) AS n FROM notes WHERE audio_file_id IS NULL AND audio_tries < 3")
           N=$(printf '%s' "$OUT" | jq -r '.[0].results[0].n')

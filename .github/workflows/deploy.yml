@@ -72,22 +72,27 @@ jobs:
           SUB=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" $API | jq -r '.result.subdomain // empty')
           if [ -z "$SUB" ]; then
             SUB="kabatla-$(echo $CLOUDFLARE_ACCOUNT_ID | cut -c1-8)"
+            # This name holds the first characters of the account id: it is kept out of this public log, here and in every later step.
+            echo "::add-mask::$SUB"
             curl -s -X PUT -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" --data "{\"subdomain\":\"$SUB\"}" $API | jq -c '.success, .errors'
           fi
           echo "sub=$SUB" >> "$GITHUB_OUTPUT"
-          echo "workers.dev subdomain: $SUB"
+          echo "workers.dev subdomain: found"
 
       - name: Ensure D1 database
         id: d1
         run: |
           ID=$(npx wrangler d1 list --json | jq -r '.[] | select(.name=="kabatla") | .uuid')
           if [ -z "$ID" ]; then
-            npx wrangler d1 create kabatla
+            # What `d1 create` prints holds the id of the new database.
+            npx wrangler d1 create kabatla > /dev/null
             ID=$(npx wrangler d1 list --json | jq -r '.[] | select(.name=="kabatla") | .uuid')
           fi
           test -n "$ID"
+          # The id of the database is kept out of this public log, here and in every later step (wrangler prints it).
+          echo "::add-mask::$ID"
           sed -i "s/^database_id = .*/database_id = \"$ID\"/" wrangler.toml
-          echo "D1: $ID"
+          echo "D1 database: found"
 
       - name: Check catalog
         id: catalog
@@ -122,10 +127,10 @@ jobs:
         id: before
         # Read-only. The query fits the database before and after the migrations of the levels A1–C1: in both a catalog
         # note is a note of a deck of kind 'catalog'. On a database that has no tables yet the query fails; the numbers
-        # are then n/a. This step never fails the run.
+        # are then n/a, as they are when the database gives no answer within a minute. This step never fails the run.
         run: |
           NOTES="" VOICED=""
-          if OUT=$(npx wrangler d1 execute kabatla --remote --json --command "SELECT COUNT(*) AS notes, COUNT(NULLIF(n.audio_file_id, '')) AS voiced FROM notes n JOIN decks d ON d.id = n.deck_id WHERE d.kind = 'catalog'" 2>/dev/null); then
+          if OUT=$(timeout -k 10 60 npx wrangler d1 execute kabatla --remote --json --command "SELECT COUNT(*) AS notes, COUNT(NULLIF(n.audio_file_id, '')) AS voiced FROM notes n JOIN decks d ON d.id = n.deck_id WHERE d.kind = 'catalog'" 2>/dev/null); then
             NOTES=$(printf '%s' "$OUT" | jq -r '.[0].results[0].notes' 2>/dev/null || true)
             VOICED=$(printf '%s' "$OUT" | jq -r '.[0].results[0].voiced' 2>/dev/null || true)
           else
@@ -149,19 +154,22 @@ jobs:
       - name: Count catalog notes after the load
         id: after
         # Read-only, and it never fails the run: the migrations are applied, so the worker must be deployed whatever is
-        # counted here. A catalog note the load did not find in the files keeps the provisional place the migration
-        # gave it (seq of 100000 and more). What does not add up goes to the report as one WARNING line.
+        # counted here, and a count without an answer within a minute is n/a. `leftover` is the notes of the old catalog
+        # (the one before the levels A1–C1) that the load did not find in the files: such a note keeps the provisional
+        # place the migration gave it (seq of 100000 and more). It is not every note absent from the files: one whose
+        # row was taken out of a file later has its place and is not counted. What does not add up goes to the report
+        # as one WARNING line.
         env:
           BEFORE: ${{ steps.before.outputs.notes }}
           ROWS: ${{ steps.catalog.outputs.rows }}
         run: |
           NOTES="" VOICED="" LEFT=""
-          if OUT=$(npx wrangler d1 execute kabatla --remote --json --command "SELECT COUNT(*) AS notes, COUNT(NULLIF(audio_file_id, '')) AS voiced, COALESCE(SUM(seq >= 100000), 0) AS leftover FROM notes WHERE level IS NOT NULL" 2>/dev/null); then
+          if OUT=$(timeout -k 10 60 npx wrangler d1 execute kabatla --remote --json --command "SELECT COUNT(*) AS notes, COUNT(NULLIF(audio_file_id, '')) AS voiced, COALESCE(SUM(seq >= 100000), 0) AS leftover FROM notes WHERE level IS NOT NULL" 2>/dev/null); then
             NOTES=$(printf '%s' "$OUT" | jq -r '.[0].results[0].notes' 2>/dev/null || true)
             VOICED=$(printf '%s' "$OUT" | jq -r '.[0].results[0].voiced' 2>/dev/null || true)
             LEFT=$(printf '%s' "$OUT" | jq -r '.[0].results[0].leftover' 2>/dev/null || true)
           else
-            echo "The count did not run"
+            echo "The count did not run (an error, or no answer within a minute)"
           fi
           num() { case "$1" in ''|*[!0-9]*) return 1;; esac; }
           num "$NOTES" || NOTES=n/a
@@ -170,13 +178,13 @@ jobs:
           WARN=""
           if num "$NOTES" && num "$ROWS" && [ "$NOTES" -ne "$ROWS" ]; then WARN="$WARN the database holds $NOTES catalog notes, the files $ROWS rows;"; fi
           if num "$NOTES" && num "$BEFORE" && [ "$NOTES" -lt "$BEFORE" ]; then WARN="$WARN catalog notes went down from $BEFORE to $NOTES;"; fi
-          if num "$LEFT" && [ "$LEFT" -gt 0 ]; then WARN="$WARN $LEFT catalog notes were not found in the files;"; fi
+          if num "$LEFT" && [ "$LEFT" -gt 0 ]; then WARN="$WARN the load did not find $LEFT notes of the old catalog in the files;"; fi
           WARN="${WARN# }"
           echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
           echo "voiced=$VOICED" >> "$GITHUB_OUTPUT"
           echo "leftover=$LEFT" >> "$GITHUB_OUTPUT"
           echo "warning=$WARN" >> "$GITHUB_OUTPUT"
-          echo "Catalog notes after the load: $NOTES, voiced: $VOICED, not found in the files: $LEFT"
+          echo "Catalog notes after the load: $NOTES, voiced: $VOICED, notes of the old catalog the load did not find in the files: $LEFT"
           if [ -n "$WARN" ]; then echo "WARNING: $WARN"; fi
 
       - name: Deploy worker
@@ -358,7 +366,7 @@ jobs:
             echo "- catalog levels in repo: ${LEVELS:-n/a} (check catalog step: ${S_CATALOG}; load catalog step: ${S_SEED})"
             echo "- catalog notes in the database: before ${DB_BEFORE:-n/a}, after ${DB_AFTER:-n/a}; rows in the files: ${CAT_ROWS:-n/a}"
             echo "- voiced catalog notes: before ${DB_VOICED_BEFORE:-n/a}, after ${DB_VOICED_AFTER:-n/a}"
-            echo "- catalog notes not found in the files: ${DB_LEFT:-n/a}"
+            echo "- notes of the old catalog the load did not find in the files: ${DB_LEFT:-n/a}"
             if [ -n "$CAT_WARNING" ]; then echo; echo "WARNING: ${CAT_WARNING}"; fi
             echo
             echo "## catalog validation (first 10 of ${VALID_LINES} lines; check catalog step: ${S_CATALOG})"
