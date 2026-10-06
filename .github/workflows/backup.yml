@@ -1,6 +1,7 @@
 name: Weekly D1 backup
-# Exports the production database and keeps the copy ENCRYPTED: the repository is public, and a file kept by Actions in
-# a public repository (an artifact) can be downloaded by any signed-in GitHub user. The dump itself never leaves the
+# Exports the production database and keeps the copy ENCRYPTED: the repository was public until 2026-10-06 and may be
+# opened again, and a file kept by Actions in a public repository (an artifact) can be downloaded by any signed-in
+# GitHub user. Logs and artifacts are therefore written as if anyone could read them. The dump itself never leaves the
 # runner: only backup.sql.enc is uploaded, as the artifact `kabatla-d1-backup-enc`.
 # Key: the secret BACKUP_PASSPHRASE when it is set; otherwise hex of HMAC-SHA256(key = bot token, message =
 # `kabatla-d1-backup-v1`), which is not the webhook secret (deploy.yml derives that one with another label and function).
@@ -20,6 +21,16 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${BACKUP_PASSPHRASE:-}" ]; then
+            # The copy must open with the phrase as a person types it: one line, no space at either end, not short.
+            case "$BACKUP_PASSPHRASE" in
+              *$'\n'* | *$'\r'* | [[:space:]]* | *[[:space:]])
+                echo "BACKUP_PASSPHRASE has a line break, or a space at its start or end: set it again as one line. Nothing is exported"
+                exit 1 ;;
+            esac
+            if [ "${#BACKUP_PASSPHRASE}" -lt 20 ]; then
+              echo "BACKUP_PASSPHRASE is shorter than 20 characters: set a longer one. Nothing is exported"
+              exit 1
+            fi
             echo "key: the secret BACKUP_PASSPHRASE"
           elif [ -n "${BOT_TOKEN:-}" ]; then
             echo "key: derived from the bot token (there is no secret BACKUP_PASSPHRASE)"
@@ -39,7 +50,7 @@ jobs:
           set -euo pipefail
           ID=$(npx wrangler d1 list --json | jq -r '.[] | select(.name=="kabatla") | .uuid')
           test -n "$ID"
-          # The id of the database is kept out of this public log, here and in every later step.
+          # The id of the database is kept out of the log (the repository has been public), here and in every later step.
           echo "::add-mask::$ID"
           sed -i "s/^database_id = .*/database_id = \"$ID\"/" wrangler.toml
       - name: Export the database
@@ -79,10 +90,10 @@ jobs:
           fi
           export BACKUP_KEY
           test -s backup.sql
-          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:BACKUP_KEY -in backup.sql -out backup.sql.enc
+          openssl enc -aes-256-cbc -md sha256 -pbkdf2 -iter 200000 -salt -pass env:BACKUP_KEY -in backup.sql -out backup.sql.enc
           # The copy is kept only if it opens with the key and gives the dump back, byte for byte.
           PLAIN=$(sha256sum < backup.sql | cut -d' ' -f1)
-          if ! OPENED=$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:BACKUP_KEY -in backup.sql.enc 2>/dev/null | sha256sum | cut -d' ' -f1) || [ "$OPENED" != "$PLAIN" ]; then
+          if ! OPENED=$(openssl enc -d -aes-256-cbc -md sha256 -pbkdf2 -iter 200000 -pass env:BACKUP_KEY -in backup.sql.enc 2>/dev/null | sha256sum | cut -d' ' -f1) || [ "$OPENED" != "$PLAIN" ]; then
             rm -f backup.sql.enc
             echo "The encrypted copy does not open to the dump: nothing is uploaded"
             exit 1

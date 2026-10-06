@@ -72,7 +72,7 @@ jobs:
           SUB=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" $API | jq -r '.result.subdomain // empty')
           if [ -z "$SUB" ]; then
             SUB="kabatla-$(echo $CLOUDFLARE_ACCOUNT_ID | cut -c1-8)"
-            # This name holds the first characters of the account id: it is kept out of this public log, here and in every later step.
+            # This name holds the first characters of the account id: it is kept out of the log (the repository has been public), here and in every later step.
             echo "::add-mask::$SUB"
             curl -s -X PUT -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" --data "{\"subdomain\":\"$SUB\"}" $API | jq -c '.success, .errors'
           fi
@@ -89,7 +89,7 @@ jobs:
             ID=$(npx wrangler d1 list --json | jq -r '.[] | select(.name=="kabatla") | .uuid')
           fi
           test -n "$ID"
-          # The id of the database is kept out of this public log, here and in every later step (wrangler prints it).
+          # The id of the database is kept out of the log (the repository has been public), here and in every later step (wrangler prints it).
           echo "::add-mask::$ID"
           sed -i "s/^database_id = .*/database_id = \"$ID\"/" wrangler.toml
           echo "D1 database: found"
