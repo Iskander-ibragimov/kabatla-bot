@@ -89,15 +89,12 @@ jobs:
           sed -i "s/^database_id = .*/database_id = \"$ID\"/" wrangler.toml
           echo "D1: $ID"
 
-      - name: Apply migrations
-        id: migrations
-        run: npx wrangler d1 migrations apply kabatla --remote
-
-      - name: Detect catalog
+      - name: Check catalog
         id: catalog
-        # The catalog is data/catalog/a1.csv … c1.csv, one file per level. The load runs whenever the folder holds any
-        # CSV file: a file with a wrong name is then named by the validation and fails the deploy, it is never skipped
-        # without a word.
+        # Reads files only, and runs before the migrations: a catalog with violations stops the run before anything in
+        # the live database is changed. The catalog is data/catalog/a1.csv … c1.csv, one file per level, and there must
+        # be one: without a level file the run fails. A CSV file with a wrong name is named by the validation and
+        # fails the run too; it is never skipped without a word. The seed is written here and loaded after the migrations.
         run: |
           LEVELS=0
           for slug in a1 a2 b1 b2 c1; do
@@ -105,24 +102,82 @@ jobs:
           done
           FILES=$(find data/catalog -maxdepth 1 -type f -iname '*.csv' 2>/dev/null | wc -l)
           echo "levels=$LEVELS" >> "$GITHUB_OUTPUT"
-          if [ "$FILES" -gt 0 ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "Catalog: $LEVELS level files, $FILES CSV files in data/catalog"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "No catalog to load: data/catalog holds no CSV file"
+          echo "Catalog: $LEVELS level files, $FILES CSV files in data/catalog"
+          # A level file may be a link, which `find -type f` does not count: either number is enough to go on.
+          if [ "$LEVELS" -gt 0 ] || [ "$FILES" -gt 0 ]; then
+            set -o pipefail
+            npx tsx scripts/validate-catalog.ts 2>&1 | tee "$RUNNER_TEMP/validate.log"
           fi
+          if [ "$LEVELS" -eq 0 ]; then
+            echo "No catalog: data/catalog holds no level file (a1.csv, a2.csv, b1.csv, b2.csv, c1.csv)"
+            exit 1
+          fi
+          # The validator's last line: «уровней: 1, карточек: 400, нарушений нет».
+          ROWS=$(sed -n 's/^уровней: [0-9]*, карточек: \([0-9]*\),.*/\1/p' "$RUNNER_TEMP/validate.log" | tail -n 1)
+          case "$ROWS" in ''|*[!0-9]*) ROWS=n/a;; esac
+          echo "rows=$ROWS" >> "$GITHUB_OUTPUT"
+          npx tsx scripts/csv-to-sql.ts
+
+      - name: Count catalog notes before the migrations
+        id: before
+        # Read-only. The query fits the database before and after the migrations of the levels A1–C1: in both a catalog
+        # note is a note of a deck of kind 'catalog'. On a database that has no tables yet the query fails; the numbers
+        # are then n/a. This step never fails the run.
+        run: |
+          NOTES="" VOICED=""
+          if OUT=$(npx wrangler d1 execute kabatla --remote --json --command "SELECT COUNT(*) AS notes, COUNT(NULLIF(n.audio_file_id, '')) AS voiced FROM notes n JOIN decks d ON d.id = n.deck_id WHERE d.kind = 'catalog'" 2>/dev/null); then
+            NOTES=$(printf '%s' "$OUT" | jq -r '.[0].results[0].notes' 2>/dev/null || true)
+            VOICED=$(printf '%s' "$OUT" | jq -r '.[0].results[0].voiced' 2>/dev/null || true)
+          else
+            echo "The count did not run (a database without tables yet, or no answer)"
+          fi
+          case "$NOTES" in ''|*[!0-9]*) NOTES=n/a;; esac
+          case "$VOICED" in ''|*[!0-9]*) VOICED=n/a;; esac
+          echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
+          echo "voiced=$VOICED" >> "$GITHUB_OUTPUT"
+          echo "Catalog notes before the migrations: $NOTES, voiced: $VOICED"
+
+      - name: Apply migrations
+        id: migrations
+        run: npx wrangler d1 migrations apply kabatla --remote
 
       - name: Load catalog
         id: seed
-        if: steps.catalog.outputs.run == 'true'
-        # The seed never deletes: a catalog with violations must not reach the live database. A failed validation fails
-        # this step, so nothing is loaded and the worker is not redeployed.
+        # The seed was written and its files were checked by «Check catalog», before the migrations. It never deletes.
+        run: npx wrangler d1 execute kabatla --remote --file seed/catalog.sql --yes
+
+      - name: Count catalog notes after the load
+        id: after
+        # Read-only, and it never fails the run: the migrations are applied, so the worker must be deployed whatever is
+        # counted here. A catalog note the load did not find in the files keeps the provisional place the migration
+        # gave it (seq of 100000 and more). What does not add up goes to the report as one WARNING line.
+        env:
+          BEFORE: ${{ steps.before.outputs.notes }}
+          ROWS: ${{ steps.catalog.outputs.rows }}
         run: |
-          set -o pipefail
-          npx tsx scripts/validate-catalog.ts 2>&1 | tee "$RUNNER_TEMP/validate.log"
-          npx tsx scripts/csv-to-sql.ts
-          npx wrangler d1 execute kabatla --remote --file seed/catalog.sql --yes
+          NOTES="" VOICED="" LEFT=""
+          if OUT=$(npx wrangler d1 execute kabatla --remote --json --command "SELECT COUNT(*) AS notes, COUNT(NULLIF(audio_file_id, '')) AS voiced, COALESCE(SUM(seq >= 100000), 0) AS leftover FROM notes WHERE level IS NOT NULL" 2>/dev/null); then
+            NOTES=$(printf '%s' "$OUT" | jq -r '.[0].results[0].notes' 2>/dev/null || true)
+            VOICED=$(printf '%s' "$OUT" | jq -r '.[0].results[0].voiced' 2>/dev/null || true)
+            LEFT=$(printf '%s' "$OUT" | jq -r '.[0].results[0].leftover' 2>/dev/null || true)
+          else
+            echo "The count did not run"
+          fi
+          num() { case "$1" in ''|*[!0-9]*) return 1;; esac; }
+          num "$NOTES" || NOTES=n/a
+          num "$VOICED" || VOICED=n/a
+          num "$LEFT" || LEFT=n/a
+          WARN=""
+          if num "$NOTES" && num "$ROWS" && [ "$NOTES" -ne "$ROWS" ]; then WARN="$WARN the database holds $NOTES catalog notes, the files $ROWS rows;"; fi
+          if num "$NOTES" && num "$BEFORE" && [ "$NOTES" -lt "$BEFORE" ]; then WARN="$WARN catalog notes went down from $BEFORE to $NOTES;"; fi
+          if num "$LEFT" && [ "$LEFT" -gt 0 ]; then WARN="$WARN $LEFT catalog notes were not found in the files;"; fi
+          WARN="${WARN# }"
+          echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
+          echo "voiced=$VOICED" >> "$GITHUB_OUTPUT"
+          echo "leftover=$LEFT" >> "$GITHUB_OUTPUT"
+          echo "warning=$WARN" >> "$GITHUB_OUTPUT"
+          echo "Catalog notes after the load: $NOTES, voiced: $VOICED, not found in the files: $LEFT"
+          if [ -n "$WARN" ]; then echo "WARNING: $WARN"; fi
 
       - name: Deploy worker
         id: deploy
@@ -209,6 +264,7 @@ jobs:
           S_SECRETS: ${{ steps.secrets.outcome }}
           S_SUBDOMAIN: ${{ steps.subdomain.outcome }}
           S_D1: ${{ steps.d1.outcome }}
+          S_CATALOG: ${{ steps.catalog.outcome }}
           S_MIGRATIONS: ${{ steps.migrations.outcome }}
           S_SEED: ${{ steps.seed.outcome }}
           S_DEPLOY: ${{ steps.deploy.outcome }}
@@ -221,6 +277,13 @@ jobs:
           MISSING: ${{ steps.secrets.outputs.missing }}
           PROVIDERS: ${{ steps.wsecrets.outputs.providers }}
           LEVELS: ${{ steps.catalog.outputs.levels }}
+          CAT_ROWS: ${{ steps.catalog.outputs.rows }}
+          DB_BEFORE: ${{ steps.before.outputs.notes }}
+          DB_VOICED_BEFORE: ${{ steps.before.outputs.voiced }}
+          DB_AFTER: ${{ steps.after.outputs.notes }}
+          DB_VOICED_AFTER: ${{ steps.after.outputs.voiced }}
+          DB_LEFT: ${{ steps.after.outputs.leftover }}
+          CAT_WARNING: ${{ steps.after.outputs.warning }}
           WORKER_URL: ${{ steps.deploy.outputs.url }}
           SC_NO: ${{ steps.selfcheck.outputs.no }}
           SC_YES: ${{ steps.selfcheck.outputs.yes }}
@@ -275,6 +338,7 @@ jobs:
             echo "- check secrets: ${S_SECRETS}"
             echo "- workers.dev subdomain: ${S_SUBDOMAIN}"
             echo "- D1 database: ${S_D1}"
+            echo "- check catalog: ${S_CATALOG}"
             echo "- migrations: ${S_MIGRATIONS}"
             echo "- load catalog: ${S_SEED}"
             echo "- deploy worker: ${S_DEPLOY}"
@@ -288,10 +352,16 @@ jobs:
             echo
             echo "## Worker"
             echo "- LLM providers selected: ${PROVIDERS:-n/a}"
-            echo "- catalog levels in repo: ${LEVELS:-n/a} (load catalog step: ${S_SEED})"
             echo "- worker host: ${WORKER_HOST:-n/a}"
             echo
-            echo "## catalog validation (first 10 of ${VALID_LINES} lines; load catalog step: ${S_SEED})"
+            echo "## Catalog"
+            echo "- catalog levels in repo: ${LEVELS:-n/a} (check catalog step: ${S_CATALOG}; load catalog step: ${S_SEED})"
+            echo "- catalog notes in the database: before ${DB_BEFORE:-n/a}, after ${DB_AFTER:-n/a}; rows in the files: ${CAT_ROWS:-n/a}"
+            echo "- voiced catalog notes: before ${DB_VOICED_BEFORE:-n/a}, after ${DB_VOICED_AFTER:-n/a}"
+            echo "- catalog notes not found in the files: ${DB_LEFT:-n/a}"
+            if [ -n "$CAT_WARNING" ]; then echo; echo "WARNING: ${CAT_WARNING}"; fi
+            echo
+            echo "## catalog validation (first 10 of ${VALID_LINES} lines; check catalog step: ${S_CATALOG})"
             echo '```'
             echo "${VALID_OUT}"
             echo '```'

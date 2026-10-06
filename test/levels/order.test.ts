@@ -51,10 +51,25 @@ describe("guidedTseq", () => {
       if (before !== undefined) expect(v === before + 1 || (v % 1_000_000 === 1 && Math.floor(v / 1_000_000) > Math.floor(before / 1_000_000))).toBe(true);
     }
   });
-  it("the values expected above are those of version 1 of the rule: a change of them comes with a higher version", () => {
-    // The catalog seed stores the version with the hash of the catalog files (scripts/lib/catalog.ts `catalogDigest`), so
-    // that a new rule gives the catalog a new version and the learners' read positions are taken as reset.
-    expect(GUIDED_RULE_VERSION).toBe(1);
+  /*
+   * The rule and its version are held together here: the places below are what version 1 of the rule gives, written
+   * as plain numbers. EDITING A NUMBER BELOW MEANS RAISING `GUIDED_RULE_VERSION` in the same change. The catalog seed
+   * counts the version into the hash of the catalog (scripts/lib/catalog.ts `catalogDigest`); without a new version
+   * the catalog version in the database does not move, and learners keep read positions of the old order.
+   */
+  it("version 1 of the rule gives exactly these places", () => {
+    /** Two themed topics with basic words among them, and more basic words than themed ones. */
+    const mixed = [row(0, 1), row(1, 2), row(0, 3), row(2, 4), row(1, 5), row(0, 6), row(0, 7), row(0, 8)];
+    /** More themed words than basic ones, over three topics, given out of topic order. */
+    const themed = [row(5, 1), row(2, 2), row(0, 3), row(9, 4), row(2, 5)];
+    /** A level with no themed word. */
+    const basic = [row(0, 1), row(0, 2), row(0, 3)];
+    expect({ version: GUIDED_RULE_VERSION, mixed: guidedTseq(mixed), themed: guidedTseq(themed), basic: guidedTseq(basic) }).toEqual({
+      version: 1,
+      mixed: [1000002, 1000001, 1000004, 2000001, 1000003, 2000002, 2000003, 2000004],
+      themed: [5000001, 2000001, 2000002, 9000001, 2000003],
+      basic: [1, 2, 3],
+    });
   });
 });
 
