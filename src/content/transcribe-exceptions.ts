@@ -37,6 +37,21 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "һаман": "һа́ман",
   "быел": "бы́йыл",
 
+  // The demonstrative particles: stress on the first syllable.
+  "менә": "ме́нә",
+  "әнә": "ә́нә",
+
+  // The numerals 11–19: stress on «ун».
+  "унбер": "у́нбер",
+  "унике": "у́нике",
+  "унөч": "у́нөч",
+  "ундүрт": "у́ндүрт",
+  "унбиш": "у́нбиш",
+  "уналты": "у́налты",
+  "унҗиде": "у́нҗиде",
+  "унсигез": "у́нсигез",
+  "унтугыз": "у́нтугъыз",
+
   // The question particle -мы/-ме is unstressed: the stress stays before it. Kept as words, not as a
   // rule: the spelling cannot tell the particle from a stem or an ending (егерме, исеме, кеме).
   "исәнме": "исә́нме",
@@ -59,6 +74,8 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "кадер": "къәде́р",
   "канәгать": "къәнәгъә́т",
   "сәламәт": "сәләмә́т",
+  "сәламәтлек": "сәләмәтле́к",
+  "каһвә": "къәһwә́",
   "гаять": "гъәйә́т",
   "җинаять": "җинәйә́т",
   "кыяфәт": "къыйәфә́т",
@@ -68,6 +85,7 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "мөстәкыйль": "мөстәкъи́л",
   "кыйммәт": "къиммә́т",
   "гыйлем": "гъиле́м",
+  "гыйнвар": "гъинwа́р",
 
   // Arabic loans where о after [гъ] is read [ө].
   "гомер": "гъөме́р",
