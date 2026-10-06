@@ -2,9 +2,10 @@
  * Sources of new catalog words: candidates from the corpus lemma lists, example lookup in Tatoeba, and the list of
  * word forms the examples of the catalog use. Pure: no I/O; scripts/build-wordlist.ts reads and writes the files.
  */
+import { LEVELS } from "../../src/levels/scale";
 import { formStems, isAttested, tokenize, wordForm } from "./forms";
 import type { LemmaRow, SentencePair } from "./sources";
-import { dictionaryForm, verbInfinitive } from "./tatar-verbs";
+import { dictionaryForm, finiteForms, verbInfinitive } from "./tatar-verbs";
 
 /** Corpus list suffix (and Apertium tag) → project part-of-speech code. Lists that are not here are dropped whole. */
 export const POS_MAP: Readonly<Record<string, string>> = {
@@ -236,6 +237,38 @@ export function findExamples(
   }
   hits.sort((a, b) => a.rank - b.rank || a.words - b.words || a.tat.length - b.tat.length || a.tatId - b.tatId);
   return hits.slice(0, limit).map(({ tatId, tat, rus, form, unattested }) => ({ tatId, tat, rus, form, unattested }));
+}
+
+/**
+ * Finite form → the name of action of its verb, for the verbs of the corpus the candidates keep: the present of the
+ * third person and its negative (ошый, ошамый → ошау), where the corpus has the form among its word forms. A word
+ * list that prints a verb so is read back to the verb with it. A form of two verbs goes to the more frequent one.
+ */
+export function finiteVerbForms(lemmas: LemmaRow[], forms: ReadonlySet<string>): Map<string, string> {
+  const out = new Map<string, string>();
+  const verbs = lemmas.filter((l) => POS_MAP[l.pos] === "v" && dropReason(l.lemma, "v", forms) === null).sort(byCount);
+  for (const { lemma } of verbs) {
+    for (const form of finiteForms(lemma)) if (forms.has(form) && !out.has(form)) out.set(form, verbInfinitive(lemma));
+  }
+  return out;
+}
+
+/** Word → its place in the frequency list. */
+export const rankMap = (ranked: readonly RankedWord[]): Map<string, number> => new Map(ranked.map((w) => [w.word, w.rank]));
+
+/**
+ * The level a place in the frequency list of the corpus gives a word: 1–500 → A1, 501–1 350 → A2, 1 351–2 200 → B1,
+ * 2 201–3 000 → B2, 3 001–3 850 → C1 — the sizes of the levels, added up. Null for a place after the last band and
+ * for a word without a place.
+ */
+export function frequencyBand(rank: number | null): number | null {
+  if (rank === null || rank < 1) return null;
+  let last = 0;
+  for (const level of LEVELS) {
+    last += level.size;
+    if (rank <= last) return level.no;
+  }
+  return null;
 }
 
 /**

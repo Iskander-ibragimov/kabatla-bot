@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dictionaryForm, verbInfinitive, verbStems } from "../../scripts/lib/tatar-verbs";
+import { dictionaryForm, finiteForms, verbInfinitive, verbStems } from "../../scripts/lib/tatar-verbs";
 
 describe("verbInfinitive", () => {
   it.each([["бар", "бару"], ["кил", "килү"], ["аша", "ашау"], ["эшлә", "эшләү"], ["укы", "уку"], ["төзе", "төзү"], ["куй", "кую"], ["сөй", "сөю"], ["ки", "кию"]])(
@@ -52,5 +52,26 @@ describe("verbStems", () => {
 
   it("takes the last word of a compound verb", () => {
     expect(verbStems("ярдәм итү")).toEqual(["ит"]);
+  });
+});
+
+describe("finiteForms", () => {
+  it.each([
+    ["оша", "ошый", "ошамый"], ["эшлә", "эшли", "эшләми"], ["укы", "укый", "укымый"], ["эре", "эри", "эреми"], ["бар", "бара", "бармый"], ["кил", "килә", "килми"],
+    ["күрсәт", "күрсәтә", "күрсәтми"], ["ят", "ята", "ятмый"], ["ис", "исә", "исми"],
+  ])("the present of the third person and its negative: %s → %s, %s", (stem, present, negative) => expect(finiteForms(stem)).toEqual([present, negative]));
+
+  it.each([["чык", "чыга", "чыкмый"], ["тап", "таба", "тапмый"], ["түк", "түгә", "түкми"]])(
+    "voices a final к, п after a vowel in the present only: %s → %s, %s", (stem, present, negative) => expect(finiteForms(stem)).toEqual([present, negative]));
+
+  it.each([["яу", "ява", "яумый"], ["куй", "куя", "куймый"], ["сөй", "сөя", "сөйми"], ["ки", "кия", "кими"], ["ту", "туа", "тумый"], ["ю", "юа", "юмый"]])(
+    "stems in a vowel or a glide: %s → %s, %s", (stem, present, negative) => expect(finiteForms(stem)).toEqual([present, negative]));
+
+  it("changes the last word of a compound verb only", () => {
+    expect(finiteForms("ярдәм ит")).toEqual(["ярдәм итә", "ярдәм итми"]);
+  });
+
+  it("has nothing for an empty stem", () => {
+    expect(finiteForms("")).toEqual([]);
   });
 });

@@ -1,7 +1,8 @@
 /**
  * Files of the dictionary scripts: where they live and how they are read and written.
- * Node only (node:fs): the tests run in the Workers runtime and never import this module.
- * Paths are relative to the repository root, where the scripts are run from.
+ * Node only (node:fs). The tests run in the Workers runtime, which has a file system of its own under /tmp: there
+ * test/scripts/files.test.ts tries the functions that take a path or a folder; the files of the repository are not
+ * visible to it. Paths are relative to the repository root, where the scripts are run from.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -39,6 +40,9 @@ export const FILES = {
   kfuLists: `${KFU_DIR}/lists.json`,
   kfuPool: `${KFU_DIR}/pool.tsv`,
 } as const;
+
+/** What to do when a file of the branch `sources` is not there. */
+export const SOURCES_HINT = "распакуйте ветку sources в data/work/sources/";
 
 /** Where `candidates --level` writes the next words of a level: data/work/candidates-a1.tsv … candidates-c1.tsv. */
 export const levelCandidatesPath = (slug: string): string => `data/work/candidates-${slug}.tsv`;
@@ -113,6 +117,6 @@ export function readAttested(): Set<string> {
 
 /** Every word form of the corpus (count ≥ 3), lower-cased. */
 export function readWordforms(): Set<string> {
-  if (!existsSync(FILES.wordforms)) throw new Error(`нет файла ${FILES.wordforms} — распакуйте ветку sources в data/work/sources/`);
+  if (!existsSync(FILES.wordforms)) throw new Error(`нет файла ${FILES.wordforms} — ${SOURCES_HINT}`);
   return new Set(new TextDecoder().decode(gunzipSync(readFileSync(FILES.wordforms))).toLowerCase().split("\n").filter((form) => form !== ""));
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CATALOG_HEADER, type CatalogLevel, RENAMES_HEADER, TOPICS_HEADER, type Topic, catalogDigest, catalogKeys, catalogRenames, checkCatalog, checkMeta, checkRenames,
-  computedTranscription, coverageDrops, levelBySlug, parseCatalogLevel, parseTopics, validMeta, vanishedHeadwords,
+  computedTranscription, coverageDrops, headwordsSummary, levelBySlug, mergedRenames, parseCatalogLevel, parseTopics, validMeta, vanishedHeadwords,
 } from "../../scripts/lib/catalog";
 import { tokenize } from "../../scripts/lib/forms";
 import { toCsv } from "../../src/content/csv";
@@ -154,6 +154,25 @@ describe("checkCatalog", () => {
     expect(check(withRow(0, { transcription: first }))).toEqual([]);
     expect(check(withRow(0, { transcription: bare }))).toEqual([expect.stringMatching(/^a1:2 transcription «.*»: по правилу «/)]);
     expect(check(withRow(0, { transcription: `${first}\u0301` }))).toEqual([expect.stringMatching(/^a1:2 transcription /)]);
+  });
+
+  it("wants the stress mark after a vowel", () => {
+    const bare = transcribe(word(0)).replace("\u0301", "");
+    expect(check(withRow(0, { transcription: `${bare.slice(0, 1)}\u0301${bare.slice(1)}` }))).toEqual([expect.stringMatching(/^a1:2 transcription «.*»: по правилу «/)]);
+    expect(check(withRow(0, { transcription: `${bare}\u0301` }))).toEqual([expect.stringMatching(/^a1:2 transcription /)]);
+    expect(check(withRow(0, { transcription: `\u0301${bare}` }))).toEqual([expect.stringMatching(/^a1:2 transcription /)]);
+  });
+
+  it("counts the stress marks word by word: a mark may move inside its word, not to another word", () => {
+    // The phrase of the fixture is «зур <word>»: one vowel in the first word, so the rule marks only the second.
+    const phrase = a1()[1]!;
+    const [, second] = phrase.word!.split(" ");
+    const bare = transcribe(second!).replace("\u0301", "");
+    expect(phrase.transcription).toBe(`зур ${transcribe(second!)}`);
+    expect(check(withRow(1, { transcription: `зур ${bare.slice(0, 2)}\u0301${bare.slice(2)}` }))).toEqual([]);
+    expect(check(withRow(1, { transcription: `зу\u0301р ${bare}` }))).toEqual([expect.stringMatching(/^a1:3 transcription «.*»: по правилу «/)]);
+    expect(check(withRow(1, { transcription: `зу\u0301р ${transcribe(second!)}` }))).toEqual([expect.stringMatching(/^a1:3 transcription /)]);
+    expect(check(withRow(1, { transcription: `зур ${bare.slice(0, 2)}\u0301${bare.slice(2, 4)}\u0301${bare.slice(4)}` }))).toEqual([expect.stringMatching(/^a1:3 transcription /)]);
   });
 
   it("expects the transcription of a phrase without its final sign, and of any other row with every sign of the word", () => {
@@ -321,26 +340,52 @@ describe("vanishedHeadwords: a headword must not vanish", () => {
   const renames = (...lines: string[]) => ["level,old_word,new_word", ...lines].join("\n") + "\n";
 
   it("finds nothing when every word of before stands in the files, in whatever level, case or with whatever outer sign", () => {
-    expect(vanishedHeadwords([inA1, inB1, `${inA1.toUpperCase()}!`, ` ${word(3)} `], levels, "")).toEqual({ missing: [], merged: [] });
-    expect(vanishedHeadwords([], levels, renames())).toEqual({ missing: [], merged: [] });
+    expect(vanishedHeadwords([inA1, inB1, `${inA1.toUpperCase()}!`, ` ${word(3)} `], levels, "")).toEqual([]);
+    expect(vanishedHeadwords([], levels, renames())).toEqual([]);
   });
 
   it("names the words that are in no level file, each once, as they were given", () => {
-    expect(vanishedHeadwords([inA1, "Юкбар!", "икенче юк", "юкбар", ""], levels, "")).toEqual({ missing: ["Юкбар!", "икенче юк"], merged: [] });
+    expect(vanishedHeadwords([inA1, "Юкбар!", "икенче юк", "юкбар", ""], levels, "")).toEqual(["Юкбар!", "икенче юк"]);
   });
 
   it("takes a word that renames.csv renames for present", () => {
-    expect(vanishedHeadwords(["батим", "Юкбар!"], levels, renames(`1,Батим,${inA1}`))).toEqual({ missing: ["Юкбар!"], merged: [] });
-  });
-
-  it("refuses two old words renamed to one new word: two cards would become one", () => {
-    expect(vanishedHeadwords(["батим", "батым"], levels, renames(`1,батим,${inA1}`, `3,сатым,${inB1}`, `1,Батым,${inA1.toUpperCase()}`))).toEqual({
-      missing: [], merged: [`renames.csv:4 новое слово «${inA1.toUpperCase()}» уже получено из «батим» в строке 2: две карточки стали бы одной`],
-    });
+    expect(vanishedHeadwords(["батим", "Юкбар!"], levels, renames(`1,Батим,${inA1}`))).toEqual(["Юкбар!"]);
   });
 
   it("does not take a line that only changes the case or the outer sign of a word for a rename", () => {
-    expect(vanishedHeadwords([inA1], levels, renames(`1,батим,${inA1}`, `1,${inA1}!,${inA1}`)).merged).toEqual([]);
+    expect(vanishedHeadwords([`${inA1}!`, "батим"], levels, renames(`1,батим!,Батим`))).toEqual(["батим"]);
+  });
+});
+
+describe("mergedRenames: two old words may not become one new word", () => {
+  const renames = (...lines: string[]) => ["level,old_word,new_word", ...lines].join("\n") + "\n";
+
+  it("names the line that renames a second old word to the new word of an earlier line", () => {
+    expect(mergedRenames(renames("1,батим,базым", "3,сатым,казым", "1,Батым,БАЗЫМ!", "2,бетим,базым"))).toEqual([
+      "renames.csv:4 новое слово «БАЗЫМ!» уже получено из «батим» в строке 2: две карточки стали бы одной",
+      "renames.csv:5 новое слово «базым» уже получено из «батим» в строке 2: две карточки стали бы одной",
+    ]);
+  });
+
+  it("has nothing against one old word per new word, a line repeated, a change of case only, or an empty file", () => {
+    expect(mergedRenames(renames("1,батим,базым", "3,сатым,казым", "1,Батим!,базым", "1,базым!,Базым"))).toEqual([]);
+    expect(mergedRenames(renames())).toEqual([]);
+    expect(mergedRenames("")).toEqual([]);
+  });
+
+  it("is part of the check of renames.csv, so the plain check of the catalog refuses it", () => {
+    const levels = [level(1, a1()), level(3, next())];
+    expect(checkRenames(renames(`1,батим,${word(0)}`, `3,сатым,${word(600)}`, `1,батым,${word(0)}`), levels)).toEqual([
+      `renames.csv:4 новое слово «${word(0)}» уже получено из «батим» в строке 2: две карточки стали бы одной`,
+    ]);
+  });
+});
+
+describe("headwordsSummary", () => {
+  it("is the one line the deploy reads the result of the comparison from", () => {
+    expect(headwordsSummary(0, 0)).toBe("missing=0 merged=0");
+    expect(headwordsSummary(25, 1)).toBe("missing=25 merged=1");
+    expect(headwordsSummary(3, 12)).toMatch(/^missing=[0-9][0-9]* merged=[0-9][0-9]*$/);
   });
 });
 

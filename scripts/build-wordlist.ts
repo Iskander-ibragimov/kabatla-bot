@@ -11,17 +11,17 @@
 import { existsSync } from "node:fs";
 import { parseArgs } from "./lib/args";
 import { POS_CODES, catalogKeys, computedTranscription, levelBySlug } from "./lib/catalog";
-import { FILES, levelCandidatesPath, readCatalog, readKfuTexts, readLines, readText, readWordforms, writeText } from "./lib/files";
-import { buildPool, parseKfuLevel } from "./lib/kfu";
+import { FILES, SOURCES_HINT, levelCandidatesPath, readCatalog, readKfuTexts, readLines, readText, readWordforms, writeText } from "./lib/files";
+import { parseKfuLists } from "./lib/kfu";
+import { buildPool } from "./lib/kfu-pool";
 import { type CandidateSource, formatLevelCandidates, levelCandidates } from "./lib/level-candidates";
 import {
-  type Cognate, attestedForms, buildCandidates, exampleCounter, findExamples, formatCandidates, formatDroppedVerbs, lookupPos, parseDix, parseLemmas, parseTatoeba,
-  rankWords, verbInfinitives,
+  type Cognate, attestedForms, buildCandidates, exampleCounter, findExamples, finiteVerbForms, formatCandidates, formatDroppedVerbs, lookupPos, parseDix, parseLemmas,
+  parseTatoeba, rankMap, rankWords, verbInfinitives,
 } from "./lib/wordlist";
 
 const USAGE = "подкоманды: candidates [--level a1…c1] | examples <слово> [pos] [--min N] | transcribe <слово|фраза> [pos] | attest";
 const CANDIDATE_LIMIT = 3500;
-const SOURCES_HINT = "распакуйте ветку sources в data/work/sources/";
 const DIX_HINT = "скачайте apertium-tat-rus.tat-rus.dix в data/work/tat-rus.dix";
 
 /** data/work/cognates.json: the corpus total and the words set aside as known to a Russian speaker. */
@@ -63,10 +63,11 @@ function candidates(): void {
  */
 function candidatesOfLevel(slug: string): void {
   const level = levelBySlug(slug);
-  const ranked = rankWords(parseLemmas(readText(FILES.lemmas, SOURCES_HINT)), readWordforms());
+  const lemmas = parseLemmas(readText(FILES.lemmas, SOURCES_HINT));
+  const forms = readWordforms();
+  const ranked = rankWords(lemmas, forms);
   const catalog = catalogKeys(readCatalog());
-  const kfu = readKfuTexts().map(({ level: of, text }) => ({ level: of, topics: parseKfuLevel(text).topics }));
-  const pool = buildPool(kfu, { ranks: new Map(ranked.map((w) => [w.word, w.rank])), catalog });
+  const pool = buildPool(parseKfuLists(readKfuTexts()), { ranks: rankMap(ranked), finite: finiteVerbForms(lemmas, forms), catalog });
   const cognates = new Set((readCognates()?.cognates ?? []).map((c) => c.word));
   const list = levelCandidates(level, { pool, ranked, catalog: new Set(catalog.keys()), cognates, examples: exampleCounter(parseTatoeba(readText(FILES.tatoeba, SOURCES_HINT))) });
   const path = levelCandidatesPath(slug);
@@ -77,6 +78,7 @@ function candidatesOfLevel(slug: string): void {
   console.log(`  kfu (список КФУ этого уровня): ${of("kfu").length}, из них нет в частотном списке: ${of("kfu").filter((c) => c.rank === null).length}`);
   console.log(`  kfu-early (списки КФУ старших уровней, по частоте — этот уровень или младше): ${of("kfu-early").length}`);
   console.log(`  freq (частотная полоса уровня, в списках КФУ нет): ${of("freq").length}`);
+  console.log(`  freq-late (остаток младших частотных полос, в списках КФУ нет): ${of("freq-late").length}`);
   console.log(`  отложены как совпадающие с русским: ${list.filter((c) => c.cognate).length}; без предложений Tatoeba: ${list.filter((c) => c.tatoeba === 0).length}`);
 }
 

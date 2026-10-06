@@ -1,28 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { PoolEntry } from "../../scripts/lib/kfu";
-import { CANDIDATES_HEADER, formatLevelCandidates, frequencyBand, levelCandidates } from "../../scripts/lib/level-candidates";
+import type { PoolEntry } from "../../scripts/lib/kfu-pool";
+import { CANDIDATES_HEADER, formatLevelCandidates, levelCandidates } from "../../scripts/lib/level-candidates";
 import type { RankedWord } from "../../scripts/lib/wordlist";
 
-describe("frequencyBand", () => {
-  it("gives the level of a place in the frequency list: 1–500 A1, 501–1350 A2, 1351–2200 B1, 2201–3000 B2, 3001–3850 C1", () => {
-    expect([1, 500, 501, 1350, 1351, 2200, 2201, 3000, 3001, 3850].map(frequencyBand)).toEqual([1, 1, 2, 2, 3, 3, 4, 4, 5, 5]);
-  });
-
-  it("has no level for a place after the last band or for no place", () => {
-    expect(frequencyBand(3851)).toBeNull();
-    expect(frequencyBand(null)).toBeNull();
-    expect(frequencyBand(0)).toBeNull();
-  });
-});
-
 const entry = (over: Partial<PoolEntry> & { entry: string; level: string }): PoolEntry => ({
-  kfuTopic: "Танышу", topic: "greet", kind: "word", lemma: over.entry, rank: null, inCatalog: "", words: [], ...over,
+  kfuTopic: "Танышу", topic: "greet", kind: "word", lemma: over.entry, found: "", rank: null, inCatalog: "", words: [], ...over,
 });
 /** The corpus: `word` at place `rank`. Places 1–500 are the band of A1, 501–1350 of A2. */
 const ranked: RankedWord[] = [
   { word: "ул", pos: "pron", count: 900, rank: 1 }, { word: "алу", pos: "v", count: 800, rank: 2 }, { word: "район", pos: "n", count: 700, rank: 3 },
   { word: "белем", pos: "n", count: 600, rank: 4 }, { word: "өй", pos: "n", count: 500, rank: 5 }, { word: "эш", pos: "n", count: 400, rank: 6 },
-  { word: "яңгыр", pos: "n", count: 90, rank: 600 }, { word: "кояш", pos: "n", count: 80, rank: 700 }, { word: "табиб", pos: "n", count: 70, rank: 1400 },
+  { word: "китап", pos: "n", count: 300, rank: 7 }, { word: "елга", pos: "n", count: 95, rank: 550 }, { word: "яңгыр", pos: "n", count: 90, rank: 600 }, { word: "кояш", pos: "n", count: 80, rank: 700 }, { word: "табиб", pos: "n", count: 70, rank: 1400 },
   { word: "су", pos: "n", count: 60, rank: 5000 },
 ];
 const pool: PoolEntry[] = [
@@ -61,17 +49,32 @@ describe("levelCandidates", () => {
   });
 
   it("then lists the words of the frequency band of the level that stand in no KFU list, by frequency", () => {
-    expect(list(1).filter((c) => c.source === "freq").map((c) => [c.word, c.kfuTopic, c.topic])).toEqual([["ул", "", ""]]);
-    expect(list(2).filter((c) => c.source === "freq")).toEqual([]);
-    expect(list(1).map((c) => c.source)).toEqual(["kfu", "kfu", "kfu", "kfu", "kfu", "kfu", "kfu-early", "freq"]);
+    expect(list(1).filter((c) => c.source === "freq").map((c) => [c.word, c.kfuTopic, c.topic])).toEqual([["ул", "", ""], ["китап", "", ""]]);
+    expect(list(2).filter((c) => c.source === "freq").map((c) => c.word)).toEqual(["елга"]);
+    expect(list(1).map((c) => c.source)).toEqual(["kfu", "kfu", "kfu", "kfu", "kfu", "kfu", "kfu-early", "freq", "freq"]);
+  });
+
+  it("last, carries over the words of the lower bands that no KFU list has and the catalog still lacks (rule 4), by frequency", () => {
+    expect(list(1).filter((c) => c.source === "freq-late")).toEqual([]);
+    expect(list(2).filter((c) => c.source === "freq-late").map((c) => [c.word, c.rank, c.kfuTopic, c.topic])).toEqual([["ул", 1, "", ""], ["китап", 7, "", ""]]);
+    expect(list(3).filter((c) => c.source === "freq-late").map((c) => c.word)).toEqual(["ул", "китап", "елга"]);
+    expect(list(2).map((c) => [c.word, c.source])).toEqual([["эш", "kfu"], ["кояш", "kfu"], ["елга", "freq"], ["ул", "freq-late"], ["китап", "freq-late"]]);
+    // A word that was taken into the catalog is carried no further.
+    expect(list(2, ["ул"]).filter((c) => c.source === "freq-late").map((c) => c.word)).toEqual(["китап"]);
+  });
+
+  it("never carries a word of a KFU list over as a frequency word, and has nothing for a word after the last band", () => {
+    const all = [1, 2, 3, 4, 5].flatMap((level) => list(level));
+    expect(all.filter((c) => c.source.startsWith("freq")).map((c) => c.word).filter((word) => ["өй", "яңгыр", "белем", "алу", "район", "эш", "кояш", "табиб"].includes(word))).toEqual([]);
+    expect(all.map((c) => c.word)).not.toContain("су");
   });
 
   it("keeps the KFU words of the level whatever their frequency", () => {
-    expect(list(2).map((c) => [c.word, c.source])).toEqual([["эш", "kfu"], ["кояш", "kfu"]]);
+    expect(list(2).filter((c) => c.source === "kfu").map((c) => c.word)).toEqual(["эш", "кояш"]);
   });
 
   it("leaves out the words the catalog already holds, compared as the catalog compares words", () => {
-    expect(list(1, ["өй", "ул", "эш", "алу"]).map((c) => c.word)).toEqual(["яңгыр", "белем", "адреслау", "район"]);
+    expect(list(1, ["өй", "ул", "эш", "алу", "китап"]).map((c) => c.word)).toEqual(["яңгыр", "белем", "адреслау", "район"]);
   });
 
   it("gives every word its place and part of speech in the corpus, the look-alike mark and the number of example sentences", () => {
@@ -97,5 +100,6 @@ describe("levelCandidates", () => {
         "район\tkfu\tТанышу\tgreet\t3\tn\tyes\t5\n" +
         "ул\tfreq\t\t\t1\tpron\t\t2\n",
     );
+    expect(formatLevelCandidates(list(2).filter((c) => c.word === "ул"))).toBe("word\tsource\tkfu_topic\ttopic\trank\tpos\tcognate\ttatoeba\nул\tfreq-late\t\t\t1\tpron\t\t2\n");
   });
 });

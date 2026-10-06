@@ -10,10 +10,9 @@
 import { parseArgs } from "./lib/args";
 import { type LevelMeta, checkMeta, validMeta } from "./lib/catalog";
 import { coverage, formatMeta, lemmaCounts } from "./lib/coverage";
-import { FILES, readCatalog, readCatalogMeta, readText, readWordforms, writeText } from "./lib/files";
-import { type Cognate, parseLemmas, rankWords } from "./lib/wordlist";
+import { FILES, SOURCES_HINT, readCatalog, readCatalogMeta, readText, readWordforms, writeText } from "./lib/files";
+import { type Cognate, parseLemmas, rankMap, rankWords } from "./lib/wordlist";
 
-const SOURCES_HINT = "распакуйте ветку sources в data/work/sources/";
 const show = (meta: readonly LevelMeta[]): string => meta.map((m) => `уровень ${m.level} — ${m.coveragePct}%`).join(", ") || "—";
 
 function main(): number {
@@ -24,7 +23,7 @@ function main(): number {
   const lemmas = parseLemmas(readText(FILES.lemmas, SOURCES_HINT));
   const { cognates } = JSON.parse(readText(FILES.cognates, "его пишет build-wordlist.ts candidates")) as { cognates: Cognate[] };
   const computed = coverage(catalog.map((l) => ({ level: l.level, words: l.rows.map((row) => row.word ?? "") })), {
-    counts: lemmaCounts(lemmas), ranks: new Map(rankWords(lemmas, readWordforms()).map((w) => [w.word, w.rank])), cognates,
+    counts: lemmaCounts(lemmas), ranks: rankMap(rankWords(lemmas, readWordforms())), cognates,
     total: lemmas.reduce((sum, l) => sum + l.count, 0),
   });
   const stored = readCatalogMeta();

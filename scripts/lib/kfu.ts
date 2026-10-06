@@ -1,14 +1,12 @@
 /**
  * The word lists of the KFU specifications A1–C1 («Лексический минимум», spec §3.6): reading them from the text of a
- * specification, sorting their entries into words, phrases, names and free combinations, and joining the five levels
- * into one pool. Pure: no I/O; scripts/kfu-lists.ts reads and writes the files.
+ * specification. Pure: no I/O; scripts/kfu-lists.ts reads and writes the files, scripts/lib/kfu-pool.ts sorts the
+ * entries and joins the levels into one pool.
  *
  * The text is the one that keeps the layout of the pages (`s_<LEVEL>.layout.txt`): there a line of the word table is
  * a line of text and its columns stand apart by two spaces or more, so a heading and the words under it stay together.
  * The plain extraction of the same file tears the columns of a page apart and puts the right one under another heading.
  */
-import { wordKey } from "../../src/db/repo";
-import { verbInfinitive } from "./tatar-verbs";
 
 /**
  * The topics of the specifications → the topics of the catalog (spec §3.2), by level. A topic is named as the list
@@ -49,10 +47,15 @@ export function kfuTopicSlug(level: string, name: string): string {
   return slug;
 }
 
-/** One topic of a word list: its name in the list of topics, the heading printed over its words, and the entries in the order of the file. */
+/** One topic of a word list: its name in the list of topics, the heading printed over its words, and the entries in the printed order. */
 export interface KfuTopic { name: string; heading: string; entries: string[] }
+/**
+ * Lines of the text that were joined into one entry, in `parts`. `rule` says why: `brackets` and `margin` are the
+ * rules of `parseKfuLevel`, `correction` an entry of `KFU_CORRECTIONS`.
+ */
+export interface KfuJoin { topic: string; rule: "brackets" | "margin" | "correction"; parts: string[] }
 /** The word list of one specification. `missing` are the topics of the list of topics that have no heading over the words. */
-export interface KfuLevel { topics: KfuTopic[]; missing: string[] }
+export interface KfuLevel { topics: KfuTopic[]; missing: string[]; joins: KfuJoin[] }
 
 const TOPICS_START = "Основные темы";
 const SECTION_START = /^\s*7\.\s*ЛЕКСИКА\s*$/;
@@ -60,14 +63,15 @@ const SECTION_END = /^\s*\d+\.\s*Содержание отдельных час�
 /** A page number stands alone on its line. */
 const PAGE_NUMBER = /^\d+$/;
 const NUMBER = /^(\d+)\.\s*/;
+const PAGE_BREAK = "\f";
 
 /**
- * The lines of a text and the line the word section begins at. Page breaks are dropped; a glyph of a symbol font
- * (a private-use character: the bullet of a list) becomes a space, so that the columns stay where they are.
+ * The lines of a text and the line the word section begins at. A glyph of a symbol font (a private-use character:
+ * the bullet of a list) becomes a space, so that the columns stay where they are. A page break stays in its line.
  */
 function sectionOf(text: string): { lines: string[]; start: number } {
-  const lines = text.replace(/\f/g, "").replace(/[\uE000-\uF8FF]/g, " ").split(/\r?\n/);
-  const start = lines.findIndex((line) => SECTION_START.test(line));
+  const lines = text.replace(/[\uE000-\uF8FF]/g, " ").split(/\r?\n/);
+  const start = lines.findIndex((line) => SECTION_START.test(line.replaceAll(PAGE_BREAK, "")));
   if (start < 0) throw new Error("в тексте нет раздела «7. ЛЕКСИКА»");
   return { lines, start };
 }
@@ -79,9 +83,10 @@ function sectionOf(text: string): { lines: string[]; start: number } {
  */
 export function parseKfuTopicNames(text: string): string[] {
   const { lines, start } = sectionOf(text);
-  const from = lines.slice(0, start).map((line) => line.trim()).lastIndexOf(TOPICS_START);
+  const before = lines.slice(0, start).map((line) => line.replaceAll(PAGE_BREAK, "").trim());
+  const from = before.lastIndexOf(TOPICS_START);
   if (from < 0) throw new Error(`перед разделом «7. ЛЕКСИКА» нет списка «${TOPICS_START}»`);
-  const items = lines.slice(from + 1, start).map((line) => line.trim()).filter((line) => line !== "" && !PAGE_NUMBER.test(line));
+  const items = before.slice(from + 1).filter((line) => line !== "" && !PAGE_NUMBER.test(line));
   const numbered = items.some((item) => NUMBER.test(item));
   const topics: string[] = [];
   for (const item of items) {
@@ -91,22 +96,25 @@ export function parseKfuTopicNames(text: string): string[] {
   return topics.map((topic) => topic.split("/")[0]!.replace(/\s+/g, " ").trim()).filter((name) => name !== "");
 }
 
-/** A cell of a line of the word table: its text without the number, where it begins, and whether a number stands before it. */
-interface Cell { text: string; start: number; numbered: boolean }
+/** A cell of a line of the word table: its text without the number, where it begins and ends on the line, and the number that stands before it, if any. */
+interface Cell { text: string; start: number; end: number; number: number | null }
+/** A line of the word table. `newPage`: a page break stands between this line and the one before it. */
+interface Row { cells: Cell[]; newPage: boolean }
 
 /** The cells of a line: runs of words two spaces or more apart. A number that stands alone belongs to the cell after it. */
 function cellsOf(line: string): Cell[] {
   const cells: Cell[] = [];
-  /** The place of a number that waits for its text. */
-  let number: number | null = null;
+  /** A number that waits for its text, and its place. */
+  let waiting: { number: number; start: number } | null = null;
   for (const m of line.matchAll(/\S+(?: \S+)*/g)) {
     const text = m[0].replace(NUMBER, "");
-    const numbered = text !== m[0];
-    if (text === "") { number = m.index; continue; }
-    if (numbered) cells.push({ text, start: m.index, numbered });
-    else if (number !== null) cells.push({ text, start: number, numbered: true });
-    else cells.push({ text, start: m.index, numbered: false });
-    number = null;
+    const number = text === m[0] ? null : Number(NUMBER.exec(m[0])![1]);
+    const end = m.index + m[0].length;
+    if (text === "") { waiting = { number: number!, start: m.index }; continue; }
+    if (number !== null) cells.push({ text, start: m.index, end, number });
+    else if (waiting) cells.push({ text, start: waiting.start, end, number: waiting.number });
+    else cells.push({ text, start: m.index, end, number: null });
+    waiting = null;
   }
   return cells;
 }
@@ -114,6 +122,7 @@ function cellsOf(line: string): Cell[] {
 /** For comparing a heading with the name of a topic: no case, spaces or punctuation. */
 const squash = (text: string): string => text.toLowerCase().replace(/[\s.,/:«»"“”]+/g, "");
 const isUpper = (c: string | undefined): boolean => c !== undefined && c !== c.toLowerCase();
+const isLower = (c: string | undefined): boolean => c !== undefined && c !== c.toUpperCase();
 
 /** True if the cell is the heading of the topic: its name with a capital, alone («Йорт.Фатир») or with more after a sign («Шәһәр. Транспорт»). */
 function isHeading(cell: string, name: string): boolean {
@@ -121,34 +130,95 @@ function isHeading(cell: string, name: string): boolean {
   return squash(cell) === squash(name) || (cell.startsWith(name) && /^[^\p{L}\p{N}]/u.test(cell.slice(name.length)));
 }
 
-/** A continuation cell may begin this many characters to the left of the number of its column. */
+/** A cell of the right column may begin this many characters to the left of the place the column begins at. */
 const COLUMN_SLACK = 2;
+/** A cell that stands alone on its line is in the right column when it begins at least this far to the right of the leftmost cell of its page. */
+const COLUMN_GAP = 12;
 
 /**
- * The entries of the lines of one topic. Without numbers every cell is an entry. In a numbered list an entry begins
- * at a number, and a cell without one continues the entry of its column — the right column when the cell stands
- * after the second number of its line or at the place of the last right-hand number, the left one otherwise.
+ * The entries of a numbered list, in the order of their numbers — the printed order, whatever the columns. An entry
+ * begins at a number, and a cell without one continues the entry of its column: the right column when the cell
+ * stands after the second number of its line or at the place of the last right-hand number, the left one otherwise.
  */
-function entriesOf(rows: Cell[][]): string[] {
-  if (!rows.some((row) => row.some((cell) => cell.numbered))) return rows.flat().map((cell) => cell.text);
-  const out: string[] = [];
+function numberedEntries(rows: Row[]): string[] {
+  const out: { number: number; text: string }[] = [];
   let left = -1, right = -1, rightStart = Infinity;
-  for (const row of rows) {
+  for (const { cells } of rows) {
     let numbers = 0;
-    for (const cell of row) {
-      if (cell.numbered) {
-        out.push(cell.text);
+    for (const cell of cells) {
+      if (cell.number !== null) {
+        out.push({ number: cell.number, text: cell.text });
         if (numbers === 0) left = out.length - 1;
         else { right = out.length - 1; rightStart = cell.start; }
         numbers += 1;
         continue;
       }
       const at = numbers >= 2 || cell.start >= rightStart - COLUMN_SLACK ? right : left;
-      if (at < 0) out.push(cell.text);
-      else out[at] += ` ${cell.text}`;
+      if (at < 0) out.push({ number: Infinity, text: cell.text });
+      else out[at]!.text += ` ${cell.text}`;
     }
   }
-  return out;
+  // The sort is stable: entries with one number, and those without any, keep the order they were read in.
+  return out.sort((a, b) => a.number - b.number).map((entry) => entry.text);
+}
+
+/** The two columns of one page of a list; `right` is empty where the page has one column. */
+interface Page { left: Cell[]; right: Cell[] }
+
+/**
+ * The pages of a list without numbers, each cut into its columns. The printed order of such a list is page by page,
+ * the left column and then the right one (the lists are alphabetical down the left column of a page and on down its
+ * right column). The columns of a page stand at their own places, so each page is read by itself. The right column
+ * begins where the second cells of the lines begin; on a page whose lines hold one cell each, a cell is in the right
+ * column when it begins `COLUMN_GAP` to the right of the leftmost one.
+ */
+function pagesOf(rows: Row[]): Page[] {
+  const pages: Row[][] = [];
+  for (const row of rows) {
+    if (row.newPage || pages.length === 0) pages.push([]);
+    pages.at(-1)!.push(row);
+  }
+  return pages.map((page) => {
+    const cells = page.flatMap((row) => row.cells);
+    const leftmost = Math.min(...cells.map((cell) => cell.start));
+    const seconds = page.filter((row) => row.cells.length >= 2).map((row) => row.cells[1]!.start);
+    const rightStart = Math.min(...(seconds.length ? seconds : cells.map((cell) => cell.start).filter((start) => start >= leftmost + COLUMN_GAP)));
+    const inRight = (cell: Cell): boolean => cell.start >= rightStart - COLUMN_SLACK;
+    return { left: cells.filter((cell) => !inRight(cell)), right: cells.filter(inRight) };
+  });
+}
+
+/** A cell that is nothing but brackets: the abbreviation of the name above it, wrapped to its own line. */
+const BRACKETS_ONLY = /^\([^()]*\)$/;
+const firstLetter = (text: string): string | undefined => /\p{L}/u.exec(text)?.[0];
+
+/**
+ * The entries of one column, with the lines of a wrapped entry joined. Two rules, both about a name that did not fit
+ * into its cell:
+ *  - `brackets`: a cell that is nothing but brackets continues the entry above it;
+ *  - `margin`, only in a list printed in one column (`width` is the place its widest line ends at): a name — a line
+ *    of several words that begins with a capital — is continued by the next line when that begins with a small letter
+ *    and its first word would not have fit on the line above. A word that would have fit was not wrapped, so the
+ *    line is an entry of its own.
+ * A wrap that neither rule sees stays two entries; `KFU_CORRECTIONS` names the ones found by eye.
+ */
+function joinWrapped(column: Cell[], topic: string, width: number | null, joins: KfuJoin[]): string[] {
+  /** An entry being read: its text so far, its first line, where its last line ends, and the join it is part of. */
+  const out: { text: string; first: string; end: number; join: KfuJoin | null }[] = [];
+  for (const cell of column) {
+    const above = out.at(-1);
+    const fits = above !== undefined && width !== null && above.end + 1 + cell.text.split(" ")[0]!.length <= width;
+    const rule = !above ? null
+      : BRACKETS_ONLY.test(cell.text) ? "brackets"
+      : width !== null && !fits && above.first.includes(" ") && isUpper(firstLetter(above.first)) && isLower(firstLetter(cell.text)) ? "margin"
+      : null;
+    if (!above || rule === null) { out.push({ text: cell.text, first: cell.text, end: cell.end, join: null }); continue; }
+    if (!above.join) joins.push(above.join = { topic, rule, parts: [above.text] });
+    above.join.parts.push(cell.text);
+    above.text += ` ${cell.text}`;
+    above.end = cell.end;
+  }
+  return out.map((entry) => entry.text);
 }
 
 /**
@@ -158,179 +228,109 @@ function entriesOf(rows: Cell[][]): string[] {
  * but has no capital, are entries. The cells that share the line with a heading belong to its topic. A topic whose
  * heading is not printed has no list of its own — its words stand under the heading before — and is named in `missing`.
  * Lines before the first heading (the introduction) are left out, and so are page numbers.
+ * The entries of a topic come in the printed order: a numbered list by its numbers (`numberedEntries`), a list
+ * without numbers page by page, the left column before the right one (`pagesOf`). Lines of a wrapped entry are
+ * joined where a rule says so (`joinWrapped`), and every join is named in `joins` for the author to check.
  */
 export function parseKfuLevel(text: string): KfuLevel {
   const names = parseKfuTopicNames(text);
   const { lines, start } = sectionOf(text);
-  const end = lines.findIndex((line, i) => i > start && SECTION_END.test(line));
+  const end = lines.findIndex((line, i) => i > start && SECTION_END.test(line.replaceAll(PAGE_BREAK, "")));
   if (end < 0) throw new Error("у раздела «7. ЛЕКСИКА» нет конца: нет строки «8. Содержание отдельных частей …»");
-  const found: { name: string; heading: string; rows: Cell[][] }[] = [];
+  const found: { name: string; heading: string; rows: Row[] }[] = [];
   let last = -1;
+  /** A page break was passed since the last line of the table. */
+  let newPage = false;
   for (const line of lines.slice(start + 1, end)) {
-    const cells = cellsOf(line);
-    if (cells.length === 0 || (cells.length === 1 && PAGE_NUMBER.test(cells[0]!.text))) continue;
+    newPage ||= line.includes(PAGE_BREAK);
+    const cells = cellsOf(line.replaceAll(PAGE_BREAK, ""));
+    if (cells.length === 0 || (cells.length === 1 && cells[0]!.number === null && PAGE_NUMBER.test(cells[0]!.text))) continue;
     const head = cells[0]!.text;
     const at = names.findIndex((name, i) => i > last && isHeading(head, name));
     if (at >= 0) {
       last = at;
-      found.push({ name: names[at]!, heading: head, rows: [cells.slice(1)] });
-    } else found.at(-1)?.rows.push(cells);
+      found.push({ name: names[at]!, heading: head, rows: [{ cells: cells.slice(1), newPage: false }] });
+    } else found.at(-1)?.rows.push({ cells, newPage });
+    newPage = false;
   }
-  const topics = found.map(({ name, heading, rows }) => ({ name, heading, entries: entriesOf(rows) }));
-  return { topics, missing: names.filter((name) => !topics.some((t) => t.name === name)) };
+  const lists = found.map(({ name, heading, rows }) => {
+    const filled = rows.filter((row) => row.cells.length > 0);
+    const numbered = filled.some((row) => row.cells.some((cell) => cell.number !== null));
+    const pages = numbered ? [] : pagesOf(filled);
+    return { name, heading, rows: filled, numbered, pages, oneColumn: !numbered && pages.every((page) => page.right.length === 0) };
+  });
+  // The width of a list printed in one column: the place the widest line of such lists ends at.
+  const ends = lists.filter((list) => list.oneColumn).flatMap((list) => list.pages.flatMap((page) => page.left.map((cell) => cell.end)));
+  const width = ends.length ? Math.max(...ends) : null;
+  const joins: KfuJoin[] = [];
+  const topics = lists.map((list) => ({
+    name: list.name, heading: list.heading,
+    entries: list.numbered
+      ? numberedEntries(list.rows)
+      : list.pages.flatMap((page) => [page.left, page.right].flatMap((column) => joinWrapped(column, list.name, list.oneColumn ? width : null, joins))),
+  }));
+  return { topics, missing: names.filter((name) => !topics.some((t) => t.name === name)), joins };
 }
 
 /**
- * Letters of other alphabets that the lists print for Tatar ones, in both cases: U+04CA for ң (U+04A3), U+0473 for ө
- * (U+04E9). Spelled as escapes, so that no look-alike hides in the source.
+ * A place where the layout misleads the rules, found by eye: two entries, one after the other, that are one entry
+ * wrapped over two lines (`join`), or an entry that is printed outside its table (`move`, to the topic named, before
+ * the entry `before` or to the end).
  */
-const LOOKALIKES: Readonly<Record<string, string>> = { "\u04CA": "\u04A3", "\u04C9": "\u04A2", "\u0473": "\u04E9", "\u0472": "\u04E8" };
-const fixLookalikes = (text: string): string => text.replace(/[\u04C9\u04CA\u0472\u0473]/g, (c) => LOOKALIKES[c]!);
+export type KfuCorrection = { join: readonly [string, string] } | { move: string; to: string; before?: string };
 
 /**
- * What tells two entries of the lists apart: the letters, without case, the hyphen (сана-рга and санарга are one
- * entry), signs and repeated spaces. The pool holds an entry with a key once.
+ * The known corrections, by level. Both are in A2 «Татарстан халыклары» and «Табибта»:
+ *  - the name of an organisation stands in two cells of the right column, and both begin with a capital, so no rule
+ *    of `joinWrapped` sees the wrap;
+ *  - the first word of the right column of «Табигать һәм тирәлек» is printed one line above the heading of its
+ *    table, where the text gives it to the table before.
+ * A correction that no longer fits the text stops the reading (`parseKfuLists`): the files were fetched anew.
  */
-export const entryKey = (entry: string): string =>
-  fixLookalikes(entry).toLowerCase().replace(/-/g, "").replace(/[.,;:!?«»"“”„\u2013\u2014]+/g, "").replace(/\s+/g, " ").trim();
+export const KFU_CORRECTIONS: Readonly<Record<string, readonly KfuCorrection[]>> = {
+  a2: [
+    { join: ["Берләшкән Дәүләтләр", "Бердәмлеге (БДБ) илләре"] },
+    { move: "кадер-хөрмәт", to: "Табигать һәм тирәлек", before: "капка" },
+  ],
+};
 
-/** A1 prints a verb as its stem and the ending apart: сана-рга, тор-ырга, дус бул-ырга. */
-const STEM_AND_ENDING = /^(.+)-[ыеаәя]?рг[аә]$/;
+/** An entry that a correction moved: from the topic the text gives it to, to the one it belongs to. */
+export interface KfuMove { entry: string; from: string; to: string }
+/** The word list of one level, as read and corrected. */
+export type KfuList = KfuLevel & { level: string; moves: KfuMove[] };
 
-/**
- * The names of action in -у/-ү a form in -рга/-ргә may belong to: the lists give a verb in that
- * form, the catalog in the other. эшләргә is эшлә-ргә or эшл-әргә, so two stems are given, the one in a vowel first;
- * барырга, укырга give one form whichever way they are cut; җыярга, кияргә go back to җый, ки. A stem printed apart
- * (яз-арга) is taken as given. None for a word that is no such form.
- */
-export function infinitiveForms(token: string): string[] {
-  const apart = STEM_AND_ENDING.exec(token);
-  if (apart) return [verbInfinitive(apart[1]!)];
-  if (!/^[а-яёәөүҗңһ]{2,}рг[аә]$/.test(token)) return [];
-  const base = token.slice(0, -3);
-  const cut = base.slice(0, -1);
-  switch (base.at(-1)) {
-    case "а": case "ә": return [...new Set([verbInfinitive(base), verbInfinitive(cut)])];
-    case "ы": case "е": return [verbInfinitive(base)];
-    case "я": return [verbInfinitive(cut.endsWith("и") ? cut : `${cut}й`)];
-    default: return [];
-  }
-}
-
-/**
- * The form a token of the lists is looked up under: a stem printed apart gives its name of action; a word the corpus
- * knows stands as it is (карга is a noun); a form in -рга/-ргә gives the name of action the corpus knows — the stem
- * in a vowel when it knows both (ашарга is ашау before ашу). When it knows none the stem is guessed: in a vowel
- * after л or р, where -ла/-лә and -ра/-рә make verbs (зурла-рга, калтыра-рга), in a consonant otherwise (сүн-әргә).
- */
-function dictionaryFormOf(token: string, known: ReadonlySet<string>): string {
-  if (STEM_AND_ENDING.test(token)) return infinitiveForms(token)[0]!;
-  if (known.has(token)) return token;
-  const forms = infinitiveForms(token);
-  const guess = forms.length === 2 && !/[лр][аә]рг[аә]$/.test(token) ? forms[1] : forms[0];
-  return forms.find((form) => known.has(form)) ?? guess ?? token;
-}
-
-export type EntryKind = "word" | "phrase" | "name" | "combination";
-/**
- * An entry sorted. `lemma` is what the entry is looked up by in the corpus and in the catalog: a word or a combination
- * in lower case with its verb as a name of action, a phrase or a name as printed without its variant. `words` are the
- * words of a combination that the corpus knows, each once — the candidates for a card (spec §3.6: «белем алырга» → «белем»).
- */
-export interface EntryInfo { kind: EntryKind; lemma: string; words: string[] }
-
-/**
- * Fixed expressions the lists print without ! or ?: рәхим итегез, гафу итегез, сау бул…, таныш бул…, мин риза,
- * ал да гөл, and a question in -мыни/-мени (чынмыни). Matched against the main form in lower case.
- */
-const PHRASE_PATTERNS: readonly RegExp[] = [/^(рәхим|гафу) ит(егез)?$/, /^сау бул/, /^таныш бул/, /^мин риза$/, /^ал да гөл$/, /(мыни|мени)$/];
-/** A line of speech begins with a dash (U+2013, U+2014 or a hyphen); C1 prints some after a stray full stop. */
-const SPEECH = /^[.\s]*[\u2013\u2014-]\s+/;
-const OPENING_QUOTE = /^[«“„"]/;
-
-/** The entry without its variants: a bracket glued to a word marks optional letters (укучы(лар)), one that stands apart another wording. */
-function withoutBrackets(text: string): string {
-  const out = text.replace(/\s+\([^)]*\)/g, "").replace(/\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
-  // The whole entry stands in brackets, as an abbreviation is.
-  return out === "" ? text.replace(/[()]/g, "").trim() : out;
-}
-
-/**
- * Sorts an entry of the lists. The rules, in this order:
- *  1. `phrase` — a fixed expression that would be a card: the entry has ! or ?, is a line of speech (begins with a
- *     dash), or is one of `PHRASE_PATTERNS`. It is kept as printed, without the dash and the variant in brackets.
- *  2. `name` — the entry begins with a capital letter or an opening quotation mark: a town, a person, a title, an
- *     organisation. (A phrase begins with a capital too; that is why it is asked first.)
- *  3. `word` — one token is left once the variants are cut: what stands in brackets and after a slash or a comma
- *     (әни (әнкәй), гына/генә), and the final sign.
- *  4. `combination` — the rest: several tokens, a free combination. Its words that the corpus knows go to `words`.
- * `known` are the words of the corpus in dictionary form; without them the stem of a verb is guessed and a
- * combination no words. The sorting is by rule and so imperfect: a common word printed with a capital is a `name`.
- */
-export function classifyEntry(entry: string, known: ReadonlySet<string> = new Set()): EntryInfo {
-  const text = fixLookalikes(entry).replace(/\s+/g, " ").trim();
-  const speech = SPEECH.test(text);
-  const said = withoutBrackets(text.replace(SPEECH, "").replace(/^[.\s]+/, ""));
-  const main = said.split(/[/\\,]/)[0]!.replace(/[.,;:]+$/, "").trim();
-  if (speech || /[!?]/.test(text) || PHRASE_PATTERNS.some((pattern) => pattern.test(main.toLowerCase()))) return { kind: "phrase", lemma: said, words: [] };
-  if (OPENING_QUOTE.test(said) || isUpper(said.replace(/^[^\p{L}]+/u, "")[0])) return { kind: "name", lemma: said, words: [] };
-  const tokens = main.toLowerCase().split(" ");
-  const lemma = [...tokens.slice(0, -1), dictionaryFormOf(tokens.at(-1)!, known)].join(" ");
-  if (tokens.length === 1) return { kind: "word", lemma, words: [] };
-  return { kind: "combination", lemma, words: [...new Set(tokens.map((token) => dictionaryFormOf(token, known)).filter((word) => known.has(word)))] };
-}
-
-/** One line of the pool: an entry of the lists with the lowest level and the first topic it stands in. */
-export interface PoolEntry {
-  entry: string;
-  /** Slug of the level: a1 … c1. */
-  level: string;
-  /** The heading the entry stands under, as printed. */
-  kfuTopic: string;
-  /** Slug of the catalog topic the heading is mapped to. */
-  topic: string;
-  kind: EntryKind;
-  lemma: string;
-  /** Place of a `word` in the frequency list of the corpus, from 1; null for a word the corpus does not have and for the other kinds. */
-  rank: number | null;
-  /** Slug of the level file that already holds the entry, or empty. */
-  inCatalog: string;
-  words: string[];
-}
-
-/**
- * Joins the lists of the levels, lowest first, into the pool: every entry once (`entryKey`), with the level and the
- * topic of its first place. `ranks` gives the place of a word of the corpus in the frequency list, `catalog` the
- * level file a word key stands in. Throws on a topic that `KFU_TOPICS` does not map.
- */
-export function buildPool(
-  levels: readonly { level: string; topics: readonly KfuTopic[] }[], o: { ranks: ReadonlyMap<string, number>; catalog: ReadonlyMap<string, string> },
-): PoolEntry[] {
-  const known = new Set(o.ranks.keys());
-  const seen = new Set<string>();
-  const pool: PoolEntry[] = [];
-  for (const { level, topics } of levels) {
-    for (const { name, heading, entries } of topics) {
-      const topic = kfuTopicSlug(level, name);
-      for (const entry of entries) {
-        const key = entryKey(entry);
-        if (key === "" || seen.has(key)) continue;
-        seen.add(key);
-        const info = classifyEntry(entry, known);
-        pool.push({
-          entry, level, kfuTopic: heading, topic, ...info,
-          rank: info.kind === "word" ? o.ranks.get(info.lemma) ?? null : null, inCatalog: o.catalog.get(wordKey(info.lemma)) ?? "",
-        });
-      }
+/** Applies the corrections of a level to its list. Throws, naming the level and the entry, when one does not fit. */
+function corrected(level: string, list: KfuLevel, corrections: readonly KfuCorrection[]): KfuList {
+  const topics = list.topics.map((t) => ({ ...t, entries: [...t.entries] }));
+  const joins = [...list.joins];
+  const moves: KfuMove[] = [];
+  const fail = (what: string): never => { throw new Error(`исправление для ${level} не подходит к тексту: ${what} (KFU_CORRECTIONS в scripts/lib/kfu.ts)`); };
+  for (const c of corrections) {
+    if ("join" in c) {
+      const [first, second] = c.join;
+      const topic = topics.find((t) => t.entries.some((entry, i) => entry === first && t.entries[i + 1] === second));
+      if (!topic) { fail(`записи «${first}» и «${second}» не стоят подряд`); continue; }
+      topic.entries.splice(topic.entries.findIndex((entry, i) => entry === first && topic.entries[i + 1] === second), 2, `${first} ${second}`);
+      joins.push({ topic: topic.name, rule: "correction", parts: [first, second] });
+    } else {
+      const to = topics.find((t) => t.name === c.to);
+      const from = topics.find((t) => t !== to && t.entries.includes(c.move));
+      if (!to) { fail(`темы «${c.to}» нет`); continue; }
+      if (!from) { fail(`записи «${c.move}» нет вне темы «${c.to}»`); continue; }
+      const at = c.before === undefined ? to.entries.length : to.entries.indexOf(c.before);
+      if (at < 0) { fail(`в теме «${c.to}» нет записи «${c.before}»`); continue; }
+      from.entries.splice(from.entries.indexOf(c.move), 1);
+      to.entries.splice(at, 0, c.move);
+      moves.push({ entry: c.move, from: from.name, to: to.name });
     }
   }
-  return pool;
+  return { level, topics, missing: list.missing, joins, moves };
 }
 
-export const POOL_HEADER = ["entry", "level", "kfu_topic", "topic", "kind", "lemma", "rank", "in_catalog", "words"] as const;
-
-/** The pool as a table: tab-separated, a header, one line per entry. */
-export function formatPool(pool: readonly PoolEntry[]): string {
-  const lines = pool.map((p) => [p.entry, p.level, p.kfuTopic, p.topic, p.kind, p.lemma, p.rank ?? "", p.inCatalog, p.words.join(", ")].join("\t"));
-  return [POOL_HEADER.join("\t"), ...lines].join("\n") + "\n";
+/**
+ * Reads the word lists of the specifications given, lowest level first, and applies the known corrections
+ * (`KFU_CORRECTIONS`) to each. What was joined and moved is in `joins` and `moves` of every list.
+ */
+export function parseKfuLists(texts: readonly { level: string; text: string }[], corrections: Readonly<Record<string, readonly KfuCorrection[]>> = KFU_CORRECTIONS): KfuList[] {
+  return texts.map(({ level, text }) => corrected(level, parseKfuLevel(text), corrections[level] ?? []));
 }

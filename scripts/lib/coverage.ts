@@ -4,10 +4,9 @@
  */
 import { wordKey } from "../../src/db/repo";
 import type { LevelMeta } from "./catalog";
-import { frequencyBand } from "./level-candidates";
 import type { LemmaRow } from "./sources";
 import { dictionaryForm } from "./tatar-verbs";
-import { POS_MAP } from "./wordlist";
+import { POS_MAP, frequencyBand } from "./wordlist";
 
 /**
  * The tokens of the corpus by word: the counts of the rows of the tagged lemma lists, added up under the dictionary

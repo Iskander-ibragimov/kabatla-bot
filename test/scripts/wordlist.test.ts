@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  apertium, attestedForms, buildCandidates, exampleCounter, findExamples, formatCandidates, formatDroppedVerbs, lookupPos, parseDix, parseLemmas, parseTatoeba,
-  rankWords, verbInfinitives,
+  apertium, attestedForms, buildCandidates, exampleCounter, findExamples, finiteVerbForms, formatCandidates, formatDroppedVerbs, frequencyBand, lookupPos, parseDix,
+  parseLemmas, parseTatoeba, rankMap, rankWords, verbInfinitives,
 } from "../../scripts/lib/wordlist";
 
 const DIX = `<dictionary><section id="main" type="standard">
@@ -152,6 +152,39 @@ describe("rankWords", () => {
 
   it("gives words with one count their places in the order of the lists", () => {
     expect(rankWords(parseLemmas("5\tбу\tdet\n5\tаһ\tij\n9\tбер\tnum\n"), FORMS).map((w) => [w.rank, w.word])).toEqual([[1, "бер"], [2, "бу"], [3, "аһ"]]);
+  });
+});
+
+describe("finiteVerbForms", () => {
+  const forms = new Set([...FORMS, "бара", "бармый", "ала", "була", "кабула"]);
+  const finite = finiteVerbForms(parseLemmas(LEMMAS), forms);
+
+  it("leads the present of a corpus verb and its negative back to the name of action, where the corpus has the form", () => {
+    expect([...finite].sort()).toEqual([["ала", "алу"], ["бара", "бару"], ["бармый", "бару"], ["була", "булу"]]);
+  });
+
+  it("knows only the verbs the candidates keep", () => {
+    expect(finite.has("кабула")).toBe(false);
+  });
+});
+
+describe("rankMap", () => {
+  it("gives the place of every word of the frequency list", () => {
+    const ranks = rankMap(rankWords(parseLemmas(LEMMAS), FORMS));
+    expect([ranks.get("ул"), ranks.get("район"), ranks.get("бу"), ranks.get("юкбар")]).toEqual([1, 3, 16, undefined]);
+    expect(ranks.size).toBe(16);
+  });
+});
+
+describe("frequencyBand", () => {
+  it("gives the level of a place in the frequency list: 1–500 A1, 501–1350 A2, 1351–2200 B1, 2201–3000 B2, 3001–3850 C1", () => {
+    expect([1, 500, 501, 1350, 1351, 2200, 2201, 3000, 3001, 3850].map(frequencyBand)).toEqual([1, 1, 2, 2, 3, 3, 4, 4, 5, 5]);
+  });
+
+  it("has no level for a place after the last band or for no place", () => {
+    expect(frequencyBand(3851)).toBeNull();
+    expect(frequencyBand(null)).toBeNull();
+    expect(frequencyBand(0)).toBeNull();
   });
 });
 

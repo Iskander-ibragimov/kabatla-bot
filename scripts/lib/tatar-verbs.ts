@@ -61,3 +61,30 @@ export function verbStems(infinitive: string): string[] {
     default: return [base];
   }
 }
+
+/** The present of the third person of one word: аша → ашый, укы → укый, төзе → төзи, бар → бара, чык → чыга, яу → ява, куй → куя, ки → кия. */
+function presentOf(stem: string): string {
+  const last = stem.at(-1);
+  const before = stem.at(-2);
+  const cut = stem.slice(0, -1);
+  const a = endsBack(stem) ? "а" : "ә";
+  if (last === "а" || last === "ы") return `${cut}ый`;
+  if (last === "ә" || last === "е") return `${cut}и`;
+  if (last === "й") return `${cut}я`;
+  if (last === "и") return `${stem}я`;
+  if ((last === "у" || last === "ү") && isVowel(before)) return `${cut}в${a}`;
+  if ((last === "к" || last === "п") && isVowel(before)) return cut + (last === "к" ? "г" : "б") + a;
+  return stem + a;
+}
+
+/**
+ * Bare verb stem → the two finite forms a word list is likeliest to print instead of the infinitive: the present of
+ * the third person and its negative (оша → ошый, ошамый; күрсәт → күрсәтә, күрсәтми). In a compound verb only the
+ * last word changes. None for an empty stem.
+ */
+export function finiteForms(stem: string): string[] {
+  const words = stem.split(" ");
+  const last = words.pop() ?? "";
+  if (last === "") return [];
+  return [presentOf(last), last + (endsBack(last) ? "мый" : "ми")].map((form) => [...words, form].join(" "));
+}

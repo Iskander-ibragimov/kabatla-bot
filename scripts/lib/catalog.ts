@@ -5,7 +5,7 @@
  */
 import { createHash } from "node:crypto";
 import { type Rename, parseCsv } from "../../src/content/csv";
-import { isTatarText } from "../../src/content/tatar";
+import { isTatarText, isVowel } from "../../src/content/tatar";
 import { transcribe } from "../../src/content/transcribe";
 import { wordKey } from "../../src/db/repo";
 import { LEVELS } from "../../src/levels/scale";
@@ -38,13 +38,22 @@ export function computedTranscription(word: string, pos: string): string {
   return pos === "phr" ? computed.replace(FINAL_SIGNS, "") : computed;
 }
 
+/** What stands between the words of a transcription: anything but a letter, a combining mark (the stress) and the glottal stop. */
+const BETWEEN_WORDS = /[^\p{L}\p{M}\u02BC]+/u;
+const stressCount = (text: string): number => text.match(STRESS)?.length ?? 0;
+
 /**
  * True if a transcription is the computed one or differs from it only in where the stress stands. The rule puts the
  * stress on the last syllable, and the author moves it where the rule is wrong (ба́рлык, ке́регез, тата́рча — the
- * guide, rule 10), so the marks may stand elsewhere; their number must be the same: none dropped, none set twice.
+ * guide, rule 10). So a mark may stand on another vowel of its word, and that is all: every mark follows a vowel,
+ * and each word has as many marks as the rule gives it — none dropped, none set twice, none moved to another word.
  */
-const sameButStress = (given: string, computed: string): boolean =>
-  given.replace(STRESS, "") === computed.replace(STRESS, "") && (given.match(STRESS)?.length ?? 0) === (computed.match(STRESS)?.length ?? 0);
+function sameButStress(given: string, computed: string): boolean {
+  if (given.replace(STRESS, "") !== computed.replace(STRESS, "")) return false;
+  if ([...given].some((c, i, all) => c === "\u0301" && !isVowel(all[i - 1]))) return false;
+  const [words, expected] = [given.split(BETWEEN_WORDS), computed.split(BETWEEN_WORDS)];
+  return words.length === expected.length && words.every((word, i) => stressCount(word) === stressCount(expected[i]!));
+}
 
 /** The characters once each, as they are named in a violation. */
 const show = (chars: string[]): string => [...new Set(chars)].map((c) => JSON.stringify(c).slice(1, -1)).join("");
@@ -258,8 +267,9 @@ export function checkCatalog(levels: CatalogLevel[], o: CatalogCheck): string[] 
  * Checks data/renames.csv against the level files. A line says: the catalog word that was stored as `old_word` is now
  * `new_word`. The seed applies it to the whole catalog, whatever level the line names (`catalogRenames`), so the words
  * are looked for in every level file: the new word must stand in the catalog and the old one must no longer; an old
- * word is renamed once. `level` must be the number of a level, 1–5, that has a file. Words are compared by their keys,
- * like notes: a change of case or of the punctuation at the edges is not a rename, the seed updates such a word in place.
+ * word is renamed once, and two old words do not become one new word (`mergedRenames`). `level` must be the number of
+ * a level, 1–5, that has a file. Words are compared by their keys, like notes: a change of case or of the punctuation
+ * at the edges is not a rename, the seed updates such a word in place.
  * Returns the violations as `renames.csv:2 <what is wrong>`, the number being the line of the file. An empty text
  * (no file) and a file with the header only have none.
  */
@@ -295,48 +305,59 @@ export function checkRenames(text: string, levels: CatalogLevel[]): string[] {
     const still = words.get(oldKey);
     if (still !== undefined) errors.push(`${at} старое слово «${oldWord}» всё ещё стоит в ${still}`);
   });
-  return errors;
+  return [...errors, ...mergedRenames(text)];
 }
 
-/** What `vanishedHeadwords` found. */
-export interface Vanished {
-  /** The headwords that are neither in the level files nor an old word of data/renames.csv: each once, as given, in the order given. */
-  missing: string[];
-  /** The lines of data/renames.csv that rename a second old word to the new word of an earlier line, as `renames.csv:4 …`. */
-  merged: string[];
+/**
+ * The lines of data/renames.csv that rename a second old word to the new word of an earlier line, as
+ * `renames.csv:4 …`. The seed renames a note only while no note has the new key, so the card of the second old word
+ * would stay behind under its old word, outside the files. A line that changes only the case or the outer signs of a
+ * word is no rename and is not looked at. Part of `checkRenames`: it needs nothing but the file.
+ */
+export function mergedRenames(text: string): string[] {
+  const errors: string[] = [];
+  /** New word key → the old word that became it and the line that says so. */
+  const sources = new Map<string, { oldWord: string; oldKey: string; line: number }>();
+  parseCsv(text).forEach((r, i) => {
+    const [oldWord, newWord] = [(r.old_word ?? "").trim(), (r.new_word ?? "").trim()];
+    const [oldKey, newKey] = [wordKey(oldWord), wordKey(newWord)];
+    if (oldKey === "" || newKey === "" || oldKey === newKey) return;
+    const first = sources.get(newKey);
+    if (!first) sources.set(newKey, { oldWord, oldKey, line: i + 2 });
+    else if (first.oldKey !== oldKey) {
+      errors.push(`${RENAMES_FILE}:${i + 2} новое слово «${newWord}» уже получено из «${first.oldWord}» в строке ${first.line}: две карточки стали бы одной`);
+    }
+  });
+  return errors;
 }
 
 /**
  * A headword must not vanish: the seed never deletes a note, so a row that leaves the files — or a corrected word
  * without its line in data/renames.csv — leaves its card in the database, outside the files, for good. `before` are
  * the headwords that were there (the level files of an earlier commit, or the catalog notes of the database); each
- * must stand in the level files, in any level, or be an `old_word` of data/renames.csv. Two old words renamed to one
- * new word are refused as well: the seed renames a note only while no note has the new key, so the second card would
- * stay behind. Words are compared by their keys, like notes.
+ * must stand in the level files, in any level, or be an `old_word` of data/renames.csv. Returns the headwords that
+ * are neither: each once, as given, in the order given. Words are compared by their keys, like notes.
  */
-export function vanishedHeadwords(before: Iterable<string>, levels: CatalogLevel[], renames: string): Vanished {
+export function vanishedHeadwords(before: Iterable<string>, levels: CatalogLevel[], renames: string): string[] {
   const present = new Set(levels.flatMap((l) => l.rows.map((row) => wordKey(row.word ?? ""))));
-  const merged: string[] = [];
-  /** New word key → the old word that became it and the line that says so. */
-  const sources = new Map<string, { oldWord: string; oldKey: string; line: number }>();
-  parseCsv(renames).forEach((r, i) => {
-    const [oldWord, newWord] = [(r.old_word ?? "").trim(), (r.new_word ?? "").trim()];
-    const [oldKey, newKey] = [wordKey(oldWord), wordKey(newWord)];
-    if (oldKey === "" || newKey === "" || oldKey === newKey) return;
-    present.add(oldKey);
-    const first = sources.get(newKey);
-    if (!first) sources.set(newKey, { oldWord, oldKey, line: i + 2 });
-    else if (first.oldKey !== oldKey) {
-      merged.push(`${RENAMES_FILE}:${i + 2} новое слово «${newWord}» уже получено из «${first.oldWord}» в строке ${first.line}: две карточки стали бы одной`);
-    }
-  });
+  for (const r of parseCsv(renames)) {
+    const [oldKey, newKey] = [wordKey(r.old_word ?? ""), wordKey(r.new_word ?? "")];
+    if (oldKey !== "" && newKey !== "" && oldKey !== newKey) present.add(oldKey);
+  }
   const missing = new Map<string, string>();
   for (const given of before) {
     const key = wordKey(given);
     if (key !== "" && !present.has(key) && !missing.has(key)) missing.set(key, given.trim());
   }
-  return { missing: [...missing.values()], merged };
+  return [...missing.values()];
 }
+
+/**
+ * The result of comparing the headwords of the database with the files, as the one line the deploy reads:
+ * `missing=<headwords gone> merged=<renames that would make two cards one>`. The step of the workflow matches
+ * exactly this line, so its wording is fixed here and nowhere else.
+ */
+export const headwordsSummary = (missing: number, merged: number): string => `missing=${missing} merged=${merged}`;
 
 /**
  * sha256, in hex, of what the catalog in the database is made from: the version of the rule that orders the words of a

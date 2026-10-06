@@ -1,30 +1,20 @@
 /**
  * The next words for a level of the catalog (spec §3.6, rules 1–4): the words of the KFU list of the level, the very
- * frequent words of the higher KFU lists, and the words of the frequency band of the level that no KFU list has.
+ * frequent words of the higher KFU lists, the words of the frequency band of the level that no KFU list has, and
+ * what is left of the lower bands.
  * Pure: no I/O; scripts/build-wordlist.ts reads the sources and writes the table.
  */
 import { wordKey } from "../../src/db/repo";
 import { LEVELS } from "../../src/levels/scale";
-import { type PoolEntry, entryKey } from "./kfu";
-import type { RankedWord } from "./wordlist";
+import { type PoolEntry, entryKey } from "./kfu-pool";
+import { type RankedWord, frequencyBand } from "./wordlist";
 
 /**
- * The level a place in the frequency list of the corpus gives a word: 1–500 → A1, 501–1 350 → A2, 1 351–2 200 → B1,
- * 2 201–3 000 → B2, 3 001–3 850 → C1 — the sizes of the levels, added up. Null for a place after the last band and
- * for a word without a place.
+ * `kfu`: a word of the KFU list of the level; `kfu-early`: a word of a higher KFU list offered here for its frequency;
+ * `freq`: a word of the frequency band of the level that no KFU list has; `freq-late`: such a word of a lower band
+ * that the catalog still lacks.
  */
-export function frequencyBand(rank: number | null): number | null {
-  if (rank === null || rank < 1) return null;
-  let last = 0;
-  for (const level of LEVELS) {
-    last += level.size;
-    if (rank <= last) return level.no;
-  }
-  return null;
-}
-
-/** `kfu`: a word of the KFU list of the level; `kfu-early`: a word of a higher KFU list offered here for its frequency; `freq`: a word of the frequency band of the level that no KFU list has. */
-export type CandidateSource = "kfu" | "kfu-early" | "freq";
+export type CandidateSource = "kfu" | "kfu-early" | "freq" | "freq-late";
 export interface LevelCandidate {
   /** The word in dictionary form. */
   word: string;
@@ -53,8 +43,10 @@ const printedAsVerb = (p: PoolEntry): boolean => /рг[аә]$/.test(entryKey(p.e
  *  2. `kfu-early` — the words of the KFU lists of higher levels whose frequency band is this level or a lower one:
  *     a very frequent word does not wait for its KFU level (rule 3). By frequency.
  *  3. `freq` — the words of the frequency band of this level that stand in no KFU list (rule 2). By frequency.
+ *  4. `freq-late` — the words of the lower bands that stand in no KFU list and are still not in the catalog: what
+ *     did not fit into its own level moves on to the next (rule 4). By frequency, so the most frequent come first.
  * A word the catalog already holds, in any level, is left out; so the list of a level gets shorter as the level is
- * filled, and what is left of it when the level is full moves on by rule 4. `catalog` holds the word keys of the
+ * filled. `catalog` holds the word keys of the
  * catalog, `cognates` the words set aside as known to a Russian speaker — they are listed and marked, the author
  * decides — and `examples` counts the example sentences of a word.
  */
@@ -84,8 +76,10 @@ export function levelCandidates(level: number, o: {
   const early = o.ranked
     .filter((w) => (kfu.get(w.word)?.level ?? 0) > level && (frequencyBand(w.rank) ?? Infinity) <= level && fresh(w.word))
     .map((w) => candidate(w.word, "kfu-early"));
-  const frequent = o.ranked.filter((w) => !kfu.has(w.word) && frequencyBand(w.rank) === level && fresh(w.word)).map((w) => candidate(w.word, "freq"));
-  return [...ofList, ...early, ...frequent];
+  const frequent = o.ranked.filter((w) => !kfu.has(w.word) && fresh(w.word));
+  const ofBand = frequent.filter((w) => frequencyBand(w.rank) === level).map((w) => candidate(w.word, "freq"));
+  const late = frequent.filter((w) => (frequencyBand(w.rank) ?? Infinity) < level).map((w) => candidate(w.word, "freq-late"));
+  return [...ofList, ...early, ...ofBand, ...late];
 }
 
 export const CANDIDATES_HEADER = ["word", "source", "kfu_topic", "topic", "rank", "pos", "cognate", "tatoeba"] as const;
