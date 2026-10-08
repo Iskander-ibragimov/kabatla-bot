@@ -103,13 +103,17 @@ describe("relearning word", () => {
 
 describe("invariants", () => {
   it("reps grows, due is exactly now + interval, stability stays null, preview matches grade", () => {
-    for (let rung = 0; rung <= TOP; rung++) {
-      const m = at(rung);
+    const cards: Mem[] = [];
+    for (let rung = 0; rung <= TOP; rung++) cards.push(at(rung));
+    cards.push(at(1, { state: "relearning", step: 0 }), at(2, { state: "relearning", step: 1 }));
+    for (const m of cards) {
+      const rung = rungOf(m);
       const p = preview(m, NOW);
       for (const r of RATINGS) {
         const g = grade(m, r, NOW);
         expect(g.reps).toBe(m.reps + 1);
         expect(g.lastReview).toBe(NOW);
+        expect(g.lapses).toBe(r === 1 && m.state === "review" ? m.lapses + 1 : m.lapses);
         expect(g.stability).toBeNull();
         expect(g.difficulty).toBeNull();
         expect(g.due).toBe(p[r]);
@@ -131,6 +135,7 @@ describe("invariants", () => {
 describe("rungOf of cards from the old scheduler", () => {
   it.each([
     [0, 3], [2, 3], [3, 4], [8, 5], [11, 5], [46, 7], [200, 10],
+    [13, 5], [14, 6], [29, 6], [30, 7], [59, 7], [60, 8], [119, 8], [120, 9], [179, 9], [180, 10], [2.6, 3],
   ])("review with %i days is rung %i", (scheduledDays, rung) => {
     expect(rungOf(at(3, { scheduledDays }))).toBe(rung);
   });
@@ -138,6 +143,8 @@ describe("rungOf of cards from the old scheduler", () => {
     expect(rungOf(at(1, { step: null }))).toBe(1);
     expect(rungOf(at(2, { state: "relearning", step: 1 }))).toBe(2);
     expect(rungOf(at(1, { step: 5 }))).toBe(2);
+    expect(rungOf(at(1, { step: -1 }))).toBe(1);
+    expect(rungOf(at(2, { state: "relearning", step: -3 }))).toBe(1);
     expect(rungOf(newMem(NOW))).toBe(0);
   });
 });

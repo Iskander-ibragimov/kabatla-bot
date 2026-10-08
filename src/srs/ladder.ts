@@ -28,7 +28,7 @@ export const HARD_BOTTOM_MS = 5 * MIN;
 /** Rung 0…10 of a card, also for cards written by the old scheduler. */
 export function rungOf(m: Mem): number {
   if (m.state === "new") return 0;
-  if (m.state !== "review") return Math.min((m.step ?? 0) + 1, 2);
+  if (m.state !== "review") return Math.min(Math.max((m.step ?? 0) + 1, 1), 2);
   let rung = 3;
   for (let r = 4; r <= TOP; r++) if (RUNGS[r - 1]! / DAY <= m.scheduledDays) rung = r;
   return rung;
