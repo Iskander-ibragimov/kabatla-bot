@@ -1,12 +1,13 @@
 /**
  * Wraps a D1Database and sums the rows D1 reads (`meta.rows_read` of every statement), the unit of the free tier's
- * daily read limit. `calls` counts the calls that hit D1, as test/helpers/countingDb.ts does.
+ * daily read limit, and the rows it writes (`meta.rows_written`). `calls` counts the calls that hit D1, as
+ * test/helpers/countingDb.ts does.
  */
-export type ReadingDb = D1Database & { rowsRead: number; calls: number };
+export type ReadingDb = D1Database & { rowsRead: number; rowsWritten: number; calls: number };
 
 export function readingDb(db: D1Database): ReadingDb {
-  const state = { rowsRead: 0, calls: 0 };
-  const add = (meta: { rows_read?: number } | undefined) => { state.rowsRead += meta?.rows_read ?? 0; };
+  const state = { rowsRead: 0, rowsWritten: 0, calls: 0 };
+  const add = (meta: { rows_read?: number; rows_written?: number } | undefined) => { state.rowsRead += meta?.rows_read ?? 0; state.rowsWritten += meta?.rows_written ?? 0; };
   const wrapStmt = (s: D1PreparedStatement): D1PreparedStatement =>
     new Proxy(s, {
       get(target, prop, recv) {
@@ -29,6 +30,7 @@ export function readingDb(db: D1Database): ReadingDb {
   return new Proxy(db, {
     get(target, prop, recv) {
       if (prop === "rowsRead") return state.rowsRead;
+      if (prop === "rowsWritten") return state.rowsWritten;
       if (prop === "calls") return state.calls;
       if (prop === "prepare") return (sql: string) => wrapStmt(target.prepare(sql));
       if (prop === "batch")
@@ -42,6 +44,7 @@ export function readingDb(db: D1Database): ReadingDb {
     },
     set(_t, prop, value) {
       if (prop === "rowsRead") { state.rowsRead = value as number; return true; }
+      if (prop === "rowsWritten") { state.rowsWritten = value as number; return true; }
       if (prop === "calls") { state.calls = value as number; return true; }
       return false;
     },

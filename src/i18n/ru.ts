@@ -29,7 +29,8 @@ export const ru = {
   stageLearning: "🌿 Учу",
   stageKnown: "🌳 Знаю",
   stageLearned: "🏆 Выучено",
-  memory: (d: number) => `память ~${d} дн.`,
+  /** The rung of the ladder of intervals a word stands on, 1…10 (srs/ladder.ts). */
+  rung: (n: number) => `ступень ${n} из 10`,
   reviewNo: (n: number) => `повтор №${n}`,
   unitMin: "мин",
   unitHour: "ч",
@@ -73,7 +74,7 @@ export const ru = {
   levelWords: (n: number) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? "слово" : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "слова" : "слов"}`,
   /*
    * Hints: the first lines of a card or of the screen that ends a session, each shown once (tutorial/hints.ts).
-   * `interval`: the interval that stood on the pressed button, like "&lt;10м" or "8д".
+   * `interval`: the interval that stood on the pressed button, in the form after «через», like «1 минуту» or «10 минут».
    */
   hintFront: "Вспомните перевод, откройте скрытый текст и оцените себя.",
   hintAgain: (interval: string) => `„Снова“: слово вернётся через ${interval}, в этом же занятии, и будет приходить, пока не запомнится.`,
@@ -119,8 +120,6 @@ export const ru = {
     `📊 <b>Прогресс</b> · за всё время\n\n🎓 Уровни: ${s.levels}${s.coverage == null ? "" : ` · покрытие текста ≈${s.coverage}%`}\n🏆 Выучено: ${s.learned}\n🌳 Знаю: ${s.known}\n🌿 Учу: ${s.learning}\n🌱 Новых впереди: ${s.fresh}\n\n🧠 Сумма памяти: ${s.memory} дн.\n<i>сколько дней в сумме держатся все начатые слова</i>\n🔥 Серия: ${s.streak} дн.\n🔁 Повторов всего: ${s.total} · за 30 дн.: ${s.r30}\n🎯 Удержание за 30 дн.: ${s.retention}\n\n🗓 Прогноз на 7 дней: ${s.forecast}`,
   settingsTitle: "⚙️ <b>Настройки</b>\nНажмите на пункт, чтобы изменить.",
   setLang: "🌐 Язык: Русский",
-  /** The retention the scheduler aims at: the higher it is, the more reviews a day. */
-  setMode: (r: number) => `🎯 Нагрузка: ${r === 0.85 ? "Лёгкая" : r === 0.95 ? "Интенсивная" : "Оптимальная"} · ${Math.round(r * 100)}%`,
   setNew: (n: number) => `🆕 Новых в день: ${n}`,
   setRemind: (t: string) => `⏰ Напоминание: ${t}`,
   /** `tz`: the offset, like "UTC+3". */

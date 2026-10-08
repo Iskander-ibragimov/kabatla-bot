@@ -4,7 +4,7 @@ import type { Direction, DirectionSetting, Repo } from "../../src/db/repo";
 import { mergeStreams } from "../../src/levels/order";
 import { levelBit, levelsOf } from "../../src/levels/scale";
 import { ReviewService, directionsOf, newScopeOf } from "../../src/review/service";
-import { type Rating, newMem } from "../../src/srs/fsrs";
+import { type Rating, newMem } from "../../src/srs/ladder";
 import { dayWindow, localDay } from "../../src/users/service";
 import { bulkCatalog } from "../helpers/catalog";
 import { gradedMem } from "../helpers/review";
@@ -27,23 +27,41 @@ const seedWords = (o: { four?: boolean; a2?: boolean } = {}) => seedCatalog(env.
   ...(o.a2 ? ["су", "юл"].map((word) => ({ level: 2, word })) : []),
 ]);
 
+/*
+ * On the ladder a started word is back the next day at the earliest, and on a day when both a repetition and a new
+ * card wait they take turns. So the days of these learners are laid out with what is certain: a word left on a minute
+ * rung comes back before anything else, and a word graded «Легко» from the 10-minute rung is three days away.
+ */
 describe("both directions: a card that was hidden for a day is given later", () => {
+  /**
+   * Two days of a learner with both directions and the three words of A1, after which `soon` alone is due on day 3
+   * and no card has been asked Russian → Tatar. Day 1: the three words are graded «Хорошо» and stay on the 10-minute
+   * rung; their reverse cards are hidden until tomorrow. Day 2: the three come back first, and each repetition hides
+   * the reverse card of its word for the day again; `soon` goes to 1 day, the other two («Легко») to 3 days.
+   * `leaveAt`: the learner leaves when this word comes up.
+   */
+  async function twoDays(repo: Repo, userId: number, soon: string, leaveAt?: string) {
+    const leave = leaveAt === undefined ? {} : { leaveAt: (v: { word: string }) => v.word === leaveAt };
+    const first = await study(repo, userId, day(1), { rate: () => 3, waitForSteps: false, ...leave });
+    expect(cards(first)).toEqual(["китап tt_ru new", "вакыт tt_ru new", "авыл tt_ru new"]);
+    const second = await study(repo, userId, day(2), { rate: (v) => (v.word === soon ? 3 : 4), ...leave });
+    expect(cards(second)).toEqual(["китап tt_ru", "вакыт tt_ru", "авыл tt_ru"]);
+  }
+
   it("the reverse card of a word that was repeated on the day the rest of its level was asked in reverse comes the next day", async () => {
     await seedWords();
     const { repo, user } = await seedLearner(env.DB, { now, patch: { direction: "both" } });
-    // Day 1: «китап» is graded «Снова» and then learned, the other two «Легко». The reverse cards are hidden until tomorrow.
-    const first = await study(repo, user.id, day(1), { rate: (v, nth) => (v.word === "китап" ? (nth === 0 ? 1 : 3) : 4) });
-    expect(cards(first)).toEqual(["китап tt_ru new", "вакыт tt_ru new", "авыл tt_ru new", "китап tt_ru", "китап tt_ru"]);
-    // Three days away. Day 5: the repetition of «китап» comes first and hides its reverse card for the day;
+    await twoDays(repo, user.id, "китап");
+    // Day 3: the repetition of «китап» comes first and hides its reverse card for the day;
     // the reverse cards of the other two words are given, the last word of the level among them.
     await repo.updateUser(user.id, { mixCounter: 0 });
-    const fifth = await study(repo, user.id, day(5), { rate: () => 3 });
-    expect(cards(fifth).slice(0, 3)).toEqual(["китап tt_ru", "вакыт ru_tt new", "авыл ru_tt new"]);
-    expect(fresh(fifth)).toEqual(["вакыт ru_tt", "авыл ru_tt"]);
-    // Day 6: «китап» Russian → Tatar is the first card. It was never asked in that direction.
+    const third = await study(repo, user.id, day(3), { rate: () => 3 });
+    expect(cards(third).slice(0, 3)).toEqual(["китап tt_ru", "вакыт ru_tt new", "авыл ru_tt new"]);
+    expect(fresh(third)).toEqual(["вакыт ru_tt", "авыл ru_tt"]);
+    // Day 4: «китап» Russian → Tatar comes. It was never asked in that direction.
     const later: string[] = [];
-    for (let d = 6; d <= 17; d++) later.push(...fresh(await study(repo, user.id, day(d), { rate: () => 3 })).map((c) => `day ${d}: ${c}`));
-    expect(later).toEqual(["day 6: китап ru_tt"]);
+    for (let d = 4; d <= 15; d++) later.push(...fresh(await study(repo, user.id, day(d), { rate: () => 3 })).map((c) => `day ${d}: ${c}`));
+    expect(later).toEqual(["day 4: китап ru_tt"]);
     const asked = await env.DB.prepare("SELECT COUNT(*) AS n FROM review_log WHERE user_id = ? AND was_new = 1").bind(user.id).first<{ n: number }>();
     expect(asked!.n).toBe(6);
   });
@@ -51,55 +69,58 @@ describe("both directions: a card that was hidden for a day is given later", () 
   it("the reverse cards the started words have for today come before the words of the next checked level; a card hidden for today does not hold that level back", async () => {
     await seedWords({ a2: true });
     const { repo, user } = await seedLearner(env.DB, { now, patch: { direction: "both", levels: levelBit(1) | levelBit(2) } });
-    // Day 1: every word of A1 is asked Tatar → Russian. The reverse cards are hidden until tomorrow, A1 has nothing
-    // more for today, so A2 goes on the same day; the learner leaves at its first word, which has been shown.
-    // «авыл», the last word of A1, was graded «Хорошо» and is still on a learning step.
-    const first = await study(repo, user.id, day(1), { rate: (v) => (v.word === "авыл" ? 3 : 4), leaveAt: (v) => v.word === "су" });
-    expect(cards(first)).toEqual(["китап tt_ru new", "вакыт tt_ru new", "авыл tt_ru new"]);
-    // Day 2: «авыл» is repeated first, which hides its reverse card for the day. A1 still has two reverse cards for
+    // Days 1 and 2: every word of A1 is asked Tatar → Russian and repeated. Its reverse cards are hidden until tomorrow,
+    // A1 has nothing more for the day, so A2 goes on the same day; the learner leaves at its first word, which has been shown.
+    await twoDays(repo, user.id, "авыл", "су");
+    // Day 3: «авыл» is repeated first, which hides its reverse card for the day. A1 still has two reverse cards for
     // today: they come before the words of A2. Then A2 goes on — the hidden card of «авыл» does not stop it.
-    const second = await study(repo, user.id, day(2), { rate: () => 4 });
-    expect(cards(second)).toEqual(["авыл tt_ru", "китап ru_tt new", "вакыт ru_tt new", "су tt_ru new", "юл tt_ru new"]);
-    // Day 3: the card that was hidden comes first, before the reverse cards of A2.
-    expect(cards(await study(repo, user.id, day(3), { rate: () => 4 }))).toEqual(["авыл ru_tt new", "су ru_tt new", "юл ru_tt new"]);
-    expect(cards(await study(repo, user.id, day(4), { rate: () => 4 }))).toEqual([]);
+    const third = await study(repo, user.id, day(3), { rate: () => 4 });
+    expect(cards(third)).toEqual(["авыл tt_ru", "китап ru_tt new", "вакыт ru_tt new", "су tt_ru new", "юл tt_ru new"]);
+    // Day 4: the card that was hidden is the first card, before the reverse cards of A2; the cards asked yesterday
+    // are repeated in turn with the new ones.
+    const fourth = await study(repo, user.id, day(4), { rate: () => 4 });
+    expect(cards(fourth)).toEqual(["авыл ru_tt new", "китап ru_tt", "су ru_tt new", "вакыт ru_tt", "юл ru_tt new"]);
+    // No new card is left: every word has both its cards started.
+    for (const d of [5, 6, 7]) expect(fresh(await study(repo, user.id, day(d), { rate: () => 4 })), `day ${d}`).toEqual([]);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM cards WHERE user_id = ? AND state = 'new'").bind(user.id).first()).toEqual({ n: 0 });
     expect((await repo.getUser(user.id))!.levels).toBe(levelBit(1) | levelBit(2));
   });
 
   it("a level checked on a later day: the reverse cards the started words have for today come first, then its words", async () => {
     await seedWords({ a2: true });
     const { repo, user } = await seedLearner(env.DB, { now, patch: { direction: "both" } });
-    // Day 1, A1 alone: the three words are asked Tatar → Russian; «авыл» stays on a learning step. No word of A2 comes.
-    const first = await study(repo, user.id, day(1), { rate: (v) => (v.word === "авыл" ? 3 : 4), waitForSteps: false });
-    expect(cards(first)).toEqual(["китап tt_ru new", "вакыт tt_ru new", "авыл tt_ru new"]);
+    // Days 1 and 2, A1 alone: the three words are asked Tatar → Russian and repeated. No word of A2 comes.
+    await twoDays(repo, user.id, "авыл");
     await repo.updateUser(user.id, { levels: levelBit(1) | levelBit(2) });
-    const second = await study(repo, user.id, day(2), { rate: () => 4 });
-    expect(cards(second)).toEqual(["авыл tt_ru", "китап ru_tt new", "вакыт ru_tt new", "су tt_ru new", "юл tt_ru new"]);
+    const third = await study(repo, user.id, day(3), { rate: () => 4 });
+    expect(cards(third)).toEqual(["авыл tt_ru", "китап ru_tt new", "вакыт ru_tt new", "су tt_ru new", "юл tt_ru new"]);
   });
 
   it("after a switch from one direction to both, the other direction of every word already learned is asked, a word repeated that day included", async () => {
     await seedWords({ four: true });
     const { repo, user } = await seedLearner(env.DB, { now }); // Tatar → Russian only
-    // Day 1: the four words are learned in one direction; «вакыт» is left on a learning step.
-    const first = await study(repo, user.id, day(1), { rate: (v) => (v.word === "вакыт" ? 3 : 4), waitForSteps: false });
+    // Days 1 and 2: the four words are learned in one direction. «вакыт» is due again on day 3, the other three («Легко») on day 5.
+    const first = await study(repo, user.id, day(1), { rate: () => 3, waitForSteps: false });
     expect(cards(first)).toEqual(["китап tt_ru new", "вакыт tt_ru new", "авыл tt_ru new", "су tt_ru new"]);
+    expect(cards(await study(repo, user.id, day(2), { rate: (v) => (v.word === "вакыт" ? 3 : 4) }))).toEqual(["китап tt_ru", "вакыт tt_ru", "авыл tt_ru", "су tt_ru"]);
     await repo.updateUser(user.id, { direction: "both" });
     // Day 3: «вакыт» is repeated first and its reverse card is hidden for the day; the other three are asked in reverse.
     expect(cards(await study(repo, user.id, day(3), { rate: () => 4 }))).toEqual(["вакыт tt_ru", "китап ru_tt new", "авыл ru_tt new", "су ru_tt new"]);
-    // Day 4: the reverse card of «вакыт».
-    expect(cards(await study(repo, user.id, day(4), { rate: () => 4 }))).toEqual(["вакыт ru_tt new"]);
-    expect(cards(await study(repo, user.id, day(5), { rate: () => 4 }))).toEqual([]);
+    // Day 4: the reverse card of «вакыт», in turn with the repetitions of the three asked yesterday.
+    expect(cards(await study(repo, user.id, day(4), { rate: () => 4 }))).toEqual(["китап ru_tt", "вакыт ru_tt new", "авыл ru_tt", "су ru_tt"]);
+    for (const d of [5, 6, 7]) expect(fresh(await study(repo, user.id, day(d), { rate: () => 4 })), `day ${d}`).toEqual([]);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM cards WHERE user_id = ? AND state != 'new'").bind(user.id).first()).toEqual({ n: 8 });
   });
 
   it("after a switch from both directions to one, a card of that direction that was hidden earlier is still asked", async () => {
     await seedWords();
     const { repo, user } = await seedLearner(env.DB, { now, patch: { direction: "both" } });
-    await study(repo, user.id, day(1), { rate: (v, nth) => (v.word === "китап" ? (nth === 0 ? 1 : 3) : 4) });
+    await twoDays(repo, user.id, "китап");
     await repo.updateUser(user.id, { mixCounter: 0 });
-    expect(fresh(await study(repo, user.id, day(5), { rate: () => 3 }))).toEqual(["вакыт ru_tt", "авыл ru_tt"]);
+    expect(fresh(await study(repo, user.id, day(3), { rate: () => 3 }))).toEqual(["вакыт ru_tt", "авыл ru_tt"]);
     // The learner now asks for Russian → Tatar only. «китап» was never asked that way.
     await repo.updateUser(user.id, { direction: "ru_tt" });
-    expect(fresh(await study(repo, user.id, day(6), { rate: () => 3 }))).toEqual(["китап ru_tt"]);
+    expect(fresh(await study(repo, user.id, day(4), { rate: () => 3 }))).toEqual(["китап ru_tt"]);
   });
 
   it("a word whose grade was taken back and that was left for later is asked the next day, whatever came after it", async () => {
@@ -113,8 +134,12 @@ describe("both directions: a card that was hidden for a day is given later", () 
     await svc.grade(user, s.view.cardId, s.view.reps, 4);
     await svc.undo((await repo.getUser(user.id))!);
     expect(fresh(await study(repo, user.id, day(1) + 60_000, { rate: () => 4 }))).toEqual(["вакыт tt_ru", "авыл tt_ru"]);
-    expect(fresh(await study(repo, user.id, day(2), { rate: () => 4 }))).toEqual(["китап tt_ru", "вакыт ru_tt", "авыл ru_tt"]);
-    expect(fresh(await study(repo, user.id, day(3), { rate: () => 4 }))).toEqual(["китап ru_tt"]);
+    // Day 2: «китап» comes, Tatar → Russian. The two words of yesterday are due again and take turns with the new cards:
+    // «вакыт» is repeated, which hides its reverse card; the reverse card of «авыл» is asked, which hides its repetition.
+    expect(cards(await study(repo, user.id, day(2), { rate: () => 4 }))).toEqual(["китап tt_ru new", "вакыт tt_ru", "авыл ru_tt new"]);
+    // Day 3: the reverse card of «китап», and the one of «вакыт» that was hidden.
+    expect(fresh(await study(repo, user.id, day(3), { rate: () => 4 }))).toEqual(["китап ru_tt", "вакыт ru_tt"]);
+    for (const d of [4, 5]) expect(fresh(await study(repo, user.id, day(d), { rate: () => 4 })), `day ${d}`).toEqual([]);
   });
 });
 

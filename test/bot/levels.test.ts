@@ -5,7 +5,7 @@ import { Repo } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
 import type { Hub, LevelLine, TopicLine } from "../../src/levels/service";
-import { newMem } from "../../src/srs/fsrs";
+import { newMem } from "../../src/srs/ladder";
 import { easyButton, harness } from "../helpers/botHarness";
 import { countingDb } from "../helpers/countingDb";
 import { gradedMem } from "../helpers/review";

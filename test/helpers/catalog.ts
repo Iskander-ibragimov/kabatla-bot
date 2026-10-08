@@ -1,7 +1,7 @@
 import { type Direction, Repo } from "../../src/db/repo";
 import { guidedTseq } from "../../src/levels/order";
 import { LEVELS } from "../../src/levels/scale";
-import type { Mem } from "../../src/srs/fsrs";
+import type { Mem } from "../../src/srs/ladder";
 
 /** A catalog note with its places: `seq` in the order of its level, `tseq` in the guided order of the level. */
 export interface CatalogNote { id: number; level: number; topicNo: number; seq: number; tseq: number; pos: string; word: string }

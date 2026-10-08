@@ -17,7 +17,7 @@ type Markup = { inline_keyboard?: { text: string; callback_data: string }[][] };
 const buttons = (m: Markup) => (m.inline_keyboard ?? []).flat().map((b) => [b.text, b.callback_data]);
 
 const SETTINGS_RU = [
-  ["🌐 Язык: Русский", "set:lang"], ["🎯 Нагрузка: Оптимальная · 90%", "set:ret"], ["🆕 Новых в день: 10", "set:new"], ["⏰ Напоминание: 09:00", "set:rem"],
+  ["🌐 Язык: Русский", "set:lang"], ["🆕 Новых в день: 10", "set:new"], ["⏰ Напоминание: 09:00", "set:rem"],
   ["🕒 Часовой пояс: UTC+3", "set:tz"], ["↔️ Направление: татарский → русский", "set:dir"], ["🔊 Автоозвучка: выкл", "set:auto"], ["📚 Уровни, темы, порядок слов", "set:hub"],
   ["🎓 Показать обучение заново", "set:tut"],
 ];
@@ -44,7 +44,7 @@ async function session() {
 }
 
 describe("/settings", () => {
-  it("lists the settings with the time zone and the row that opens the levels; «Режим» is «Нагрузка»", async () => {
+  it("lists the settings with the time zone and the row that opens the levels; there is no row «Нагрузка»", async () => {
     const s = await session();
     const u = await s.text("/settings");
     expect(s.h.lastText()).toBe(ru.settingsTitle);
@@ -57,10 +57,9 @@ describe("/settings", () => {
   it("is in Tatar for a tt user", () => {
     const user = { lang: "tt", retention: 0.9, newPerDay: 10, remindAt: "09:00", tzOffsetMin: 300, direction: "ru_tt", autoplay: false } as User;
     expect(renderSettings(user).keyboard.flat().map((b) => b.text)).toEqual([
-      "🌐 Тел: Татарча", "🎯 Йөкләнеш: Оптималь · 90%", "🆕 Көненә яңа сүзләр: 10", "⏰ Искә төшерү: 09:00",
+      "🌐 Тел: Татарча", "🆕 Көненә яңа сүзләр: 10", "⏰ Искә төшерү: 09:00",
       "🕒 Сәгать поясы: UTC+5", "↔️ Юнәлеш: русча → татарча", "🔊 Автомат тавыш: сүндерелгән", "📚 Дәрәҗәләр, темалар, сүзләр тәртибе", "🎓 Өйрәтүне яңадан күрсәтү",
     ]);
-    expect([0.85, 0.9, 0.95].map((r) => ru.setMode(r))).toEqual(["🎯 Нагрузка: Лёгкая · 85%", "🎯 Нагрузка: Оптимальная · 90%", "🎯 Нагрузка: Интенсивная · 95%"]);
   });
 
   it("«Часовой пояс» opens the zones UTC+2 … UTC+12 in the same message, each with the time it is there now and the learner's own marked", async () => {
@@ -113,7 +112,7 @@ describe("/settings", () => {
 
   it("a learner whose zone is not a whole hour between UTC+2 and UTC+12 sees it named in the settings and no zone marked", () => {
     const user = { lang: "ru", retention: 0.9, newPerDay: 10, remindAt: "09:00", tzOffsetMin: 330, direction: "tt_ru", autoplay: false } as User;
-    expect(renderSettings(user).keyboard.flat().map((b) => b.text)[4]).toBe("🕒 Часовой пояс: UTC+5:30");
+    expect(renderSettings(user).keyboard.flat().filter((b) => b.callback_data === "set:tz").map((b) => b.text)).toEqual(["🕒 Часовой пояс: UTC+5:30"]);
     const zones = renderTimeZones(T + 35 * 60_000, 330, "tt");
     expect(zones.text).toBe(tt.tzText);
     expect(zones.keyboard.flat().map((b) => b.text)).toEqual([

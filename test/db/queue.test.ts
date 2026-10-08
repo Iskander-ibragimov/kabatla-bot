@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { type DayWindow, type Direction, type NewScope, type Queue, Repo } from "../../src/db/repo";
 import { STREAM_LIMIT, mergeStreams, nextSpans } from "../../src/levels/order";
-import { newMem } from "../../src/srs/fsrs";
+import { newMem } from "../../src/srs/ladder";
 import { dayWindow } from "../../src/users/service";
 import { countingDb } from "../helpers/countingDb";
 import { readingDb } from "../helpers/readingDb";
@@ -415,8 +415,8 @@ describe("repo.queue: cards that exist", () => {
   it("`learning` and `review` hold every card of the learner in the asked directions, a card of an unchecked level included", async () => {
     const ids = await seedCatalog(env.DB, [...rows(1, "а", 2), ...rows(3, "в", 6)]);
     const { repo, user } = await seedLearner(env.DB, { now: T, patch: { direction: "both" } });
-    const learning = { ...newMem(T), state: "learning" as const, step: 1, due: T - MIN, reps: 1, lastReview: T - 10 * MIN, stability: 2, difficulty: 5 };
-    const due = { ...gradedMem(T - 5 * DAY), due: T + 3 * 60 * MIN };
+    const learning = { ...newMem(T), state: "learning" as const, step: 1, due: T - MIN, reps: 1, lastReview: T - 11 * MIN };
+    const due = { ...gradedMem(T - 3 * DAY), due: T + 3 * 60 * MIN };
     await repo.insertCard(user.id, ids[2]!, "tt_ru", learning);
     await repo.insertCard(user.id, ids[3]!, "tt_ru", due);
     await repo.insertCard(user.id, ids[4]!, "ru_tt", { ...due, due: T - MIN });
@@ -494,7 +494,7 @@ describe("repo.queue: one call", () => {
     const { user } = await seedLearner(env.DB, { now: T, patch: { direction: "both" } });
     const plain = new Repo(env.DB);
     await plain.insertNotes(await plain.customDeck(user.id, T), [note("үзем")]);
-    await plain.insertCard(user.id, ids[0]!, "tt_ru", gradedMem(T - 5 * DAY));
+    await plain.insertCard(user.id, ids[0]!, "tt_ru", gradedMem(T - 3 * DAY));
     const db = countingDb(env.DB);
     const q = await new Repo(db).queue(user.id, win(BOTH), scope({ levels: [1, 2, 3, 4, 5], mode: "guided", posCodes: ["n", "v"], spans: { 1: { from: 0, to: null }, 2: { from: 2, to: 1_000_004 } } }));
     expect(db.calls).toBe(1);

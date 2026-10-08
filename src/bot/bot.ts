@@ -11,11 +11,11 @@ import { dict } from "../i18n";
 import { ALL_POS, type NewMode } from "../levels/scale";
 import { addAllPos, addLevel, hub, levelLines, setMode, setTopic, toggleLevel, togglePos, topicLines } from "../levels/service";
 import { ReviewService, type Screen } from "../review/service";
-import type { Rating } from "../srs/fsrs";
+import type { Rating } from "../srs/ladder";
 import { cumulative } from "../stats/service";
 import type { TgApi } from "../tg/client";
 import { HINTS_KEPT_ON_REPLAY } from "../tutorial/hints";
-import { REMIND_TIMES, RETENTIONS, TZ_OFFSETS, advanceOnboarding, getOrCreate, langFromTelegram, onLanguageStep, setSetting, startOnboarding } from "../users/service";
+import { REMIND_TIMES, TZ_OFFSETS, advanceOnboarding, getOrCreate, langFromTelegram, onLanguageStep, setSetting, startOnboarding } from "../users/service";
 import {
   learnKeyboard, renderGenPreview, renderHub, renderIntro, renderLevelChecks, renderModes, renderOnboarding, renderPosChecks, renderSettings, renderStats, renderTimeZones,
   renderTopics,
@@ -328,12 +328,12 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
 
   /* settings, stats, help */
   c.command("settings", async (ctx) => { if (await ready(ctx)) await send(ctx, renderSettings(ctx.user)); });
-  c.callbackQuery(/^set:(lang|ret|new|rem|dir|auto)$/, async (ctx) => {
+  // «Нагрузка» (`set:ret`) left with the scheduler it tuned: its button in an old message is a button the bot no longer has.
+  c.callbackQuery(/^set:(lang|new|rem|dir|auto)$/, async (ctx) => {
     const u = ctx.user;
     const cycle = <T>(list: readonly T[], v: T) => list[(list.indexOf(v) + 1) % list.length]!;
     switch (ctx.match[1]) {
       case "lang": await setSetting(repo, u.id, "lang", u.lang === "ru" ? "tt" : "ru", deps.now()); break;
-      case "ret": await setSetting(repo, u.id, "retention", cycle(RETENTIONS, u.retention as (typeof RETENTIONS)[number]), deps.now()); break;
       case "new": await setSetting(repo, u.id, "newPerDay", cycle([5, 10, 20] as const, u.newPerDay as 5), deps.now()); break;
       case "rem": await setSetting(repo, u.id, "remindAt", cycle(REMIND_TIMES, u.remindAt as (typeof REMIND_TIMES)[number]), deps.now()); break;
       case "dir": await setSetting(repo, u.id, "direction", cycle(["tt_ru", "ru_tt", "both"] as const, u.direction), deps.now()); break;

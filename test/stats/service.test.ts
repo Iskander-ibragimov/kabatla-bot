@@ -4,7 +4,7 @@ import { renderStats } from "../../src/bot/screens";
 import { Repo } from "../../src/db/repo";
 import { ReviewService } from "../../src/review/service";
 import { cumulative } from "../../src/stats/service";
-import { type Mem, newMem } from "../../src/srs/fsrs";
+import { type Mem, newMem } from "../../src/srs/ladder";
 import { harness } from "../helpers/botHarness";
 import { countingDb } from "../helpers/countingDb";
 import { gradedMem } from "../helpers/review";
@@ -13,18 +13,25 @@ import { note, recountProgress, seedCatalog, seedLearner } from "../helpers/seed
 const T = Date.UTC(2026, 8, 30, 6);
 const DAY = 86_400_000;
 
-/** A card in review whose interval is `days`: «учу» below 7 days, «знаю» from 7, «выучено» from 21. */
-const reviewing = (days: number): Mem => ({ ...gradedMem(T), scheduledDays: days, stability: days });
+/**
+ * A card in review whose interval is `days`: «учу» below 7 days, «знаю» from 7, «выучено» from 21. It is written as the
+ * old scheduler wrote it, with a stability, so that `days` may be any number and not only a rung of the ladder.
+ */
+const reviewing = (days: number): Mem => ({ ...gradedMem(T), scheduledDays: days, stability: days, difficulty: 5 });
 const setCoverage = (level: number, pct: number) => env.DB.prepare("UPDATE decks SET coverage_pct = ? WHERE level_no = ?").bind(pct, level).run();
 
 describe("stats", () => {
   it("cumulative totals by stage, memory, retention and forecast", async () => {
     const ids = await seedCatalog(env.DB, ["китап", "вакыт", "авыл", "су"].map((word) => ({ level: 1, word })));
     const { repo, user } = await seedLearner(env.DB, { now: T, patch: { newPerDay: 0 } });
-    const a = await repo.insertCard(user.id, ids[0]!, "tt_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 25 * DAY, scheduledDays: 25, stability: 25, difficulty: 5, reps: 5 });
-    const b = await repo.insertCard(user.id, ids[1]!, "tt_ru", { ...newMem(T), state: "review", due: T + 2 * DAY, lastReview: T - 8 * DAY, scheduledDays: 10, stability: 10, difficulty: 5, reps: 3 });
+    const a = await repo.insertCard(user.id, ids[0]!, "tt_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 14 * DAY, scheduledDays: 14, reps: 5 });
+    const b = await repo.insertCard(user.id, ids[1]!, "tt_ru", { ...newMem(T), state: "review", due: T + 2 * DAY, lastReview: T - 5 * DAY, scheduledDays: 7, reps: 3 });
     await recountProgress(env.DB, user.id);
+    expect(await cumulative(repo, user, T)).toMatchObject({ learned: 0, known: 2, learning: 0, memory: 21 });
+    // «Хорошо» on the 14-day rung: 30 days, and the word is learned.
     await new ReviewService(repo, T).grade(user, a, 5, 3);
+    expect(await cumulative(repo, (await repo.getUser(user.id))!, T + 500)).toMatchObject({ learned: 1, known: 1, learning: 0, memory: 37 });
+    // «Снова» on the 7-day rung: the word is on the first rung and holds no day of memory until it is back on a day rung.
     await new ReviewService(repo, T + 1000).grade((await repo.getUser(user.id))!, b, 3, 1);
     const s = await cumulative(repo, (await repo.getUser(user.id))!, T + 2000);
     expect(s.learned).toBe(1);
@@ -33,7 +40,8 @@ describe("stats", () => {
     expect(s.total).toBe(2);
     expect(s.r30).toBe(2);
     expect(s.retention30).toBe(0.5);
-    expect(s.memory).toBeGreaterThan(25);
+    expect(s.known).toBe(0);
+    expect(s.memory).toBe(30);
     expect(s.forecast7).toHaveLength(7);
     expect(s.forecast7[0]).toBe(1);
     expect(s.streak).toBe(1);
@@ -88,10 +96,10 @@ describe("stats", () => {
       repo.insertCardStmt(user.id, ids[1]!, "tt_ru", reviewing(20)),
       repo.insertCardStmt(user.id, ids[2]!, "tt_ru", reviewing(7)),
       repo.insertCardStmt(user.id, ids[3]!, "tt_ru", reviewing(6)),
-      repo.insertCardStmt(user.id, ids[4]!, "tt_ru", { ...gradedMem(T), state: "relearning", step: 0 }),
+      repo.insertCardStmt(user.id, ids[4]!, "tt_ru", { ...gradedMem(T), state: "relearning", step: 0, scheduledDays: 0 }),
       // A card that was shown and not graded is in no stage; an own word is counted like any other.
       repo.insertCardStmt(user.id, ids[5]!, "tt_ru", newMem(T)),
-      repo.insertCardStmt(user.id, own!, "tt_ru", { ...gradedMem(T), state: "learning", step: 1 }),
+      repo.insertCardStmt(user.id, own!, "tt_ru", { ...gradedMem(T), state: "learning", step: 1, scheduledDays: 0 }),
       // The other direction of a word and another learner's cards are not counted.
       repo.insertCardStmt(user.id, ids[0]!, "ru_tt", reviewing(30)),
       repo.insertCardStmt(other.user.id, ids[0]!, "tt_ru", reviewing(30)),
@@ -101,6 +109,29 @@ describe("stats", () => {
     expect(await repo.stageCounts(other.user.id, "ru_tt")).toEqual({ learned: 0, known: 0, learning: 0 });
     expect(await cumulative(repo, user, T)).toMatchObject({ learned: 1, known: 2, learning: 3 });
     expect(await cumulative(repo, { ...user, direction: "ru_tt" }, T)).toMatchObject({ learned: 1, known: 0, learning: 0 });
+  });
+
+  it("the sum of memory is the days of the words on a day rung in the direction shown; a word on a minute rung counts 0, whatever the old scheduler left in its row", async () => {
+    const ids = await seedCatalog(env.DB, ["китап", "вакыт", "авыл", "су", "юл", "көн"].map((word) => ({ level: 1, word })));
+    const { repo, user } = await seedLearner(env.DB, { now: T, patch: { direction: "both" } });
+    const other = await seedLearner(env.DB, { now: T, tgId: 2 });
+    const minute = (state: "learning" | "relearning", step: number, old: Partial<Mem> = {}): Mem => ({ ...gradedMem(T), state, step, scheduledDays: 0, due: T + 60_000, ...old });
+    await repo.batch([
+      repo.insertCardStmt(user.id, ids[0]!, "tt_ru", { ...gradedMem(T), scheduledDays: 14 }),
+      // A card of the old scheduler in review counts the days it was given.
+      repo.insertCardStmt(user.id, ids[1]!, "tt_ru", reviewing(11)),
+      // A word that fell: the old scheduler counted its stability, at least one day. The ladder counts none.
+      repo.insertCardStmt(user.id, ids[2]!, "tt_ru", minute("relearning", 0, { stability: 3.1, difficulty: 6.8, lapses: 1 })),
+      repo.insertCardStmt(user.id, ids[3]!, "tt_ru", minute("relearning", 1, { lapses: 2 })),
+      repo.insertCardStmt(user.id, ids[4]!, "tt_ru", minute("learning", 1)),
+      repo.insertCardStmt(user.id, ids[5]!, "tt_ru", newMem(T)),
+      // The other direction of a word and another learner's cards are not counted.
+      repo.insertCardStmt(user.id, ids[0]!, "ru_tt", { ...gradedMem(T), scheduledDays: 180 }),
+      repo.insertCardStmt(other.user.id, ids[0]!, "tt_ru", { ...gradedMem(T), scheduledDays: 60 }),
+    ]);
+    expect((await cumulative(repo, user, T)).memory).toBe(25);
+    expect((await cumulative(repo, { ...user, direction: "ru_tt" }, T)).memory).toBe(180);
+    expect((await cumulative(repo, other.user, T)).memory).toBe(60);
   });
 
   it("/stats names the checked levels and the coverage, within the budget of D1 calls", async () => {

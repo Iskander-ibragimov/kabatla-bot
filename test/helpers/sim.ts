@@ -1,7 +1,7 @@
 import { type Direction, Repo } from "../../src/db/repo";
 import { hasLevel, posCodesOf } from "../../src/levels/scale";
 import { type CardView, ReviewService, type Screen, directionsOf } from "../../src/review/service";
-import type { Rating } from "../../src/srs/fsrs";
+import type { Rating } from "../../src/srs/ladder";
 import { localDay } from "../../src/users/service";
 
 /** One card a learner was shown. `fresh`: it was shown as a new card, never graded before. */

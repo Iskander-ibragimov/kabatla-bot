@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Repo } from "../../src/db/repo";
-import { newMem } from "../../src/srs/fsrs";
+import { newMem } from "../../src/srs/ladder";
 import { gradedMem } from "./review";
 import { TOPICS, WORDS, levelWords, note, recountProgress, seedCatalog, seedGuidedOrder, seedLearner, seedTopics, seedUser } from "./seed";
 

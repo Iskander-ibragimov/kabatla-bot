@@ -1,19 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { renderGenPreview, renderOnboarding, renderSettings } from "../../src/bot/screens";
-import { addReplyText, clip, formatLong, renderAddPreview, renderCard, renderDone, shownWords, type CardView, type PreviewItem } from "../../src/bot/views";
+import { addReplyText, clip, formatLong, progressLine, renderAddPreview, renderCard, renderDone, shownWords, type CardView, type PreviewItem } from "../../src/bot/views";
 import type { User } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
-import { newMem } from "../../src/srs/fsrs";
+import { newMem } from "../../src/srs/ladder";
 import { TELEGRAM_TEXT_LIMIT, visibleLength } from "../helpers/visible";
 
 const T = Date.UTC(2026, 8, 30, 6);
 const view = (over: Partial<CardView> = {}): CardView => ({
   cardId: 7, noteId: 3, reps: 3, direction: "tt_ru", word: "ышанычлы", transcription: "ышанычлы́", pos: "adj",
   translation: "надёжный", exampleTt: "Ул ышанычлы кеше.", exampleRu: "Он надёжный человек.", hasAudio: true, sourceUrl: null,
-  mem: { ...newMem(T), state: "review", scheduledDays: 2, reps: 3, stability: 2, difficulty: 5, lastReview: T }, ...over,
+  mem: { ...newMem(T), state: "review", scheduledDays: 3, reps: 3, lastReview: T }, ...over,
 });
-const iv = { 1: "<10м", 2: "1д", 3: "2д", 4: "4д" } as const;
+/** What the buttons of a card on the 3-day rung say. */
+const iv = { 1: "1 минута", 2: "3 дня", 3: "7 дней", 4: "14 дней" } as const;
 const counts = { n: 4, l: 1, r: 12 };
 
 describe("views", () => {
@@ -31,7 +32,7 @@ describe("views", () => {
     const flat = grades.flat();
     expect(flat.map((b) => b.style)).toEqual(["danger", undefined, "success", "primary"]);
     expect(flat.map((b) => b.callback_data)).toEqual(["g:7:3:1", "g:7:3:2", "g:7:3:3", "g:7:3:4"]);
-    expect(flat.map((b) => b.text)).toEqual(["Снова <10м", "Трудно 1д", "Хорошо 2д", "Легко 4д"]);
+    expect(flat.map((b) => b.text)).toEqual(["Снова · 1 минута", "Трудно · 3 дня", "Хорошо · 7 дней", "Легко · 14 дней"]);
     for (const b of flat) expect(new TextEncoder().encode(b.callback_data).length).toBeLessThanOrEqual(64);
     expect(keyboard[2]!.map((b) => b.callback_data)).toEqual(["v:3", "u", "r:3"]);
   });
@@ -73,9 +74,21 @@ describe("views", () => {
     expect(text).toContain('🔗 <a href="https://www.youtube.com/watch?v=1&amp;t=2">youtube.com</a>');
   });
 
-  it("progress line shows stage, memory and review number", () => {
+  it("progress line shows stage, rung and review number; a new word has its stage alone", () => {
     const { text } = renderCard(view(), counts, iv, false, "ru");
-    expect(text).toContain("🌿 Учу · память ~2 дн. · повтор №4");
+    expect(text.split("</blockquote>")[1]).toBe("🌿 Учу · ступень 4 из 10 · повтор №4");
+    const line = (mem: Partial<CardView["mem"]>, lang: "ru" | "tt" = "ru") => progressLine({ ...newMem(T), ...mem }, lang);
+    expect(line({})).toBe("🌱 Новое");
+    expect(line({}, "tt")).toBe("🌱 Яңа");
+    // The minute rungs, also of a word that fell from a day rung; then the day rungs with their stages.
+    expect(line({ state: "learning", step: 0, reps: 1 })).toBe("🌿 Учу · ступень 1 из 10 · повтор №2");
+    expect(line({ state: "relearning", step: 1, reps: 7, lapses: 1 })).toBe("🌿 Учу · ступень 2 из 10 · повтор №8");
+    expect(line({ state: "review", scheduledDays: 1, reps: 2 })).toBe("🌿 Учу · ступень 3 из 10 · повтор №3");
+    expect(line({ state: "review", scheduledDays: 7, reps: 4 })).toBe("🌳 Знаю · ступень 5 из 10 · повтор №5");
+    expect(line({ state: "review", scheduledDays: 30, reps: 6 })).toBe("🏆 Выучено · ступень 7 из 10 · повтор №7");
+    expect(line({ state: "review", scheduledDays: 180, reps: 9 }, "tt")).toBe("🏆 Өйрәндем · баскыч 10/10 · кабатлау №10");
+    // A card of the old scheduler: 46 days is the 30-day rung.
+    expect(line({ state: "review", scheduledDays: 46, stability: 46.3, difficulty: 5.1, reps: 5 })).toBe("🏆 Выучено · ступень 7 из 10 · повтор №6");
   });
 
   it("card shows only the current word, nothing about the previous one", () => {
@@ -475,10 +488,10 @@ describe("views", () => {
   });
 
   it("card buttons, progress line and done screen are in Tatar for a tt user", () => {
-    const card = renderCard(view(), counts, { 1: "<10мин", 2: "1көн", 3: "2көн", 4: "4көн" }, true, "tt");
-    expect(card.keyboard.slice(0, 2).flat().map((b) => b.text)).toEqual(["Яңадан <10мин", "Авыр 1көн", "Яхшы 2көн", "Җиңел 4көн"]);
+    const card = renderCard(view(), counts, { 1: "1 минут", 2: "3 көн", 3: "7 көн", 4: "14 көн" }, true, "tt");
+    expect(card.keyboard.slice(0, 2).flat().map((b) => b.text)).toEqual(["Яңадан · 1 минут", "Авыр · 3 көн", "Яхшы · 7 көн", "Җиңел · 14 көн"]);
     expect(card.keyboard[2]!.map((b) => b.text)).toEqual(["🔊", "↩️ Кире алу", "⚑"]);
-    expect(card.text).toContain("🌿 Өйрәнәм · хәтердә ~2 көн · кабатлау №4");
+    expect(card.text).toContain("🌿 Өйрәнәм · баскыч 4/10 · кабатлау №4");
     const done = renderDone({ reviewsToday: 24, learnedToday: 3, nextLearningInMs: 480_000, streak: 5 }, "tt", null);
     expect(done.text).toContain("Бүген: 24 кабатлау · +3 өйрәнелде");
     expect(done.text).not.toContain("Барлыгы:");
@@ -496,11 +509,11 @@ describe("views", () => {
     const user = { lang: "ru", retention: 0.9, newPerDay: 10, remindAt: "09:00", tzOffsetMin: 180, direction: "tt_ru", autoplay: false } as User;
     const labels = (u: User) => renderSettings(u).keyboard.flat().map((b) => b.text);
     expect(labels(user)).toEqual([
-      "🌐 Язык: Русский", "🎯 Нагрузка: Оптимальная · 90%", "🆕 Новых в день: 10", "⏰ Напоминание: 09:00", "🕒 Часовой пояс: UTC+3",
+      "🌐 Язык: Русский", "🆕 Новых в день: 10", "⏰ Напоминание: 09:00", "🕒 Часовой пояс: UTC+3",
       "↔️ Направление: татарский → русский", "🔊 Автоозвучка: выкл", "📚 Уровни, темы, порядок слов", "🎓 Показать обучение заново",
     ]);
     expect(labels({ ...user, lang: "tt", direction: "ru_tt" })).toEqual([
-      "🌐 Тел: Татарча", "🎯 Йөкләнеш: Оптималь · 90%", "🆕 Көненә яңа сүзләр: 10", "⏰ Искә төшерү: 09:00", "🕒 Сәгать поясы: UTC+3",
+      "🌐 Тел: Татарча", "🆕 Көненә яңа сүзләр: 10", "⏰ Искә төшерү: 09:00", "🕒 Сәгать поясы: UTC+3",
       "↔️ Юнәлеш: русча → татарча", "🔊 Автомат тавыш: сүндерелгән", "📚 Дәрәҗәләр, темалар, сүзләр тәртибе", "🎓 Өйрәтүне яңадан күрсәтү",
     ]);
     expect(renderSettings({ ...user, lang: "tt" }).text).toContain("Көйләүләр");

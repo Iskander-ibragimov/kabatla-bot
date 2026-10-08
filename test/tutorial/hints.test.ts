@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Rating } from "../../src/srs/fsrs";
+import type { Rating } from "../../src/srs/ladder";
 import { ALL_HINTS, HINT, HINTS_KEPT_ON_REPLAY, afterGrade, onCard, onDone } from "../../src/tutorial/hints";
 
 describe("hints", () => {

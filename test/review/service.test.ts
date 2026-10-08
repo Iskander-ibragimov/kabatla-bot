@@ -4,7 +4,8 @@ import { type SeedLevel, type SeedTopic, catalogToSql } from "../../src/content/
 import { Repo, type User } from "../../src/db/repo";
 import { LEVELS, levelBit } from "../../src/levels/scale";
 import { ReviewService } from "../../src/review/service";
-import { formatInterval, newMem } from "../../src/srs/fsrs";
+import { formatInterval } from "../../src/srs/interval";
+import { newMem } from "../../src/srs/ladder";
 import { ALL_HINTS, HINT } from "../../src/tutorial/hints";
 import { countingDb } from "../helpers/countingDb";
 import { asCard, gradeShown } from "../helpers/review";
@@ -19,7 +20,7 @@ describe("review service", () => {
   it("first card shows reference intervals", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T });
     const s = asCard(await new ReviewService(repo, T).nextScreen(user));
-    expect(s.intervals).toEqual({ 1: "<1м", 2: "<6м", 3: "<10м", 4: "8д" });
+    expect(s.intervals).toEqual({ 1: "1 минута", 2: "5 минут", 3: "10 минут", 4: "1 день" });
     expect(s.view.word).toBe("китап");
     expect(s.view).toMatchObject({ direction: "tt_ru", translation: "книга", exampleTt: "китап.", transcription: null, hasAudio: false });
     // While a level has a word to give, the new cards to come are as many as the day allows (10), not the words left in the level.
@@ -53,22 +54,21 @@ describe("review service", () => {
 
   it("grow feedback shows before and after days", async () => {
     const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
-    const id = await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 2 * DAY, scheduledDays: 2, stability: 2.3, difficulty: 5, reps: 2 });
+    const id = await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 3 * DAY, scheduledDays: 3, reps: 2 });
     const s = await new ReviewService(repo, T).grade(user, id, 2, 3);
     expect(s.kind === "done" || s.kind === "card").toBe(true);
     const fb = s.kind === "done" || s.kind === "card" ? s.feedback : null;
-    expect(fb).toMatchObject({ kind: "grow", beforeDays: 2 });
-    expect(fb!.afterMs).toBeGreaterThan(2 * DAY);
+    // From the 3-day rung «Хорошо» goes one rung up, to 7 days.
+    expect(fb).toEqual({ word: "китап", kind: "grow", beforeDays: 3, afterMs: 7 * DAY });
   });
 
-  it("lapse keeps memory", async () => {
+  it("lapse feedback shows the days the word stood on and the minute it comes back in", async () => {
     const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
-    const id = await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 30 * DAY, scheduledDays: 30, stability: 30, difficulty: 5, reps: 5 });
+    const id = await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 30 * DAY, scheduledDays: 30, reps: 5 });
     const s = await new ReviewService(repo, T).grade(user, id, 5, 1);
     const fb = s.kind === "done" || s.kind === "card" ? s.feedback : null;
-    expect(fb).toMatchObject({ kind: "lapse", beforeDays: 30 });
-    expect(fb!.keptDays).toBeGreaterThan(1);
-    expect(fb!.afterMs).toBe(10 * MIN);
+    // «Снова» sends the word to the first rung whatever rung it stood on: nothing of its 30 days is kept.
+    expect(fb).toEqual({ word: "китап", kind: "lapse", beforeDays: 30, afterMs: MIN });
   });
 
   it("daily new limit uses the 04:00 local boundary", async () => {
@@ -89,8 +89,9 @@ describe("review service", () => {
 
   it("the end of the session counts the grades and the words learned today, and gives no totals for all time", async () => {
     const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 3 });
-    const id = await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 15 * DAY, scheduledDays: 15, stability: 15, difficulty: 4, reps: 4 });
+    const id = await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 14 * DAY, scheduledDays: 14, reps: 4 });
     await repo.updateUser(user.id, { newPerDay: 0 });
+    // «Хорошо» on the 14-day rung is 30 days: the word is learned (21 days and more) from this grade on.
     const s = await new ReviewService(repo, T).grade((await repo.getUser(user.id))!, id, 4, 3);
     if (s.kind !== "done") throw new Error(s.kind);
     expect(s.summary).toEqual({ reviewsToday: 1, learnedToday: 1, nextLearningInMs: null, streak: 1 });
@@ -193,31 +194,33 @@ describe("review service", () => {
       // Showing a card stores nothing about the hints: the grade does.
       expect(await seen(repo, user)).toBe(HINT.update);
       const second = asCard(await graded(repo, user, first, 3));
-      expect(second.lead).toEqual({ kind: "button", rating: 3, interval: first.intervals[3], withOrder: true });
+      expect(first.intervals).toMatchObject({ 3: "10 минут" });
+      expect(second.lead).toEqual({ kind: "button", rating: 3, interval: "10 минут", withOrder: true });
       expect(await seen(repo, user)).toBe(HINT.update | HINT.front | HINT.good | HINT.order);
       const third = asCard(await graded(repo, user, second, 3));
       expect(third.lead).toBeNull();
       const fourth = asCard(await graded(repo, user, third, 1));
-      expect(fourth.lead).toEqual({ kind: "button", rating: 1, interval: third.intervals[1], withOrder: false });
+      // The Russian hint reads «через …»: the minute of the button «Снова · 1 минута» stands in the form after it.
+      expect(third.intervals).toMatchObject({ 1: "1 минута" });
+      expect(fourth.lead).toEqual({ kind: "button", rating: 1, interval: "1 минуту", withOrder: false });
       expect(await seen(repo, user)).toBe(HINT.update | HINT.front | HINT.good | HINT.order | HINT.again);
       // A screen that follows no grade carries nothing once a card was graded.
       expect(asCard(await new ReviewService(repo, T).nextScreen((await repo.getUser(user.id))!)).lead).toBeNull();
     });
 
-    it("the interval of a hint is the one that stood on the pressed button, not the one the scheduler's fuzz gave the card", async () => {
-      // «Легко» on a new card gives days, which the scheduler moves a little; among these users are grades that land on another day than the button named.
+    it("the interval of a hint is the one that stood on the pressed button, and the card is due exactly then: the ladder moves no interval", async () => {
+      // «Легко» on a new card is one day at whatever moment it is pressed.
       await seedCatalog(env.DB, WORDS.slice(0, 2).map(([word, translation]) => ({ level: 1, word, translation })));
-      const moved: boolean[] = [];
       for (const [tgId, lang, at] of [[1, "tt", T], [2, "ru", T + 7 * MIN], [3, "ru", T + 3 * 60 * MIN], [4, "tt", T + DAY + 11 * MIN]] as const) {
         const { repo, user } = await seedLearner(env.DB, { now: T, tgId, patch: { hintsSeen: HINT.update, lang } });
         const first = asCard(await new ReviewService(repo, at).nextScreen(user));
         const second = asCard(await graded(repo, user, first, 4, at));
         expect(second.lead).toEqual({ kind: "button", rating: 4, interval: first.intervals[4], withOrder: true });
-        expect(first.intervals[4]).toMatch(lang === "tt" ? /^\d+көн$/ : /^\d+д$/);
+        expect(first.intervals[4]).toBe(lang === "tt" ? "1 көн" : "1 день");
         const card = (await repo.getCard(user.id, first.view.cardId))!;
-        moved.push(formatInterval(card.mem.due - at, lang) !== first.intervals[4]);
+        expect(card.mem.due - at).toBe(DAY);
+        expect(formatInterval(card.mem.due - at, lang)).toBe(first.intervals[4]);
       }
-      expect(moved).toContain(true);
     });
 
     it("a learner who knew the bot before the levels: the update notice until a grade, no hint after it", async () => {

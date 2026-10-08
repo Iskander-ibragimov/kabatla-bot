@@ -1,5 +1,5 @@
 import { ALL_LEVELS, ALL_POS, LEVELS, type NewMode, levelBit, tseqOf } from "../levels/scale";
-import type { Mem } from "../srs/fsrs";
+import type { Mem } from "../srs/ladder";
 import { type DayWindow, type NewScope, type Queue, ownedCopiesStmt, progressStmt, readQueue, unprogressStmt } from "./queue";
 import { type Asked, CARD_COLS, type CardRow, type Direction, NEW_CARDS, type NoteFields, askedDirection, noteCols, noteFields, rowToCard } from "./sql";
 
@@ -17,6 +17,7 @@ export interface User {
   tzOffsetMin: number;
   remindAt: string;
   newPerDay: number;
+  /** The share of words the old scheduler aimed to keep. The column stays; nothing reads it since the ladder of intervals. */
   retention: number;
   direction: DirectionSetting;
   autoplay: boolean;
@@ -559,12 +560,16 @@ export class Repo {
     return { ...todayOf(log!.results), progress: pairsStarted(started?.results ?? []), totals: pairTotals(totals?.results ?? []) };
   }
 
-  /** Cumulative numbers for /stats in one D1 call: the memory held by the cards of one direction, the grades in all and in the last 30 days, and the cards due on each of the next 7 days. */
+  /**
+   * Cumulative numbers for /stats in one D1 call: the memory held by the cards of one direction — the days of every word on a
+   * day rung, as `memoryDays` (srs/ladder.ts) counts them; a word on a minute rung holds none —, the grades in all and in the
+   * last 30 days, and the cards due on each of the next 7 days.
+   */
   async statsExtra(userId: number, now: number, dayStartMs: number, direction: Direction): Promise<{ memory: number; total: number; r30: number; rev30: number; ok30: number; forecast: { d: number; n: number }[] }> {
     const since = now - 30 * 86_400_000;
     const [a, f] = await this.db.batch<Record<string, number | null>>([
       this.db.prepare(`SELECT
-          (SELECT COALESCE(SUM(CASE WHEN state = 'review' THEN scheduled_days WHEN state = 'relearning' THEN MAX(1, CAST(ROUND(stability) AS INTEGER)) ELSE 0 END), 0)
+          (SELECT COALESCE(SUM(CASE WHEN state = 'review' THEN scheduled_days ELSE 0 END), 0)
              FROM cards WHERE user_id = ?1 AND direction = ?2) AS memory,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0) AS total,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3) AS r30,

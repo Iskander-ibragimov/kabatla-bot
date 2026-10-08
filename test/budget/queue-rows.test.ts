@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { type DayWindow, type Direction, type DirectionSetting, type NewScope, type Queue, Repo } from "../../src/db/repo";
 import { CURSOR_STEP, type Spans, mergeStreams, nextSpans } from "../../src/levels/order";
 import { LEVELS, type NewMode } from "../../src/levels/scale";
-import { newMem } from "../../src/srs/fsrs";
+import { newMem } from "../../src/srs/ladder";
 import { dayWindow } from "../../src/users/service";
 import { type CardSeed, type CatalogNote, type Numerals, bulkCards, bulkCatalog, numeralsAt } from "../helpers/catalog";
 import { readingDb } from "../helpers/readingDb";

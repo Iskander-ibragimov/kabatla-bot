@@ -2,7 +2,7 @@
 module.exports = {
   forbidden: [
     { name: "srs-is-pure", severity: "error", from: { path: "^src/srs" }, to: { path: "^src/(?!srs)" } },
-    { name: "srs-no-deps", severity: "error", from: { path: "^src/srs" }, to: { dependencyTypes: ["npm"], pathNot: "ts-fsrs" } },
+    { name: "srs-no-deps", severity: "error", from: { path: "^src/srs" }, to: { dependencyTypes: ["npm"] } },
     { name: "only-bot-uses-grammy", severity: "error", from: { path: "^src/(?!bot|index)" }, to: { path: "grammy" } },
     { name: "services-not-import-bot", severity: "error", from: { path: "^src/(?!bot|index)" }, to: { path: "^src/bot" } },
     { name: "no-circular", severity: "error", from: {}, to: { circular: true } },

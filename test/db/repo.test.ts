@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { type Direction, type NewScope, Repo, wordKey } from "../../src/db/repo";
 import { countingDb } from "../helpers/countingDb";
-import { newMem } from "../../src/srs/fsrs";
+import { newMem } from "../../src/srs/ladder";
 import { dayWindow } from "../../src/users/service";
 import { gradedMem } from "../helpers/review";
 import { levelWords, note, seedCatalog, seedUser } from "../helpers/seed";
@@ -39,8 +39,8 @@ describe("repo", () => {
 
   it("queue returns due learning, due-today reviews, the next new word and counts in one batch", async () => {
     const { ids, userId } = await seed(repo);
-    await repo.insertCard(userId, ids[0]!, "tt_ru", { ...newMem(T), state: "learning", step: 1, due: T - 1000, reps: 1, lastReview: T - 600_000, stability: 2, difficulty: 5 });
-    await repo.insertCard(userId, ids[1]!, "tt_ru", { ...newMem(T), state: "review", due: T + 3 * 3_600_000, scheduledDays: 2, reps: 2, lastReview: T - 2 * DAY, stability: 2, difficulty: 5 });
+    await repo.insertCard(userId, ids[0]!, "tt_ru", { ...newMem(T), state: "learning", step: 1, due: T - 1000, reps: 1, lastReview: T - 600_000 });
+    await repo.insertCard(userId, ids[1]!, "tt_ru", { ...newMem(T), state: "review", due: T + 3 * 3_600_000, scheduledDays: 3, reps: 2, lastReview: T + 3 * 3_600_000 - 3 * DAY });
     const db = countingDb(env.DB);
     const r = new Repo(db);
     const c = await r.queue(userId, { dayStartMs: T - 3_600_000, dayEndMs: T + 20 * 3_600_000, today: "2026-09-30", directions: ["tt_ru"] }, LEVEL_1);

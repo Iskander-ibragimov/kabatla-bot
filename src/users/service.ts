@@ -49,9 +49,8 @@ export async function getOrCreate(repo: Repo, tgId: number, chatId: number, tgLa
   return { user: (await repo.getUserByTg(tgId))!, created: true };
 }
 
-export type SettingKey = "lang" | "retention" | "newPerDay" | "remindAt" | "direction" | "autoplay" | "tzOffsetMin";
+export type SettingKey = "lang" | "newPerDay" | "remindAt" | "direction" | "autoplay" | "tzOffsetMin";
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
-export const RETENTIONS = [0.85, 0.9, 0.95] as const;
 export const NEW_PER_DAY = [5, 10, 20] as const;
 export const REMIND_TIMES = ["08:00", "09:00", "12:00", "19:00", "21:00"] as const;
 /** The time zones the settings offer, as minutes east of UTC: UTC+2 … UTC+12 by the hour. */
@@ -61,12 +60,13 @@ export async function setSetting(repo: Repo, userId: number, key: SettingKey, va
   const bad = () => { throw new Error(`invalid ${key}: ${String(value)}`); };
   switch (key) {
     case "lang": if (value !== "ru" && value !== "tt") bad(); break;
-    case "retention": if (!RETENTIONS.includes(value as never)) bad(); break;
     case "newPerDay": if (!NEW_PER_DAY.includes(value as never)) bad(); break;
     case "remindAt": if (typeof value !== "string" || !HHMM.test(value)) bad(); break;
     case "direction": if (!["tt_ru", "ru_tt", "both"].includes(value as string)) bad(); break;
     case "autoplay": if (typeof value !== "boolean") bad(); break;
     case "tzOffsetMin": if (!TZ_OFFSETS.includes(value as number)) bad(); break;
+    // A key that is no setting — `retention`, which went with the scheduler that read it — is refused, whatever the types say.
+    default: bad();
   }
   const patch = { [key]: value } as Partial<User>;
   // The reminders are kept as moments: a new hour or a new clock moves the next one.

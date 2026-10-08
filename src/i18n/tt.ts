@@ -4,8 +4,8 @@ import type { Dict } from "./ru";
  * Tatar UI strings: the same keys as `ru`, plain literary Tatar for a reader whose Tatar is weak.
  * Only the letters ә ө ү җ ң һ (U+04D9, U+04E9, U+04AF, U+0497, U+04A3, U+04BB and capitals) besides the Russian
  * alphabet; test/i18n/dict.test.ts rejects look-alikes. Numbers never take a suffix here («кайтканчы 8 минут бар»,
- * «Вакыты: 09:00», «37/100»), so no text depends on how a number is read aloud; an interval of a hint («<10мин»,
- * «8көн») stands the same way, before «бар». The levels of the scale are named by their codes, A1…C1, as in Russian;
+ * «Вакыты: 09:00», «37/100»), so no text depends on how a number is read aloud; an interval of a hint («10 минут»,
+ * «1 көн») stands the same way, before «бар». The levels of the scale are named by their codes, A1…C1, as in Russian;
  * a case ending goes on the word «дәрәҗә» after the code («A2 дәрәҗәсен өстәү»).
  */
 const POS: Record<string, string> = {
@@ -37,7 +37,7 @@ export const tt: Dict = {
   stageLearning: "🌿 Өйрәнәм",
   stageKnown: "🌳 Беләм",
   stageLearned: "🏆 Өйрәндем",
-  memory: (d) => `хәтердә ~${d} көн`,
+  rung: (n) => `баскыч ${n}/10`,
   reviewNo: (n) => `кабатлау №${n}`,
   unitMin: "минут",
   unitHour: "сәгать",
@@ -110,7 +110,6 @@ export const tt: Dict = {
     `📊 <b>Алгарыш</b> · бөтен вакыт эчендә\n\n🎓 Дәрәҗәләр: ${s.levels}${s.coverage == null ? "" : ` · текстта таныш сүзләр: ≈${s.coverage}%`}\n🏆 Өйрәндем: ${s.learned}\n🌳 Беләм: ${s.known}\n🌿 Өйрәнәм: ${s.learning}\n🌱 Алда яңа сүзләр: ${s.fresh}\n\n🧠 Хәтер суммасы: ${s.memory} көн\n<i>башланган барлык сүзләр хәтердә барлыгы ничә көн саклана</i>\n🔥 Рәттән ${s.streak} көн\n🔁 Барлык кабатлаулар: ${s.total} · 30 көндә: ${s.r30}\n🎯 30 көндә истә калу: ${s.retention}\n\n🗓 7 көнгә фараз: ${s.forecast}`,
   settingsTitle: "⚙️ <b>Көйләүләр</b>\nҮзгәртү өчен төймәгә басыгыз.",
   setLang: "🌐 Тел: Татарча",
-  setMode: (r) => `🎯 Йөкләнеш: ${r === 0.85 ? "Җиңел" : r === 0.95 ? "Көчәйтелгән" : "Оптималь"} · ${Math.round(r * 100)}%`,
   setNew: (n) => `🆕 Көненә яңа сүзләр: ${n}`,
   setRemind: (t) => `⏰ Искә төшерү: ${t}`,
   setTz: (tz) => `🕒 Сәгать поясы: ${tz}`,

@@ -18,7 +18,7 @@ const STATS = { streak: 5, learned: 37, known: 20, learning: 14, fresh: 429, mem
  * Free-text arguments are Tatar-safe on purpose, so that the letter check looks at the template only.
  */
 const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
-  memory: [[2]],
+  rung: [[1], [5], [10]],
   reviewNo: [[4]],
   doneToday: [[24, 3]],
   doneNextLearning: [["8 минут"]],
@@ -27,10 +27,10 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   addAll: [[3]],
   foundN: [[3]],
   levelWords: [[1], [2], [5], [11], [21], [22], [112], [400], [850]],
-  hintAgain: [["1мин"]],
-  hintHard: [["6мин"]],
-  hintGood: [["10мин"]],
-  hintEasy: [["8көн"], ["2,3ай"]],
+  hintAgain: [["1 минут"]],
+  hintHard: [["5 минут"], ["7 көн"]],
+  hintGood: [["10 минут"], ["2 ай"]],
+  hintEasy: [["1 көн"], ["6 ай"]],
   askWords: [["мисал.рф"]],
   dupLine: [["китап", "Минем сүзләр", false], ["китап", "Минем сүзләр", true]],
   manualAsk: [["китап"]],
@@ -44,7 +44,6 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   genLeft: [[2]],
   genAdded: [["сәяхәт", 20]],
   statsText: [[{ ...STATS, levels: "A1, A2", coverage: 54 }], [{ ...STATS, levels: "A1", coverage: null }], [{ ...STATS, levels: "B1, B2, C1", coverage: 61 }]],
-  setMode: [[0.85], [0.9], [0.95]],
   setNew: [[10]],
   setRemind: [["09:00"]],
   setTz: [["UTC+3"], ["UTC+5:30"]],
@@ -204,18 +203,21 @@ describe("i18n dictionaries", () => {
   });
 
   it("the six lines of the hints and the update notice, word for word in Russian, with the interval where the button gave one", () => {
-    expect([ru.hintFront, ru.hintAgain("1м"), ru.hintHard("6м"), ru.hintGood("10м"), ru.hintEasy("8д"), ru.hintOrder, ru.updateNotice]).toEqual([
+    // The intervals of a new word, as the hints get them: in the form after «через».
+    expect([ru.hintFront, ru.hintAgain("1 минуту"), ru.hintHard("5 минут"), ru.hintGood("10 минут"), ru.hintEasy("1 день"), ru.hintOrder, ru.updateNotice]).toEqual([
       "Вспомните перевод, откройте скрытый текст и оцените себя.",
-      "„Снова“: слово вернётся через 1м, в этом же занятии, и будет приходить, пока не запомнится.",
-      "„Трудно“: слово вернётся через 6м. Интервалы будут расти медленнее.",
-      "„Хорошо“: слово вернётся через 10м. Вспомните его снова — интервал вырастет: дни, потом недели и месяцы.",
-      "„Легко“: слово ушло сразу на 8д и не занимает дневную норму новых слов.",
+      "„Снова“: слово вернётся через 1 минуту, в этом же занятии, и будет приходить, пока не запомнится.",
+      "„Трудно“: слово вернётся через 5 минут. Интервалы будут расти медленнее.",
+      "„Хорошо“: слово вернётся через 10 минут. Вспомните его снова — интервал вырастет: дни, потом недели и месяцы.",
+      "„Легко“: слово ушло сразу на 1 день и не занимает дневную норму новых слов.",
       "Порядок в занятии: сначала слова на закреплении, потом повторения на сегодня, между ними новые слова.",
       "Бот обновился: уровни A1–C1, темы и порядок слов — в /levels",
     ]);
     // Each Tatar hint names its button as the button is named, and holds the interval.
-    expect([tt.hintAgain("1мин"), tt.hintHard("6мин"), tt.hintGood("10мин"), tt.hintEasy("8көн")].map((text, i) => text.startsWith(`„${[tt.again, tt.hard, tt.good, tt.easy][i]}“: `))).toEqual([true, true, true, true]);
-    expect([tt.hintAgain("1мин"), tt.hintHard("6мин"), tt.hintGood("10мин"), tt.hintEasy("8көн")].map((text, i) => text.includes(` ${["1мин", "6мин", "10мин", "8көн"][i]} бар`))).toEqual([true, true, true, true]);
+    const ttHints = [tt.hintAgain("1 минут"), tt.hintHard("5 минут"), tt.hintGood("10 минут"), tt.hintEasy("1 көн")];
+    expect(ttHints.map((text, i) => text.startsWith(`„${[tt.again, tt.hard, tt.good, tt.easy][i]}“: `))).toEqual([true, true, true, true]);
+    // In Tatar the interval stands before «бар» and takes no ending, so it is the same words as on the button.
+    expect(ttHints.map((text, i) => text.includes(` кайтканчы ${["1 минут", "5 минут", "10 минут", "1 көн"][i]} бар`))).toEqual([true, true, true, true]);
     expect([ru.hintAgain("x"), ru.hintHard("x"), ru.hintGood("x"), ru.hintEasy("x")].map((text, i) => text.startsWith(`„${[ru.again, ru.hard, ru.good, ru.easy][i]}“: `))).toEqual([true, true, true, true]);
     for (const d of [ru, tt]) expect(d.updateNotice).toContain("/levels");
   });
@@ -263,8 +265,13 @@ describe("i18n dictionaries", () => {
     for (const d of [ru, tt]) for (const code of ["constructor", "toString", "__proto__", "hasOwnProperty"]) expect(d.posName(code)).toBe(code);
   });
 
-  it("names the language, the load and the direction in settings", () => {
-    expect([ru.setMode(0.9), tt.setMode(0.9)]).toEqual(["🎯 Нагрузка: Оптимальная · 90%", "🎯 Йөкләнеш: Оптималь · 90%"]);
+  it("names the rung of the ladder under a card, and has no text of the memory in days or of the load the old scheduler had", () => {
+    expect([1, 5, 10].map((n) => [ru.rung(n), tt.rung(n)])).toEqual([["ступень 1 из 10", "баскыч 1/10"], ["ступень 5 из 10", "баскыч 5/10"], ["ступень 10 из 10", "баскыч 10/10"]]);
+    expect(KEYS.filter((k) => ["memory", "setMode"].includes(k))).toEqual([]);
+    for (const d of [ru, tt]) for (const k of KEYS) if (typeof d[k] === "string") expect(d[k], k).not.toMatch(/Нагрузка|Йөкләнеш/);
+  });
+
+  it("names the language, the time zone and the direction in settings", () => {
     expect([ru.setTz("UTC+3"), tt.setTz("UTC+3")]).toEqual(["🕒 Часовой пояс: UTC+3", "🕒 Сәгать поясы: UTC+3"]);
     expect(ru.setLang).toBe("🌐 Язык: Русский");
     expect(tt.setLang).toBe("🌐 Тел: Татарча");

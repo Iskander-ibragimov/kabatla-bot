@@ -1,7 +1,8 @@
 import type { CardRow, Direction, NewNote, NewScope, Queue, Repo, User } from "../db/repo";
 import { type EmptyReason, emptyReason, mergeStreams, nextSpans, readSpans, scopeKey, writeSpans } from "../levels/order";
 import { LEVELS, levelsOf, posCodesOf } from "../levels/scale";
-import { type Mem, type Rating, formatInterval, grade as fsrsGrade, memoryDays, newMem, preview, stage } from "../srs/fsrs";
+import { formatInterval } from "../srs/interval";
+import { type Mem, type Rating, grade as ladderGrade, newMem, preview, stage } from "../srs/ladder";
 import { type Lead, afterGrade, onCard, onDone } from "../tutorial/hints";
 import { type Window, dayWindow, localDay } from "../users/service";
 import { pick } from "./pick";
@@ -12,7 +13,7 @@ export interface CardView {
   word: string; transcription: string | null; pos: string; translation: string; exampleTt: string; exampleRu: string;
   hasAudio: boolean; sourceUrl: string | null; mem: Mem;
 }
-export interface Feedback { word: string; kind: "grow" | "step" | "lapse" | "first"; beforeDays: number; afterMs: number; keptDays?: number }
+export interface Feedback { word: string; kind: "grow" | "step" | "lapse" | "first"; beforeDays: number; afterMs: number }
 /** `n`: the new cards still to come today; while a level has a word to give it is what is left of the day's limit. */
 export interface Counts { n: number; l: number; r: number }
 export interface DaySummary { reviewsToday: number; learnedToday: number; nextLearningInMs: number | null; streak: number }
@@ -80,7 +81,7 @@ function toView(row: CardRow | (NewNote & { id: number; mem: Mem })): CardView {
 function feedbackOf(word: string, before: Mem, after: Mem, now: number): Feedback {
   const afterMs = after.due - now;
   const beforeDays = before.state === "review" ? before.scheduledDays : 0;
-  if (before.state === "review" && after.state === "relearning") return { word, kind: "lapse", beforeDays, afterMs, keptDays: memoryDays(after) };
+  if (before.state === "review" && after.state === "relearning") return { word, kind: "lapse", beforeDays, afterMs };
   if (after.state === "review" && before.state === "review") return { word, kind: "grow", beforeDays, afterMs };
   if (after.state === "review") return { word, kind: "first", beforeDays, afterMs };
   return { word, kind: "step", beforeDays, afterMs };
@@ -129,6 +130,13 @@ export class ReviewService {
     return { n: Math.min(newLeftOf(user, q.counts), candidates), l: q.counts.learning, r: q.counts.review };
   }
 
+  /** What the four grade buttons of a card say: the interval each grade gives, in words. */
+  private intervalsOf(mem: Mem, user: Pick<User, "lang">): Record<Rating, string> {
+    const due = preview(mem, this.now);
+    const words = (rating: Rating) => formatInterval(due[rating] - this.now, user.lang);
+    return { 1: words(1), 2: words(2), 3: words(3), 4: words(4) };
+  }
+
   /**
    * The next screen of the session. `hint`: the hint of the grade this screen follows. A screen that follows no grade,
    * or a grade without a hint, carries the hint that is due by what the user has seen (`user.hintsSeen`); after a
@@ -165,11 +173,8 @@ export class ReviewService {
       const id = await this.repo.ensureNewCard(user.id, p.note.noteId, p.note.direction, mem);
       row = { ...p.note, id, mem, buriedDay: null };
     } else row = p.card;
-    const pv = preview(row.mem, this.now, user.retention);
-    const intervals = { 1: 0, 2: 0, 3: 0, 4: 0 } as Record<Rating, string | number>;
-    for (const g of [1, 2, 3, 4] as Rating[]) intervals[g] = formatInterval(pv[g] - this.now, user.lang);
     return {
-      kind: "card", view: toView(row), counts: this.countsOf(user, read), intervals: intervals as Record<Rating, string>, feedback, canUndo: feedback != null,
+      kind: "card", view: toView(row), counts: this.countsOf(user, read), intervals: this.intervalsOf(row.mem, user), feedback, canUndo: feedback != null,
       lead: hint ?? onCard(user.hintsSeen),
     };
   }
@@ -178,14 +183,14 @@ export class ReviewService {
     const card = await this.repo.getCard(user.id, cardId);
     if (!card || card.mem.reps !== reps) return { kind: "stale" };
     const before = card.mem;
-    const after = fsrsGrade(before, rating, this.now, user.retention);
+    const after = ladderGrade(before, rating, this.now);
     const today = localDay(user.tzOffsetMin, this.now);
     const yesterday = localDay(user.tzOffsetMin, this.now - 86_400_000);
     const streak = user.lastStudyDay === today ? user.streak : user.lastStudyDay === yesterday ? user.streak + 1 : 1;
     const learnedNow = stage(before) !== "learned" && stage(after) === "learned";
-    // The hint of the button names the interval that stood on it: the scheduler's preview, without the fuzz that moves the stored
-    // interval of a card by a day or so. What is seen is stored with the grade, in the user's statement.
-    const hint = afterGrade(user.hintsSeen, rating, formatInterval(preview(before, this.now, user.retention)[rating] - this.now, user.lang));
+    // The hint of the button names the interval the grade gave, which is the one that stood on the button; its Russian text has
+    // «через», so the interval is in the form after it. What is seen is stored with the grade, in the user's statement.
+    const hint = afterGrade(user.hintsSeen, rating, formatInterval(after.due - this.now, user.lang, "after"));
     const stmts = [
       this.repo.gradeCardStmt(card.id, reps, after),
       this.repo.guardedLogStmt({
@@ -224,11 +229,8 @@ export class ReviewService {
     ]);
     const card = await this.repo.getCard(user.id, log.cardId);
     if (!card) return { kind: "noundo" };
-    const pv = preview(card.mem, this.now, user.retention);
-    const intervals = {} as Record<Rating, string>;
-    for (const g of [1, 2, 3, 4] as Rating[]) intervals[g] = formatInterval(pv[g] - this.now, user.lang);
     // The queue is read for the counters alone: nothing of it is stored.
     const read = await this.readQueue(user, dayWindow(user.tzOffsetMin, this.now));
-    return { kind: "card", view: toView(card), intervals, feedback: null, canUndo: false, counts: this.countsOf(user, read), lead: null };
+    return { kind: "card", view: toView(card), intervals: this.intervalsOf(card.mem, user), feedback: null, canUndo: false, counts: this.countsOf(user, read), lead: null };
   }
 }

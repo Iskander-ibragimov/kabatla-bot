@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { type Direction, Repo, type User } from "../../src/db/repo";
-import { type Mem, newMem } from "../../src/srs/fsrs";
+import { type Mem, newMem } from "../../src/srs/ladder";
 import { countingDb } from "../helpers/countingDb";
 import { gradedMem, logStmt } from "../helpers/review";
 import { note, seedCatalog, seedLearner } from "../helpers/seed";
@@ -23,7 +23,7 @@ async function grade(repo: Repo, user: User, card: { id: number; noteId: number;
   const stmts = [
     repo.gradeCardStmt(card.id, o.reps ?? before.reps, { ...gradedMem(T), reps: before.reps + 1 }),
     repo.guardedLogStmt({
-      cardId: card.id, userId: user.id, rating: 3, stateBefore: before, intervalBeforeDays: before.scheduledDays, intervalAfterMs: 5 * DAY,
+      cardId: card.id, userId: user.id, rating: 3, stateBefore: before, intervalBeforeDays: before.scheduledDays, intervalAfterMs: 3 * DAY,
       reviewedAt: T, wasNew: before.state === "new", learnedNow: false, streakBefore: 0, lastStudyDayBefore: null,
     }),
     repo.guardedUserStmt(user.id, { streak: 1, lastStudyDay: TODAY, lastReviewAt: T, mixCounter: 1 }),

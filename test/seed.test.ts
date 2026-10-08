@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { type Rename, type SeedLevel, type SeedTopic, catalogToSql } from "../src/content/csv";
 import { Repo } from "../src/db/repo";
 import { LEVELS } from "../src/levels/scale";
-import { newMem } from "../src/srs/fsrs";
+import { newMem } from "../src/srs/ladder";
 import { ReviewService } from "../src/review/service";
 import { gradedMem } from "./helpers/review";
 import { note, seedLearner } from "./helpers/seed";
@@ -273,7 +273,7 @@ describe("catalog seed", () => {
     expect(await noteOf("китап")).toEqual({ ...before, slug: "a2", level: 2, topic_no: 8, seq: 3, tseq: 8_000_001 });
     expect(await countRows("notes")).toBe(5);
     expect(await cards()).toEqual(cardsBefore);
-    expect(await repo.getCardByNote(userId, before.id as number, "tt_ru")).toMatchObject({ word: "китап", mem: expect.objectContaining({ state: "review", reps: 1, due: T + 5 * 86_400_000 }) });
+    expect(await repo.getCardByNote(userId, before.id as number, "tt_ru")).toMatchObject({ word: "китап", mem: expect.objectContaining({ state: "review", reps: 1, scheduledDays: 3, due: T + 3 * 86_400_000 }) });
     expect(await countRows("reports")).toBe(1);
     expect(await progress()).toEqual([[userId, 1, 0, 1], [userId, 2, 8, 1]]);
     expect((await decks()).map((d) => [d.slug, d.total])).toEqual([["a1", 2], ["a2", 3]]);

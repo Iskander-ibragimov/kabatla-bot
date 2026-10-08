@@ -5,7 +5,7 @@ import { renderLead } from "../../src/bot/views";
 import { Repo, type User } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
-import { formatInterval } from "../../src/srs/fsrs";
+import { formatInterval } from "../../src/srs/interval";
 import { HINT } from "../../src/tutorial/hints";
 import { nextOccurrence, startOnboarding } from "../../src/users/service";
 import { harness } from "../helpers/botHarness";
@@ -38,15 +38,14 @@ function bot() {
   const press = (data: string, messageId = h.tg.lastMessageId()) => update(() => h.press(data, messageId));
   /**
    * Presses the grade button `rating` of the card on screen. Besides the update it gives `shown`, the interval the
-   * button showed, and `given`, the interval the grade gave the card, written the same way. They are the same but for
-   * an interval of days, which the scheduler moves a little (its fuzz): «8д» on the button may be «9д» for the card.
-   * A hint names the interval of the button.
+   * button showed («Хорошо · 10 минут»: «10 минут»), and `given`, the interval the grade gave the card, written the
+   * same way. The ladder moves no interval, so they are the same. A hint names that interval, in the form after «через».
    */
   const grade = async (rating: 1 | 2 | 3 | 4) => {
     const button = (h.lastMarkup().inline_keyboard ?? []).flat().find((b) => new RegExp(`^g:\\d+:\\d+:${rating}$`).test(b.callback_data))!;
     const u = await press(button.callback_data);
     const card = (await env.DB.prepare("SELECT c.due, u.lang FROM cards c JOIN users u ON u.id = c.user_id WHERE c.id = ?").bind(Number(button.callback_data.split(":")[1])).first<{ due: number; lang: "ru" | "tt" }>())!;
-    return { ...u, shown: button.text.split(" ")[1]!, given: formatInterval(card.due - T, card.lang) };
+    return { ...u, shown: button.text.split(" · ")[1]!, given: formatInterval(card.due - T, card.lang) };
   };
   const user = async () => (await new Repo(env.DB).getUserByTg(42))!;
   return { h, text: (s: string) => update(() => h.text(s)), press, grade, user };
@@ -179,8 +178,8 @@ describe("the introduction", () => {
     await b.press("ob:go");
     expect(b.h.lastText().startsWith(`${tt.hintFront}\n\n${COUNTERS}\n<b>сәлам</b>\n`)).toBe(true);
     const good = await b.grade(3);
-    expect(b.h.lastText().startsWith(`„Яхшы“: сүз кайтканчы &lt;10мин бар. Аны тагын искә төшерсәгез, аралык үсәчәк: көннәр, аннары атналар һәм айлар.\n${tt.hintOrder}\n\n🔵 9 · 🔴 1 · 🟢 0\n<b>мин</b>\n`)).toBe(true);
-    expect([good.shown, good.given]).toEqual(["<10мин", "<10мин"]);
+    expect(b.h.lastText().startsWith(`„Яхшы“: сүз кайтканчы 10 минут бар. Аны тагын искә төшерсәгез, аралык үсәчәк: көннәр, аннары атналар һәм айлар.\n${tt.hintOrder}\n\n🔵 9 · 🔴 1 · 🟢 0\n<b>мин</b>\n`)).toBe(true);
+    expect([good.shown, good.given]).toEqual(["10 минут", "10 минут"]);
   });
 
   it("a second tap on «Дальше» of the first screen does not skip the second: it stays, and the tap is answered like any answer the step does not take", async () => {
@@ -444,8 +443,8 @@ describe("hints", () => {
 
     const good = await b.grade(3);
     expect(good.methods).toEqual(["sendMessage", "deleteMessage", "answerCallbackQuery"]);
-    expect([good.shown, good.given]).toEqual(["<10м", "<10м"]);
-    startsWith("„Хорошо“: слово вернётся через &lt;10м. Вспомните его снова — интервал вырастет: дни, потом недели и месяцы.\nПорядок в занятии: сначала слова на закреплении, потом повторения на сегодня, между ними новые слова.", "мин");
+    expect([good.shown, good.given]).toEqual(["10 минут", "10 минут"]);
+    startsWith("„Хорошо“: слово вернётся через 10 минут. Вспомните его снова — интервал вырастет: дни, потом недели и месяцы.\nПорядок в занятии: сначала слова на закреплении, потом повторения на сегодня, между ними новые слова.", "мин");
     expect((await b.user()).hintsSeen).toBe(HINT.update | HINT.front | HINT.good | HINT.order);
 
     const goodAgain = await b.grade(3);
@@ -454,17 +453,17 @@ describe("hints", () => {
     expect([good.d1, good.methods]).toEqual([goodAgain.d1, goodAgain.methods]);
 
     const again = await b.grade(1);
-    expect([again.shown, again.given]).toEqual(["<1м", "<1м"]);
-    startsWith("„Снова“: слово вернётся через &lt;1м, в этом же занятии, и будет приходить, пока не запомнится.", "син");
+    // The button reads «1 минута»; after «через» the hint has «1 минуту».
+    expect([again.shown, again.given]).toEqual(["1 минута", "1 минута"]);
+    startsWith("„Снова“: слово вернётся через 1 минуту, в этом же занятии, и будет приходить, пока не запомнится.", "син");
     const hard = await b.grade(2);
-    expect([hard.shown, hard.given]).toEqual(["<6м", "<6м"]);
-    startsWith("„Трудно“: слово вернётся через &lt;6м. Интервалы будут расти медленнее.", "исәнмесез");
+    expect([hard.shown, hard.given]).toEqual(["5 минут", "5 минут"]);
+    startsWith("„Трудно“: слово вернётся через 5 минут. Интервалы будут расти медленнее.", "исәнмесез");
     const easy = await b.grade(4);
     // The words of A1 are all started: the card that comes is one that is due again.
-    // The button read «Легко 8д»: the hint says 8д, whatever day the scheduler's fuzz gave the card.
-    expect(easy.shown).toBe("8д");
-    expect(b.h.lastText().startsWith("„Легко“: слово ушло сразу на 8д и не занимает дневную норму новых слов.\n\n🔵 0 · ")).toBe(true);
-    expect(easy.given).toMatch(/^\d+д$/);
+    // The button read «Легко · 1 день»: the hint says 1 день, and the card is due in exactly that.
+    expect([easy.shown, easy.given]).toEqual(["1 день", "1 день"]);
+    expect(b.h.lastText().startsWith("„Легко“: слово ушло сразу на 1 день и не занимает дневную норму новых слов.\n\n🔵 0 · ")).toBe(true);
     expect((await b.user()).hintsSeen).toBe(127);
     // Measured: a grade is 6 D1 calls and 3 Telegram calls here, with a hint or without.
     expect([good.d1, goodAgain.d1, again.d1, hard.d1, easy.d1]).toEqual([6, 6, 6, 6, 6]);
@@ -502,7 +501,7 @@ describe("hints", () => {
     const easy = await b.grade(4);
     expect(easy.methods).toEqual(["sendMessage", "deleteMessage", "answerCallbackQuery"]);
     expect(b.h.lastText()).toBe([
-      `„Легко“: слово ушло сразу на ${easy.shown} и не занимает дневную норму новых слов.`, ru.hintOrder, "",
+      "„Легко“: слово ушло сразу на 1 день и не занимает дневную норму новых слов.", ru.hintOrder, "",
       ru.doneTitle, ru.doneToday(1, 0), ru.streak(1), "", ru.emptyAllDone,
     ].join("\n"));
     expect(easy.d1).toBeLessThanOrEqual(8);
@@ -520,25 +519,27 @@ describe("hints", () => {
   });
 
   it("the texts of the hints, in both languages", () => {
-    const lead = (rating: 1 | 2 | 3 | 4, withOrder = false) => ({ kind: "button", rating, interval: "<10м", withOrder }) as const;
+    const lead = (rating: 1 | 2 | 3 | 4, withOrder = false) => ({ kind: "button", rating, interval: "10 минут", withOrder }) as const;
     expect([renderLead({ kind: "front" }, "ru"), renderLead({ kind: "update" }, "ru"), ...([1, 2, 3, 4] as const).map((r) => renderLead(lead(r), "ru")), renderLead(lead(3, true), "ru")]).toEqual([
       "Вспомните перевод, откройте скрытый текст и оцените себя.",
       "Бот обновился: уровни A1–C1, темы и порядок слов — в /levels",
-      "„Снова“: слово вернётся через &lt;10м, в этом же занятии, и будет приходить, пока не запомнится.",
-      "„Трудно“: слово вернётся через &lt;10м. Интервалы будут расти медленнее.",
-      "„Хорошо“: слово вернётся через &lt;10м. Вспомните его снова — интервал вырастет: дни, потом недели и месяцы.",
-      "„Легко“: слово ушло сразу на &lt;10м и не занимает дневную норму новых слов.",
-      "„Хорошо“: слово вернётся через &lt;10м. Вспомните его снова — интервал вырастет: дни, потом недели и месяцы.\nПорядок в занятии: сначала слова на закреплении, потом повторения на сегодня, между ними новые слова.",
+      "„Снова“: слово вернётся через 10 минут, в этом же занятии, и будет приходить, пока не запомнится.",
+      "„Трудно“: слово вернётся через 10 минут. Интервалы будут расти медленнее.",
+      "„Хорошо“: слово вернётся через 10 минут. Вспомните его снова — интервал вырастет: дни, потом недели и месяцы.",
+      "„Легко“: слово ушло сразу на 10 минут и не занимает дневную норму новых слов.",
+      "„Хорошо“: слово вернётся через 10 минут. Вспомните его снова — интервал вырастет: дни, потом недели и месяцы.\nПорядок в занятии: сначала слова на закреплении, потом повторения на сегодня, между ними новые слова.",
     ]);
-    const ttLead = (rating: 1 | 2 | 3 | 4, withOrder = false) => ({ ...lead(rating, withOrder), interval: "8көн" });
+    const ttLead = (rating: 1 | 2 | 3 | 4, withOrder = false) => ({ ...lead(rating, withOrder), interval: "1 көн" });
     expect([renderLead({ kind: "front" }, "tt"), renderLead({ kind: "update" }, "tt"), ...([1, 2, 3, 4] as const).map((r) => renderLead(ttLead(r), "tt")), renderLead(ttLead(1, true), "tt")]).toEqual([
-      tt.hintFront, tt.updateNotice, tt.hintAgain("8көн"), tt.hintHard("8көн"), tt.hintGood("8көн"), tt.hintEasy("8көн"), `${tt.hintAgain("8көн")}\n${tt.hintOrder}`,
+      tt.hintFront, tt.updateNotice, tt.hintAgain("1 көн"), tt.hintHard("1 көн"), tt.hintGood("1 көн"), tt.hintEasy("1 көн"), `${tt.hintAgain("1 көн")}\n${tt.hintOrder}`,
     ]);
+    // The interval is no text of the bot's own: it is escaped for the message.
+    expect(renderLead({ kind: "button", rating: 2, interval: "<5 & 6>", withOrder: false }, "ru")).toBe("„Трудно“: слово вернётся через &lt;5 &amp; 6&gt;. Интервалы будут расти медленнее.");
   });
 });
 
 describe("a learner who knew the bot before the levels A1–C1", () => {
-  /** Every hint counts as seen, the update notice does not (`hintsSeen` 63); «сәлам» is started and comes back in five days. */
+  /** Every hint counts as seen, the update notice does not (`hintsSeen` 63); «сәлам» is started and comes back in three days. */
   async function earlier(patch: Partial<User> = {}) {
     await catalog(env.DB);
     const { repo, user } = await seedLearner(env.DB, { now: T, tgId: 42, patch: { hintsSeen: 63, ...patch } });
@@ -648,11 +649,13 @@ describe("«Показать обучение заново»", () => {
     await b.text("/learn");
     expect(b.h.lastText().startsWith(`${ru.hintFront}\n\n🔵 20 · 🔴 0 · 🟢 0\n<b>мин</b>\n`)).toBe(true);
     const good = await b.grade(3);
-    expect(b.h.lastText().startsWith(`${ru.hintGood(good.shown.replace("<", "&lt;"))}\n${ru.hintOrder}\n\n🔵 19 · 🔴 1 · 🟢 0\n<b>рәхмәт</b>\n`)).toBe(true);
+    expect(good.shown).toBe("10 минут");
+    expect(b.h.lastText().startsWith(`${ru.hintGood("10 минут")}\n${ru.hintOrder}\n\n🔵 19 · 🔴 1 · 🟢 0\n<b>рәхмәт</b>\n`)).toBe(true);
     await b.grade(3);
     expect(b.h.lastText()).toMatch(/^🔵/);
     const again = await b.grade(1);
-    expect(b.h.lastText().startsWith(`${ru.hintAgain(again.shown.replace("<", "&lt;"))}\n\n🔵`)).toBe(true);
+    expect(again.shown).toBe("1 минута");
+    expect(b.h.lastText().startsWith(`${ru.hintAgain("1 минуту")}\n\n🔵`)).toBe(true);
     expect(b.h.tg.calls.filter((c) => String(c.payload.text ?? "").includes("Бот обновился"))).toEqual([]);
   });
 

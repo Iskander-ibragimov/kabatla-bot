@@ -694,9 +694,9 @@ describe("bot handlers", () => {
     const u = (await repo.getUserByTg(42))!;
     await repo.updateUser(u.id, { onboardingStep: null });
     await h.text("/settings");
-    await h.press("set:ret", 200);
+    await h.press("set:new", 200);
     expect(h.lastText()).toContain("Настройки");
-    expect((await repo.getUser(u.id))!.retention).toBe(0.95);
+    expect((await repo.getUser(u.id))!.newPerDay).toBe(20);
     await h.press("set:dir", 200);
     expect((await repo.getUser(u.id))!.direction).toBe("ru_tt");
     await h.press("set:dir", 200);

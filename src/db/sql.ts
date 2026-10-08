@@ -2,7 +2,7 @@
  * What the repo (db/repo.ts) and the session queue (db/queue.ts) share: the shapes of a note and of a card as they are
  * read, the pieces of SQL both build their statements from, and the mapping of a row to those shapes.
  */
-import type { CardState, Mem } from "../srs/fsrs";
+import type { CardState, Mem } from "../srs/ladder";
 
 export type Direction = "tt_ru" | "ru_tt";
 export interface NoteFields {

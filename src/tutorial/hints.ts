@@ -2,7 +2,7 @@
  * The hints of the first cards: which one a screen carries and which are marked as seen. Each hint is shown once and
  * is one bit of `users.hints_seen`. Pure: what is seen is stored by the grade, in its own write (review/service.ts).
  */
-import type { Rating } from "../srs/fsrs";
+import type { Rating } from "../srs/ladder";
 
 /** The bits of `users.hints_seen`. `update`: the notice about the levels A1–C1 for a learner who knew the bot before them. */
 export const HINT = { front: 1, again: 2, hard: 4, good: 8, easy: 16, order: 32, update: 64 } as const;

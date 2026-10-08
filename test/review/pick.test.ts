@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { type Candidates, pick } from "../../src/review/pick";
 import type { CardRow, NewNote } from "../../src/db/repo";
-import { newMem } from "../../src/srs/fsrs";
+import { newMem } from "../../src/srs/ladder";
 
 const T = Date.UTC(2026, 8, 30, 6);
 const note = { word: "сүз", transcription: null, pos: "", translation: "слово", exampleTt: "", exampleRu: "", exampleSrc: "", audioFileId: null, sourceUrl: null };

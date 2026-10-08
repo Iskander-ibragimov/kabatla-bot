@@ -2,7 +2,7 @@ import type { User } from "../db/repo";
 import { type Dict, dict } from "../i18n";
 import { ALL_POS, NEW_MODES, type NewMode, POS_GROUPS, levelCode } from "../levels/scale";
 import type { Hub, LevelLine, TopicLine } from "../levels/service";
-import type { Lang } from "../srs/fsrs";
+import type { Lang } from "../srs/ladder";
 import type { Cumulative } from "../stats/service";
 import type { OnboardingScreen } from "../users/service";
 import { TZ_OFFSETS } from "../users/service";
@@ -137,7 +137,7 @@ export function renderSettings(u: User): Rendered {
   return {
     text: t.settingsTitle,
     keyboard: [
-      [btn(t.setLang, "set:lang")], [btn(t.setMode(u.retention), "set:ret")], [btn(t.setNew(u.newPerDay), "set:new")],
+      [btn(t.setLang, "set:lang")], [btn(t.setNew(u.newPerDay), "set:new")],
       [btn(t.setRemind(u.remindAt), "set:rem")], [btn(t.setTz(tzLabel(u.tzOffsetMin)), "set:tz")], [btn(t.setDir(u.direction), "set:dir")],
       [btn(t.setAuto(u.autoplay), "set:auto")], [btn(t.setHub, "set:hub")], [btn(t.setTutorial, "set:tut")],
     ],

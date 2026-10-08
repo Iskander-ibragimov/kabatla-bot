@@ -169,9 +169,6 @@ importers:
       grammy:
         specifier: ^1.46.0
         version: 1.46.0(supports-color@10.2.2)
-      ts-fsrs:
-        specifier: ^5.4.2
-        version: 5.4.2
       zod:
         specifier: ^4.6.5
         version: 4.6.5
@@ -1679,10 +1676,6 @@ packages:
   tr46@0.0.3:
     resolution: {integrity: sha512-N3WMsuqV66lT30CrXNbEjx4GEwlow3v6rr4mCcv6prnfwhS01rkgyFdjPNBYd9br7LpXV1+Emh01fHnq2Gdgrw==}
 
-  ts-fsrs@5.4.2:
-    resolution: {integrity: sha512-z4qop4pzTcyTzuJ566d9EaX/4bZZzhYfeaPImfVr+xcYT65c5oBgFDijUhCE/D+C78eaolHIhKRZ04/RwF+v2g==}
-    engines: {node: '>=20.0.0'}
-
   tsconfig-paths-webpack-plugin@4.2.0:
     resolution: {integrity: sha512-zbem3rfRS8BgeNK50Zz5SIQgXzLafiHjOwUAvk/38/o1jHn/V5QAgVUcz884or7WYcPaH3N2CIfUc2u0ul7UcA==}
     engines: {node: '>=10.13.0'}
@@ -3094,8 +3087,6 @@ snapshots:
   tinyrainbow@3.1.1: {}
 
   tr46@0.0.3: {}
-
-  ts-fsrs@5.4.2: {}
 
   tsconfig-paths-webpack-plugin@4.2.0:
     dependencies:

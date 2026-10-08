@@ -9,7 +9,7 @@ import { consume, remaining } from "../../src/entitlements/service";
 import { ru } from "../../src/i18n/ru";
 import { hub, topicLines } from "../../src/levels/service";
 import { ReviewService } from "../../src/review/service";
-import { newMem } from "../../src/srs/fsrs";
+import { newMem } from "../../src/srs/ladder";
 import { tt } from "../../src/i18n/tt";
 import { dayWindow } from "../../src/users/service";
 import { countingDb } from "../helpers/countingDb";

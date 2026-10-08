@@ -5,7 +5,7 @@ import { mergeStreams } from "../../src/levels/order";
 import { ALL_LEVELS, type NewMode, hasLevel, levelBit } from "../../src/levels/scale";
 import { hub, setTopic, toggleLevel, togglePos, topicLines } from "../../src/levels/service";
 import { tick } from "../../src/reminders/service";
-import { newMem } from "../../src/srs/fsrs";
+import { newMem } from "../../src/srs/ladder";
 import { harness } from "../helpers/botHarness";
 import { type CardSeed, type CatalogNote, bulkCards, bulkCatalog, numeralsAt } from "../helpers/catalog";
 import { fakeTelegram } from "../helpers/fakeTelegram";

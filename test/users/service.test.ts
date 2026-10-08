@@ -20,15 +20,15 @@ describe("users", () => {
   it("invalid settings rejected", async () => {
     const repo = new Repo(env.DB);
     const { user } = await getOrCreate(repo, 5, 5, "ru", T);
-    await expect(setSetting(repo, user.id, "retention", 0.5)).rejects.toThrow();
     await expect(setSetting(repo, user.id, "newPerDay", 7)).rejects.toThrow();
     await expect(setSetting(repo, user.id, "remindAt", "25:00")).rejects.toThrow();
     await expect(setSetting(repo, user.id, "lang", "en")).rejects.toThrow();
     await expect(setSetting(repo, user.id, "direction", "en_ru")).rejects.toThrow();
-    await setSetting(repo, user.id, "retention", 0.95);
+    // The retention of the old scheduler is no setting any more: no value of it is taken, and the column keeps what it held.
+    for (const value of [0.85, 0.9, 0.95]) await expect(setSetting(repo, user.id, "retention" as never, value)).rejects.toThrow("invalid retention");
     await setSetting(repo, user.id, "direction", "both");
     const u = (await repo.getUser(user.id))!;
-    expect(u.retention).toBe(0.95);
+    expect(u.retention).toBe(0.9);
     expect(u.direction).toBe("both");
     await setSetting(repo, user.id, "lang", "tt");
     await setSetting(repo, user.id, "direction", "ru_tt");

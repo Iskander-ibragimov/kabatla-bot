@@ -163,4 +163,14 @@ describe("stage and memoryDays", () => {
     expect(memoryDays(at(2))).toBe(0);
     expect(memoryDays(newMem(NOW))).toBe(0);
   });
+  it("go by the days of a card, also of one the old scheduler wrote: «знаю» from 7 days, «выучено» from 21", () => {
+    // Moved here from the tests of the old scheduler: the thresholds did not change with the ladder.
+    const old = (days: number): Mem => ({ ...newMem(NOW), state: "review", scheduledDays: days, stability: days, difficulty: 5, lastReview: NOW, reps: 3 });
+    expect([6, 7, 20, 21].map((days) => stage(old(days)))).toEqual(["learning", "known", "known", "learned"]);
+    expect(stage({ ...newMem(NOW), state: "learning", step: 0 })).toBe("learning");
+    expect(stage({ ...old(30), state: "relearning", step: 0 })).toBe("learning");
+    expect(memoryDays(old(11))).toBe(11);
+    // What the old scheduler counted for a word that fell, its stability, is not counted.
+    expect(memoryDays({ ...old(0), state: "relearning", step: 0, stability: 3.1 })).toBe(0);
+  });
 });

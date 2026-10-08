@@ -42,7 +42,7 @@ describe("first day and next day", () => {
       leads.push(h.lastText().split("🔵")[0]!);
     }
     // The first card was graded «Снова», the second «Хорошо»: each button explains itself once, the first with the order of a session; up to the fifth card and beyond nothing else is said.
-    expect(leads).toEqual([`${ru.hintAgain("&lt;1м")}\n${ru.hintOrder}\n\n`, `${ru.hintGood("&lt;10м")}\n\n`, "", "", "", "", "", "", "", ""]);
+    expect(leads).toEqual([`${ru.hintAgain("1 минуту")}\n${ru.hintOrder}\n\n`, `${ru.hintGood("10 минут")}\n\n`, "", "", "", "", "", "", "", ""]);
     // finish learning steps
     for (let i = 0; i < 30 && gradeButtons(h.lastMarkup()).length; i++) {
       t += 11 * MIN;
@@ -111,7 +111,7 @@ describe("first day and next day", () => {
     expect(h.tg.calls.slice(-3).map((c) => c.method)).toEqual(["editMessageReplyMarkup", "sendMessage", "answerCallbackQuery"]);
     expect(h.lastText().startsWith(`${tt.hintFront}\n\n🔵 10 · 🔴 0 · 🟢 0\n<b>${words100[0]}</b>\n`)).toBe(true);
 
-    /** The interval on the «Җиңел» button of the first card, like «8көн»: the hint above the second card names it. */
+    /** The interval on the «Җиңел» button of the first card, «1 көн»: the hint above the second card names it. */
     let firstEasy = "";
     for (let i = 0; i < 100; i++) {
       expect(h.lastText()).toContain(`<b>${words100[i]}</b>`);
@@ -119,8 +119,9 @@ describe("first day and next day", () => {
       if (i === 1) expect(h.lastText().startsWith(`„Җиңел“: сүз шунда ук озакка китте — кайтканчы ${firstEasy} бар. Ул көнлек яңа сүзләр санына керми.\n${tt.hintOrder}\n\n🔵 10 · 🔴 0 · 🟢 0\n`)).toBe(true);
       if (i > 1) expect(h.lastText().startsWith("🔵 10 · 🔴 0 · 🟢 0\n")).toBe(true);
       const easy = (h.lastMarkup().inline_keyboard ?? []).flat().find((b) => b.callback_data === easyButton(h))!;
-      expect(easy.text.startsWith(`${tt.easy} `)).toBe(true);
-      if (i === 0) firstEasy = easy.text.slice(tt.easy.length + 1);
+      // «Легко» on a new word is one day, for every one of the hundred.
+      expect(easy.text).toBe(`${tt.easy} · 1 көн`);
+      if (i === 0) firstEasy = easy.text.slice(`${tt.easy} · `.length);
       await press(easy.callback_data);
     }
     // Every word of the checked level is in work: the session ends, in Tatar; the bot opens nothing by itself and offers the next level.

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { Repo, type User } from "../../src/db/repo";
 import { enqueue } from "../../src/jobs/queue";
 import { tick } from "../../src/reminders/service";
-import { newMem } from "../../src/srs/fsrs";
+import { newMem } from "../../src/srs/ladder";
 import { bulkCatalog } from "../helpers/catalog";
 import { countingDb } from "../helpers/countingDb";
 import { fakeTelegram } from "../helpers/fakeTelegram";
@@ -246,7 +246,7 @@ describe("reminders tick", () => {
     const noteIds = await catalog(1);
     const { repo, user } = await learner({ patch: { nextDailyAt: local(30, 9, 0) + 10 * 86_400_000 } });
     const t0 = local(30, 12, 0);
-    await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(t0), state: "learning", step: 1, due: t0 + 10 * MIN, reps: 1, lastReview: t0, stability: 2, difficulty: 5 });
+    await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(t0), state: "learning", step: 1, due: t0 + 10 * MIN, reps: 1, lastReview: t0 });
     await repo.updateUser(user.id, { lastReviewAt: t0 });
     const tg = fakeTelegram();
     await run(env.DB, tg, t0 + 5 * MIN);

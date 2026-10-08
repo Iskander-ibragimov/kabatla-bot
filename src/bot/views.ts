@@ -1,5 +1,5 @@
 import type { InlineKeyboardButton } from "grammy/types";
-import { type Lang, type Mem, type Rating, memoryDays, stage } from "../srs/fsrs";
+import { type Lang, type Mem, type Rating, rungOf, stage } from "../srs/ladder";
 import { dict } from "../i18n";
 import { levelCode } from "../levels/scale";
 import { esc } from "../tg/html";
@@ -115,12 +115,13 @@ function wordMeta(n: { transcription: string | null; pos: string }, lang: Lang):
   return [n.transcription ? `[${esc(n.transcription)}]` : "", n.pos ? `<i>${esc(dict(lang).posName(n.pos))}</i>` : ""].filter(Boolean).join(" · ");
 }
 
+/** The line under a card: the stage of the word, its rung of the ladder once it stands on one, and which review this is. */
 export function progressLine(m: Mem, lang: Lang): string {
   const t = dict(lang);
   const st = { new: t.stageNew, learning: t.stageLearning, known: t.stageKnown, learned: t.stageLearned }[stage(m)];
   const parts = [st];
-  const d = memoryDays(m);
-  if (d) parts.push(t.memory(d));
+  const rung = rungOf(m);
+  if (rung >= 1) parts.push(t.rung(rung));
   if (m.reps) parts.push(t.reviewNo(m.reps + 1));
   return parts.join(" · ");
 }
@@ -161,7 +162,7 @@ export function renderLead(l: Lead, lang: Lang): string {
   const t = dict(lang);
   if (l.kind === "front") return t.hintFront;
   if (l.kind === "update") return t.updateNotice;
-  // The interval is the text of a button, like «<10м»: it is escaped for the message.
+  // The interval is words, like «10 минут»; it is escaped for the message like any text that is not the bot's own.
   const line = { 1: t.hintAgain, 2: t.hintHard, 3: t.hintGood, 4: t.hintEasy }[l.rating](esc(l.interval));
   return l.withOrder ? `${line}\n${t.hintOrder}` : line;
 }
@@ -197,8 +198,8 @@ export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, str
 
   const g = (r: Rating) => `g:${v.cardId}:${v.reps}:${r}`;
   const keyboard: Keyboard = [
-    [btn(`${t.again} ${intervals[1]}`, g(1), "danger"), btn(`${t.hard} ${intervals[2]}`, g(2))],
-    [btn(`${t.good} ${intervals[3]}`, g(3), "success"), btn(`${t.easy} ${intervals[4]}`, g(4), "primary")],
+    [btn(`${t.again} · ${intervals[1]}`, g(1), "danger"), btn(`${t.hard} · ${intervals[2]}`, g(2))],
+    [btn(`${t.good} · ${intervals[3]}`, g(3), "success"), btn(`${t.easy} · ${intervals[4]}`, g(4), "primary")],
   ];
   const extra: Button[] = [];
   if (v.hasAudio) extra.push(btn(t.speak, `v:${v.noteId}`));

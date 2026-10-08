@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { playVoice } from "../../src/content/audio";
 import type { Repo } from "../../src/db/repo";
-import { newMem } from "../../src/srs/fsrs";
+import { newMem } from "../../src/srs/ladder";
 import { fakeTelegram } from "../helpers/fakeTelegram";
 import { seedUser } from "../helpers/seed";
 
