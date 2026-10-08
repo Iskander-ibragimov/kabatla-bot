@@ -49,7 +49,7 @@ function bot() {
     return { ...u, shown: button.text.split(" · ")[1]!, given: formatInterval(card.due - T, card.lang) };
   };
   const user = async () => (await new Repo(env.DB).getUserByTg(42))!;
-  return { h, text: (s: string) => update(() => h.text(s)), press, grade, user };
+  return { h, text: (s: string, entities?: unknown[]) => update(() => h.text(s, entities)), press, grade, user };
 }
 type Update = Awaited<ReturnType<ReturnType<typeof bot>["press"]>>;
 /** The update changed the message in place and answered the tap: nothing was sent. */
@@ -93,7 +93,7 @@ const EXPLAINED_RU: Record<number, string> = {
   1: "✅ «Снова» — не вспомнили. Слово возвращается в начало лесенки: придёт через 1 минуту и будет подниматься заново.",
   2: "✅ «Трудно» — вспомнили с трудом. Слово остаётся на своей ступеньке и придёт через тот же срок; у нового слова это 5 минут.",
   3: "✅ «Хорошо» — вспомнили. Слово поднимается на ступеньку: придёт через 10 минут, потом через 1 день, 3 дня, 7 дней — всё реже.",
-  4: "✅ «Легко» — знаете уверенно. Слово перепрыгивает ступеньку: придёт сразу через 1 день.",
+  4: "✅ «Легко» — знаете уверенно. Слово перепрыгивает ступеньку: придёт не через 10 минут, а через 1 день.",
 };
 const DONE_RU = "🎉 Готово, вы попробовали все четыре кнопки.\nОценивайте честно: вспомнили — вверх по лесенке, забыли — с начала. Вернуться к этому обучению — команда /howto.";
 const LABELS_RU = ["Снова · 1 минута", "Трудно · 5 минут", "Хорошо · 10 минут", "Легко · 1 день"];
@@ -111,16 +111,19 @@ const EXPLAINED_TT: Record<number, string> = {
   1: "✅ «Яңадан» — искә төшермәдегез. Сүз баскычның башына кайта: кайтканчы 1 минут бар, аннары яңадан күтәрелә.",
   2: "✅ «Авыр» — авырлык белән искә төшердегез. Сүз үз баскычында кала һәм шул ук вакыттан соң кайта; яңа сүз өчен кайтканчы 5 минут бар.",
   3: "✅ «Яхшы» — искә төшердегез. Сүз бер баскычка күтәрелә: кайтканчы 10 минут бар, аннары 1 көн, 3 көн, 7 көн — сирәгрәк.",
-  4: "✅ «Җиңел» — яхшы беләсез. Сүз бер баскыч аша сикерә: кайтканчы 1 көн бар.",
+  4: "✅ «Җиңел» — яхшы беләсез. Сүз бер баскыч аша сикерә: кайтканчы 10 минут түгел, 1 көн бар.",
 };
 const DONE_TT = "🎉 Булды, дүрт төймәне дә сынап карадыгыз.\nҮзегезгә гадел бәя куегыз: искә төшерсәгез — баскыч буйлап өскә, онытсагыз — башыннан. Бу өйрәтүгә кире кайту — /howto.";
 const LABELS_TT = ["Яңадан · 1 минут", "Авыр · 5 минут", "Яхшы · 10 минут", "Җиңел · 1 көн"];
 const CARD_TT = (n: number, last?: number) => [
-  `🎓 Күнегү · ${n}/4`, "Алгарыш саналмый.", "", ...(last ? [EXPLAINED_TT[last]!, `Калган төймәләр: ${4 - n}.`, ""] : []), WORD, "", TASK_TT, "", LADDER_TT,
+  `🎓 Күнегү · ${n}/4`, "Алгарыш саналмый.", "", ...(last ? [EXPLAINED_TT[last]!, `Калган төймәләр: ${4 - n}`, ""] : []), WORD, "", TASK_TT, "", LADDER_TT,
 ].join("\n");
 
-/** The buttons of the card on which the buttons of `mask` are tried: the four grades, the tried ones marked, then `last`. */
-const keys = (labels: string[], mask: number, ...last: string[][]) => [...labels.map((label, i) => [mask & (1 << i) ? `✅ ${label}` : label, `pr:${mask}:${i + 1}`]), ...last];
+/**
+ * The buttons of the card on which the buttons of `mask` are tried: the four grades, then `last`. A tried button has
+ * «✅» where the others have « · »: «Хорошо ✅ 10 минут».
+ */
+const keys = (labels: string[], mask: number, ...last: string[][]) => [...labels.map((label, i) => [mask & (1 << i) ? label.replace(" · ", " ✅ ") : label, `pr:${mask}:${i + 1}`]), ...last];
 const SKIP_RU = ["Пропустить", "ob:n2"], NEXT_RU = ["Дальше", "ob:n2"], LEARN_RU = ["▶ Учить", "learn"];
 const ORDERS = [1, 2, 3, 4].flatMap((a) => [1, 2, 3, 4].flatMap((b) => [1, 2, 3, 4].flatMap((c) => [1, 2, 3, 4].map((d) => [a, b, c, d])))).filter((o) => new Set(o).size === 4);
 
@@ -262,8 +265,9 @@ describe("the introduction", () => {
     expect(good.d1).toBe(1);
     expect(await held()).toEqual(before);
     expect(b.h.lastText()).toBe(CARD_TT(1, 3));
-    for (const part of ["Күнегү · 1/4", "кайтканчы 10 минут бар, аннары 1 көн, 3 көн, 7 көн — сирәгрәк.", "Калган төймәләр: 3."]) expect(b.h.lastText()).toContain(part);
-    expect(buttons(b.h.lastMarkup())[2]).toEqual(["✅ Яхшы · 10 минут", "pr:4:3"]);
+    for (const part of ["Күнегү · 1/4", "кайтканчы 10 минут бар, аннары 1 көн, 3 көн, 7 көн — сирәгрәк.", "Калган төймәләр: 3"]) expect(b.h.lastText()).toContain(part);
+    expect(b.h.lastText()).not.toContain("Калган төймәләр: 3.");
+    expect(buttons(b.h.lastMarkup())[2]).toEqual(["Яхшы ✅ 10 минут", "pr:4:3"]);
 
     // In Tatar the interval stands before «бар» and takes no ending: the minute of «Яңадан» is the word of its button.
     edited(await b.press("pr:4:1"));
@@ -394,10 +398,17 @@ describe("the introduction", () => {
           const u = await b.text(typed);
           expect(u.calls.map((c) => [c.method, c.payload.text]), typed).toEqual([["sendMessage", ru.chooseAbove]]);
         }
-        // «Показать обучение заново» and its two screens are gone; their buttons in old messages are buttons of the settings here, like the rest.
-        for (const data of ["set:tut", "tut:2", "tut:ok", "hub", "lv:t:2", "learn"]) {
+        // A button, «▶ Учить» of an old message among them, is answered in the tap: no message is sent, and the button does not keep spinning.
+        for (const data of ["hub", "lv:t:2", "learn"]) {
           const u = await b.press(data, 100);
-          expect(u.calls.map((c) => c.payload.text), data).toEqual([ru.chooseAbove]);
+          expect(u.calls.map((c) => [c.method, c.payload.text]), data).toEqual([["answerCallbackQuery", ru.chooseAbove]]);
+          expect(u.d1, data).toBe(1);
+        }
+        // «Показать обучение заново» and its two screens are gone: their buttons in old messages are buttons the bot no longer has, here as after the introduction.
+        for (const data of ["set:tut", "tut:2", "tut:ok", "tut:", "tut:9"]) {
+          const u = await b.press(data, 100);
+          expect(u.calls.map((c) => [c.method, c.payload.text]), data).toEqual([["answerCallbackQuery", ru.staleButton]]);
+          expect(u.d1, data).toBe(1);
         }
         // The rows of /settings that change a value at a tap are buttons of the settings like the others: the tap is answered, and the row is only read.
         for (const data of ["set:lang", "set:ret", "set:new", "set:rem", "set:dir", "set:auto"]) {
@@ -482,7 +493,9 @@ describe("the practice card of the introduction", () => {
     // The explanation stands above the word, and the count of the buttons left under the explanation.
     expect(b.h.lastText().indexOf(EXPLAINED_RU[3]!)).toBeLessThan(b.h.lastText().indexOf("<b>китап</b>"));
     expect(buttons(b.h.lastMarkup())).toEqual(keys(LABELS_RU, 4, SKIP_RU));
-    expect(buttons(b.h.lastMarkup())[2]).toEqual(["✅ Хорошо · 10 минут", "pr:4:3"]);
+    // The mark stands inside the label, in place of the dot: a tried button is no longer than it was.
+    expect(buttons(b.h.lastMarkup())[2]).toEqual(["Хорошо ✅ 10 минут", "pr:4:3"]);
+    expect("Хорошо ✅ 10 минут".length).toBe("Хорошо · 10 минут".length);
   });
 
   it("each button says what it does to the word, with its own interval; «Снова» has «через 1 минуту»", async () => {
@@ -494,7 +507,7 @@ describe("the practice card of the introduction", () => {
     edited(again);
     expect(b.h.lastText()).toBe(CARD_RU(1, 1));
     // The button reads «1 минута»; after «через» the explanation has «1 минуту».
-    expect(buttons(b.h.lastMarkup())[0]).toEqual(["✅ Снова · 1 минута", "pr:1:1"]);
+    expect(buttons(b.h.lastMarkup())[0]).toEqual(["Снова ✅ 1 минута", "pr:1:1"]);
     expect(b.h.lastText()).toContain("придёт через 1 минуту и будет подниматься заново.");
     expect(b.h.lastText()).not.toContain("через 1 минута");
     edited(await b.press("pr:1:2"));
@@ -502,7 +515,8 @@ describe("the practice card of the introduction", () => {
     expect(b.h.lastText()).toContain("у нового слова это 5 минут.");
     edited(await b.press("pr:3:4"));
     expect(b.h.lastText()).toBe(CARD_RU(3, 4));
-    expect(b.h.lastText()).toContain("придёт сразу через 1 день.");
+    // «Легко» is told against «Хорошо» of the same card: both intervals, each after «через».
+    expect(b.h.lastText()).toContain("придёт не через 10 минут, а через 1 день.");
     expect(b.h.lastText()).toContain("Осталось кнопок: 1");
     expect(buttons(b.h.lastMarkup())).toEqual(keys(LABELS_RU, 11, SKIP_RU));
     expect(await held()).toEqual(before);
@@ -808,24 +822,111 @@ describe("/howto, «Как это работает»", () => {
     expect((await b.user()).onboardingStep).toBeNull();
   });
 
-  it("on a step of the introduction other than the practice, a practice button of an older message is a replay too: it shows the card, writes nothing and keeps the step", async () => {
+  it("on a step of the introduction other than the practice, a practice button of an older message is no replay: its message becomes the screen of the step, and nothing is written", async () => {
     await catalog(env.DB);
     const b = bot();
     await b.text("/start");
     await b.press("ob:ru");
-    for (const step of ["intro1", "levels"]) {
+    const screens: Record<string, [text: string, keyboard: string[][], d1: number]> = {
+      // D1 calls: the user; the step «Уровни» also reads the counters of the levels for its screen.
+      intro1: [ABOUT_RU, [["Попробовать", "ob:n1"]], 1],
+      levels: [ru.obLevels, LEVELS_RU(true, false), 2],
+    };
+    for (const [step, [text, keyboard, d1]] of Object.entries(screens)) {
       await new Repo(env.DB).updateUser((await b.user()).id, { onboardingStep: step });
       const before = await held();
-      // Message 77 is a practice card sent earlier, by a /start on the practice step.
-      const start = await b.press("pr:start", 77);
-      edited(start, 77);
-      expect([b.h.lastText(), buttons(b.h.lastMarkup())], step).toEqual([CARD_RU(0), keys(LABELS_RU, 0, LEARN_RU)]);
-      const u = await b.press("pr:0:3", 77);
-      edited(u, 77);
-      expect([start.d1, u.d1], step).toEqual([1, 1]);
-      expect([b.h.lastText(), buttons(b.h.lastMarkup())], step).toEqual([CARD_RU(1, 3), keys(LABELS_RU, 4, LEARN_RU)]);
+      // Message 77 is a practice card sent earlier (a /start on the practice step), or the «Как это работает» of another time.
+      for (const data of ["pr:start", "pr:0:3", "pr:7:4", "pr:15:1"]) {
+        const u = await b.press(data, 77);
+        edited(u, 77);
+        expect([b.h.lastText(), buttons(b.h.lastMarkup())], `${step} ${data}`).toEqual([text, keyboard]);
+        expect([u.toast, u.d1], `${step} ${data}`).toEqual([ru.chooseAbove, d1]);
+      }
       expect(await held()).toEqual(before);
     }
+    // No message of this run offered «▶ Учить», which opens nothing during the introduction.
+    expect(b.h.tg.calls.filter((c) => JSON.stringify(c.payload.reply_markup ?? "").includes('"learn"'))).toEqual([]);
+  });
+
+  it("«Пропустить» and then a grade button of the same message: the levels stay on screen, and the introduction goes on from them", async () => {
+    await catalog(env.DB);
+    const b = bot();
+    await atPractice(b);
+    edited(await b.press("ob:n2", 100));
+    expect(b.h.lastText()).toBe(ru.obLevels);
+    const before = await held();
+    // The tap on «Хорошо» was made while the card was still on screen and arrives after the step has changed.
+    const late = await b.press("pr:0:3", 100);
+    edited(late, 100);
+    expect([b.h.lastText(), buttons(b.h.lastMarkup())]).toEqual([ru.obLevels, LEVELS_RU(true, false)]);
+    expect([late.toast, late.d1]).toEqual([ru.chooseAbove, 2]);
+    expect(await held()).toEqual(before);
+    expect((await b.user()).onboardingStep).toBe("levels");
+    // The message is still the step: a level is checked in it, and «Начать» gives the first card.
+    edited(await b.press("ob:lv:2", 100));
+    expect(buttons(b.h.lastMarkup())).toEqual(LEVELS_RU(true, true));
+    await b.press("ob:go", 100);
+    expect(b.h.lastText().startsWith(`${ru.hintFront}\n\n${COUNTERS}\n<b>сәлам</b>\n`)).toBe(true);
+  });
+
+  it.each([["«Пропустить» first", ["ob:n2", "pr:0:3"]], ["the grade button first", ["pr:0:3", "ob:n2"]]])("«Пропустить» and a grade button that arrive together (%s): the learner is on the levels, and the message is the levels or the introduction's card, never a replay", async (_order, pair) => {
+    await catalog(env.DB);
+    const b = bot();
+    await atPractice(b);
+    const sent = b.h.tg.calls.length;
+    await Promise.all(pair.map((data) => b.h.press(data, 100)));
+    const calls = b.h.tg.calls.slice(sent);
+    // Each of the two updates edited the message once and answered its tap: four calls, nothing sent.
+    expect(calls.map((c) => c.method).sort()).toEqual(["answerCallbackQuery", "answerCallbackQuery", "editMessageText", "editMessageText"]);
+    expect((await b.user()).onboardingStep).toBe("levels");
+    expect(await held()).toMatchObject({ cards: [], review_log: [], sessions: [], user_progress: [] });
+    const shown = [b.h.lastText(), buttons(b.h.lastMarkup())];
+    // Whichever edit came last, the message leads on: it is the levels, or the card with «Пропустить», whose tap now shows the levels.
+    expect([[ru.obLevels, LEVELS_RU(true, false)], [CARD_RU(1, 3), keys(LABELS_RU, 4, SKIP_RU)]]).toContainEqual(shown);
+    if (shown[0] !== ru.obLevels) {
+      const skip = await b.press("ob:n2", 100);
+      edited(skip, 100);
+      expect(skip.toast).toBe(ru.chooseAbove);
+    }
+    expect([b.h.lastText(), buttons(b.h.lastMarkup())]).toEqual([ru.obLevels, LEVELS_RU(true, false)]);
+    await b.press("ob:go", 100);
+    expect(b.h.lastText().startsWith(`${ru.hintFront}\n\n${COUNTERS}\n<b>сәлам</b>\n`)).toBe(true);
+  });
+
+  it("«▶ Учить» of an old message pressed during the introduction is answered in the tap; /learn typed there is answered with a message, as before", async () => {
+    await catalog(env.DB);
+    const b = bot();
+    await b.text("/start");
+    await b.press("ob:ru");
+    for (const step of ["intro1", "practice", "intro2", "levels"]) {
+      await new Repo(env.DB).updateUser((await b.user()).id, { onboardingStep: step });
+      const row = await b.user();
+      const tap = await b.press("learn", 77);
+      expect(tap.calls.map((c) => [c.method, c.payload.text]), step).toEqual([["answerCallbackQuery", ru.chooseAbove]]);
+      expect(tap.d1, step).toBe(1);
+      for (const typed of ["/learn", "/undo", "/levels", "/settings", "/stats", "/gen кунакта", "/howto"]) {
+        const u = await b.text(typed);
+        expect(u.calls.map((c) => [c.method, c.payload.text]), `${step} ${typed}`).toEqual([["sendMessage", ru.chooseAbove]]);
+      }
+      expect(await b.user()).toEqual(row);
+    }
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM cards").first<{ n: number }>())!.n).toBe(0);
+  });
+
+  it("/howto with the bot's name, and with words after it, is the command: the screen about the bot, and no word is looked up", async () => {
+    await studying();
+    const before = await held();
+    const b = bot();
+    // Telegram marks the name of the bot as a part of the command.
+    for (const [typed, length] of [["/howto@povtor_bot", 17], ["/howto китап", 6], ["/howto@povtor_bot китап вакыт", 17], ["/howto https://example.com/a китап", 6]] as const) {
+      const u = await b.text(typed, [{ type: "bot_command", offset: 0, length }]);
+      expect(u.calls.map((c) => [c.method, c.payload.text]), typed).toEqual([["sendMessage", ABOUT_RU]]);
+      expect(buttons(b.h.lastMarkup()), typed).toEqual([["Попробовать", "pr:start"]]);
+      expect(u.d1, typed).toBe(1);
+    }
+    expect(before.previews).toEqual([]);
+    expect(await held()).toEqual(before);
+    expect(b.h.tg.calls.filter((c) => c.payload.text === ru.searching)).toEqual([]);
   });
 
   it("data that is no practice button is answered as a stale button", async () => {
@@ -840,11 +941,11 @@ describe("/howto, «Как это работает»", () => {
     expect(await held()).toEqual(before);
   });
 
-  it("«Показать обучение заново» is gone: its buttons in old messages are answered as stale, and nothing is written, the hints among it", async () => {
+  it("«Показать обучение заново» is gone: after the introduction its buttons in old messages are answered as stale, and nothing is written, the hints among it", async () => {
     await studying();
     const before = await held();
     const b = bot();
-    for (const data of ["set:tut", "tut:2", "tut:ok"]) {
+    for (const data of ["set:tut", "tut:2", "tut:ok", "tut:", "tut:9"]) {
       const u = await b.press(data, 100);
       expect(u.calls.map((c) => [c.method, c.payload.text]), data).toEqual([["answerCallbackQuery", ru.staleButton]]);
       expect(u.d1, data).toBe(1);

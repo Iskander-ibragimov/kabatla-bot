@@ -32,7 +32,7 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   practiceAgain: [["1 минут"]],
   practiceHard: [["5 минут"]],
   practiceGood: [["10 минут", "1 көн, 3 көн, 7 көн"]],
-  practiceEasy: [["1 көн"]],
+  practiceEasy: [["1 көн", "10 минут"]],
   practiceLeft: [[3], [1]],
   askWords: [["мисал.рф"]],
   dupLine: [["китап", "Минем сүзләр", false], ["китап", "Минем сүзләр", true]],
@@ -206,35 +206,37 @@ describe("i18n dictionaries", () => {
       "🎉 Готово, вы попробовали все четыре кнопки.\nОценивайте честно: вспомнили — вверх по лесенке, забыли — с начала. Вернуться к этому обучению — команда /howto.",
     ]);
     // The intervals of a new word, as the card gets them: after «через» in the form that follows it.
-    expect([ru.practiceAgain("1 минуту"), ru.practiceHard("5 минут"), ru.practiceGood("10 минут", "1 день, 3 дня, 7 дней"), ru.practiceEasy("1 день")]).toEqual([
+    expect([ru.practiceAgain("1 минуту"), ru.practiceHard("5 минут"), ru.practiceGood("10 минут", "1 день, 3 дня, 7 дней"), ru.practiceEasy("1 день", "10 минут")]).toEqual([
       "✅ «Снова» — не вспомнили. Слово возвращается в начало лесенки: придёт через 1 минуту и будет подниматься заново.",
       "✅ «Трудно» — вспомнили с трудом. Слово остаётся на своей ступеньке и придёт через тот же срок; у нового слова это 5 минут.",
       "✅ «Хорошо» — вспомнили. Слово поднимается на ступеньку: придёт через 10 минут, потом через 1 день, 3 дня, 7 дней — всё реже.",
-      "✅ «Легко» — знаете уверенно. Слово перепрыгивает ступеньку: придёт сразу через 1 день.",
+      "✅ «Легко» — знаете уверенно. Слово перепрыгивает ступеньку: придёт не через 10 минут, а через 1 день.",
     ]);
     expect([tt.practiceTitle(2), tt.practiceNote, tt.practiceTask, tt.practiceLadder("1 минут → 10 минут"), tt.practiceLeft(3), tt.practiceDone]).toEqual([
       "🎓 Күнегү · 2/4",
       "Алгарыш саналмый.",
       "Тәрҗемәсен искә төшерегез, яшерелгән текстны ачыгыз һәм дүрт төймәнең һәрберсенә чиратлап басыгыз — һәрберсенең нәрсә эшләгәнен күрсәтермен.",
       "Сүз баскычы: 1 минут → 10 минут",
-      "Калган төймәләр: 3.",
+      "Калган төймәләр: 3",
       "🎉 Булды, дүрт төймәне дә сынап карадыгыз.\nҮзегезгә гадел бәя куегыз: искә төшерсәгез — баскыч буйлап өскә, онытсагыз — башыннан. Бу өйрәтүгә кире кайту — /howto.",
     ]);
-    const ttExplained = [tt.practiceAgain("1 минут"), tt.practiceHard("5 минут"), tt.practiceGood("10 минут", "1 көн, 3 көн, 7 көн"), tt.practiceEasy("1 көн")];
+    const ttExplained = [tt.practiceAgain("1 минут"), tt.practiceHard("5 минут"), tt.practiceGood("10 минут", "1 көн, 3 көн, 7 көн"), tt.practiceEasy("1 көн", "10 минут")];
     expect(ttExplained).toEqual([
       "✅ «Яңадан» — искә төшермәдегез. Сүз баскычның башына кайта: кайтканчы 1 минут бар, аннары яңадан күтәрелә.",
       "✅ «Авыр» — авырлык белән искә төшердегез. Сүз үз баскычында кала һәм шул ук вакыттан соң кайта; яңа сүз өчен кайтканчы 5 минут бар.",
       "✅ «Яхшы» — искә төшердегез. Сүз бер баскычка күтәрелә: кайтканчы 10 минут бар, аннары 1 көн, 3 көн, 7 көн — сирәгрәк.",
-      "✅ «Җиңел» — яхшы беләсез. Сүз бер баскыч аша сикерә: кайтканчы 1 көн бар.",
+      "✅ «Җиңел» — яхшы беләсез. Сүз бер баскыч аша сикерә: кайтканчы 10 минут түгел, 1 көн бар.",
     ]);
     // Each explanation names its button as the button is named, in both languages.
     for (const d of [ru, tt]) {
-      const explained = [d.practiceAgain("x"), d.practiceHard("x"), d.practiceGood("x", "y"), d.practiceEasy("x")];
+      const explained = [d.practiceAgain("x"), d.practiceHard("x"), d.practiceGood("x", "y"), d.practiceEasy("x", "g")];
       expect(explained.map((text, i) => text.startsWith(`✅ «${[d.again, d.hard, d.good, d.easy][i]}» — `))).toEqual([true, true, true, true]);
       expect(d.practiceDone).toContain("/howto");
     }
-    // In Tatar the interval stands before «бар» and takes no ending, so it is the same words as on the button.
-    expect(ttExplained.map((text, i) => text.includes(`кайтканчы ${["1 минут", "5 минут", "10 минут", "1 көн"][i]} бар`))).toEqual([true, true, true, true]);
+    // In Tatar the interval stands before «бар» and takes no ending, so it is the same words as on the button; «Җиңел» names that of «Яхшы» before its own.
+    expect(ttExplained.map((text, i) => text.includes(`${["кайтканчы 1 минут", "кайтканчы 5 минут", "кайтканчы 10 минут", "кайтканчы 10 минут түгел, 1 көн"][i]} бар`))).toEqual([true, true, true, true]);
+    // The line of the buttons left ends the same way in both languages: with the number.
+    expect([ru.practiceLeft(1), tt.practiceLeft(1)].map((text) => text.endsWith(": 1"))).toEqual([true, true]);
   });
 
   it("counts the words of a level: «1 слово», «2 слова», «5 слов»; Tatar has one form", () => {

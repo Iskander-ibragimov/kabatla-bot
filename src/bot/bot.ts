@@ -158,10 +158,15 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await answerOb(ctx, ctx.match[1]!);
   });
 
-  /** Commands other than /start only work after onboarding. */
+  /**
+   * Commands other than /start, and «Учить» as a button, only work after the introduction. During it a command is
+   * answered with a message and a button in its tap, so the button does not keep spinning.
+   */
   const ready = async (ctx: Ctx) => {
     if (!ctx.user.onboardingStep) return true;
-    await ctx.reply(dict(ctx.user.lang).chooseAbove);
+    const hint = dict(ctx.user.lang).chooseAbove;
+    if (ctx.callbackQuery) await toast(ctx, hint);
+    else await ctx.reply(hint);
     return false;
   };
 
@@ -169,10 +174,18 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
    * The practice card: a card whose four grade buttons write nothing; each press redraws its message with what the
    * button does. It is a step of the introduction, and /howto («Как это работает») shows it again at any time. Which
    * of the two a press belongs to is decided by where the learner stands, not by the message: on the practice step
-   * the card leads on to the levels, for anyone else it ends with «Учить». So a button of the introduction's card
-   * pressed after the introduction is a replay. The update reads the user's row and nothing else.
+   * the card leads on to the levels; for a learner whose introduction is over it is a replay and ends with «Учить»,
+   * also when the button is one of the introduction's old card. On another step of the introduction a practice button
+   * is a button of a step already passed (or of a card not reached yet), and is answered as the introduction answers
+   * those: its message becomes the step the learner stands on. A press reads the user's row and, but for that last
+   * case on «Уровни», nothing else.
    */
-  const practice = async (ctx: Ctx, mask: number, last: Rating | null) => redraw(ctx, renderPractice(mask, last, ctx.user.lang, !onPracticeStep(ctx.user)));
+  const practice = async (ctx: Ctx, mask: number, last: Rating | null) => {
+    if (ctx.user.onboardingStep && !onPracticeStep(ctx.user)) {
+      return redraw(ctx, renderOnboarding(await startOnboarding(repo, ctx.user), ctx.user.lang), dict(ctx.user.lang).chooseAbove);
+    }
+    await redraw(ctx, renderPractice(mask, last, ctx.user.lang, !ctx.user.onboardingStep));
+  };
   c.command("howto", async (ctx) => { if (await ready(ctx)) await send(ctx, renderAbout(ctx.user.lang, true)); });
   c.callbackQuery("pr:start", async (ctx) => practice(ctx, 0, null));
   c.callbackQuery(/^pr:/, async (ctx) => {
@@ -224,7 +237,8 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   const staleToHub = async (ctx: Ctx) => redraw(ctx, await hubScreen(ctx), dict(ctx.user.lang).staleButton);
 
   // During the introduction the buttons of the settings screens, every row of /settings among them, change nothing: the tap is answered with the hint.
-  c.callbackQuery(/^(levels$|hub|lv:|ps:|md:|tp:|tz:|fix:|tut:|set:)/, async (ctx, next) => {
+  // The row «Показать обучение заново» (`tut` after `set:`) is not among them: no screen has it any more, and it is answered as any button the bot no longer has.
+  c.callbackQuery(/^(levels$|hub|lv:|ps:|md:|tp:|tz:|fix:|set:(?!tut$))/, async (ctx, next) => {
     if (ctx.user.onboardingStep) return toast(ctx, dict(ctx.user.lang).chooseAbove);
     await next();
   });

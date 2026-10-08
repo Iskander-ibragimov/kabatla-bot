@@ -26,7 +26,7 @@ describe("first day and next day", () => {
     await h.text("/start");
     // The language, «Попробовать», the four buttons of the practice card, «Дальше», «Начать».
     for (const answer of ["ob:ru", "ob:n1", "pr:0:1", "pr:1:2", "pr:3:3", "pr:7:4"]) await h.press(answer, 100);
-    expect(h.lastText()).toBe(`${ru.practiceEasy("1 день")}\n\n${ru.practiceDone}`);
+    expect(h.lastText()).toBe(`${ru.practiceEasy("1 день", "10 минут")}\n\n${ru.practiceDone}`);
     expect((h.lastMarkup().inline_keyboard ?? []).flat().map((b) => [b.text, b.callback_data])).toEqual([["Дальше", "ob:n2"]]);
     // The practice left nothing behind: no card, no grade.
     expect(await env.DB.prepare("SELECT (SELECT COUNT(*) FROM cards) AS cards, (SELECT COUNT(*) FROM review_log) AS grades").first()).toEqual({ cards: 0, grades: 0 });

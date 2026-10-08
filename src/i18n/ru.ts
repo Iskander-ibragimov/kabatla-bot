@@ -77,7 +77,8 @@ export const ru = {
   practiceAgain: (interval: string) => `✅ «Снова» — не вспомнили. Слово возвращается в начало лесенки: придёт через ${interval} и будет подниматься заново.`,
   practiceHard: (interval: string) => `✅ «Трудно» — вспомнили с трудом. Слово остаётся на своей ступеньке и придёт через тот же срок; у нового слова это ${interval}.`,
   practiceGood: (interval: string, then: string) => `✅ «Хорошо» — вспомнили. Слово поднимается на ступеньку: придёт через ${interval}, потом через ${then} — всё реже.`,
-  practiceEasy: (interval: string) => `✅ «Легко» — знаете уверенно. Слово перепрыгивает ступеньку: придёт сразу через ${interval}.`,
+  /** `good`: the interval of «Хорошо» on the same card, which «Легко» is told against; also after «через». */
+  practiceEasy: (interval: string, good: string) => `✅ «Легко» — знаете уверенно. Слово перепрыгивает ступеньку: придёт не через ${good}, а через ${interval}.`,
   /** Under the explanation: the buttons not tried yet. */
   practiceLeft: (n: number) => `Осталось кнопок: ${n}`,
   /** After the fourth button. */

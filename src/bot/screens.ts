@@ -31,7 +31,7 @@ const RUNGS_AFTER_GOOD = RUNGS.slice(2, 5);
  * The practice card: a card with one word whose grade buttons change nothing, so the learner may press all four and
  * read what each does. `mask`: the buttons tried (tutorial/practice.ts); `last`: the one just pressed, whose
  * explanation stands above the word, or null on a card that follows no press. The buttons are those of a real card
- * with a new word, and each carries the buttons tried, so the next press needs nothing stored. Once all four are
+ * with a new word, the tried ones marked («Хорошо ✅ 10 минут»), and each carries the buttons tried, so the next press needs nothing stored. Once all four are
  * tried the card is the final screen: the explanation of the fourth button, then the words that end the practice.
  * The last row leaves the practice: in the introduction it answers the step (`ob:n2`: «Пропустить», after the four
  * buttons «Дальше»); in a replay it is «Учить».
@@ -46,7 +46,7 @@ export function renderPractice(mask: number, last: Rating | null, lang: Lang, re
     1: () => t.practiceAgain(esc(words(ms[1], "after"))),
     2: () => t.practiceHard(esc(words(ms[2]))),
     3: () => t.practiceGood(esc(words(ms[3], "after")), esc(RUNGS_AFTER_GOOD.map((rung) => words(rung, "after")).join(", "))),
-    4: () => t.practiceEasy(esc(words(ms[4], "after"))),
+    4: () => t.practiceEasy(esc(words(ms[4], "after")), esc(words(ms[3], "after"))),
   }[last]();
   const leave = replay ? learnKeyboard(lang) : [[btn(mask === ALL ? t.nextBtn : t.skipBtn, "ob:n2")]];
   if (mask === ALL) return { text: [...(explained ? [explained, ""] : []), t.practiceDone].join("\n"), keyboard: leave };
@@ -60,7 +60,7 @@ export function renderPractice(mask: number, last: Rating | null, lang: Lang, re
     t.practiceTask, "",
     t.practiceLadder(esc(RUNGS.map((rung) => words(rung)).join(" → "))),
   );
-  const grades = gradeRows({ 1: words(ms[1]), 2: words(ms[2]), 3: words(ms[3]), 4: words(ms[4]) }, (r) => `pr:${mask}:${r}`, lang, (r) => (press(mask, r) === mask ? "✅ " : ""));
+  const grades = gradeRows({ 1: words(ms[1]), 2: words(ms[2]), 3: words(ms[3]), 4: words(ms[4]) }, (r) => `pr:${mask}:${r}`, lang, (r) => press(mask, r) === mask);
   return { text: lines.join("\n"), keyboard: [...grades, ...leave] };
 }
 
