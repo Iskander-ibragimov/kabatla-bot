@@ -32,13 +32,9 @@ export const ru = {
   /** The rung of the ladder of intervals a word stands on, 1…10 (srs/ladder.ts). */
   rung: (n: number) => `ступень ${n} из 10`,
   reviewNo: (n: number) => `повтор №${n}`,
-  unitMin: "мин",
-  unitHour: "ч",
-  unitDay: "дн.",
-  unitMonth: "мес.",
-  decimal: ",",
   doneTitle: "✅ <b>На сейчас всё!</b>",
   doneToday: (reviews: number, learned: number) => `Сегодня: ${reviews} повт. · +${learned} выучено`,
+  /** `after`: when the nearest of them is due, in the form after «через»: «1 минуту», «5 минут», «1 день». */
   doneNextLearning: (after: string) => `Карточки на закреплении вернутся через ${after}. Я напомню.`,
   streak: (d: number) => `🔥 Серия: ${d} дн.`,
   /** Last line of the done screen when no new word came although the day allows more, and the button under it that mends it. */

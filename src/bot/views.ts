@@ -1,4 +1,5 @@
 import type { InlineKeyboardButton } from "grammy/types";
+import { formatInterval } from "../srs/interval";
 import { type Lang, type Mem, type Rating, rungOf, stage } from "../srs/ladder";
 import { dict } from "../i18n";
 import { levelCode } from "../levels/scale";
@@ -21,6 +22,7 @@ export function hostOf(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
 }
 
+const MINUTE = 60_000;
 /** Telegram's limit for the text of one message; it counts the text after the HTML is parsed. */
 const TEXT_LIMIT = 4096;
 /** The length Telegram counts: a tag is not text, an entity is the one character it stands for. */
@@ -96,18 +98,6 @@ export function fitMessage(render: (fit: Fit) => string): string {
   const texts = (cap: number): Fit => ({ ...bare, translation: Math.max(cap, LEAST.translation), host: Math.max(cap, LEAST.host), deck: cap });
   const shortest = texts(LEAST.deck);
   return largest(LEAST.deck, texts) ?? largest(LEAST.word, (cap) => ({ ...shortest, word: cap })) ?? render({ ...shortest, word: LEAST.word });
-}
-
-/** Human interval for the done screen: "10 мин", "11 дн.", "1,2 мес.". */
-export function formatLong(ms: number, lang: Lang): string {
-  const t = dict(lang);
-  const min = Math.round(ms / 60_000);
-  if (min < 60) return `${Math.max(1, min)} ${t.unitMin}`;
-  const h = Math.round(ms / 3_600_000);
-  if (h < 24) return `${h} ${t.unitHour}`;
-  const d = Math.round(ms / 86_400_000);
-  if (d < 30) return `${d} ${t.unitDay}`;
-  return `${(Math.round(d / 3) / 10).toString().replace(".", t.decimal)} ${t.unitMonth}`;
 }
 
 /** «[transcription] · <i>part of speech</i>» for the card and the previews; either part may be missing, "" when both are. */
@@ -218,7 +208,8 @@ export function renderDone(s: DaySummary, lang: Lang, empty: EmptyReason | null,
   const t = dict(lang);
   const lines: string[] = lead ? [lead, ""] : [];
   lines.push(t.doneTitle, t.doneToday(s.reviewsToday, s.learnedToday));
-  if (s.nextLearningInMs != null) lines.push("", t.doneNextLearning(formatLong(s.nextLearningInMs, lang)));
+  // The interval in the same words as on a grade button, in the form after «через»; never less than a minute, which the sentence has no form for.
+  if (s.nextLearningInMs != null) lines.push("", t.doneNextLearning(formatInterval(Math.max(s.nextLearningInMs, MINUTE), lang, "after")));
   if (s.streak > 0) lines.push(t.streak(s.streak));
   const keyboard: Keyboard = [[btn(t.addWords, "help:add"), btn(t.decksBtn, "levels")]];
   if (empty) {

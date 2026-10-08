@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderGenPreview, renderOnboarding, renderSettings } from "../../src/bot/screens";
-import { addReplyText, clip, formatLong, progressLine, renderAddPreview, renderCard, renderDone, shownWords, type CardView, type PreviewItem } from "../../src/bot/views";
+import { addReplyText, clip, progressLine, renderAddPreview, renderCard, renderDone, shownWords, type CardView, type PreviewItem } from "../../src/bot/views";
 import type { User } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
@@ -108,7 +108,7 @@ describe("views", () => {
     expect(text).toContain("Сегодня: 24 повт. · +3 выучено");
     expect(text).not.toContain("Всего:");
     expect(text.split("\n")).toHaveLength(5);
-    expect(text).toContain("через 8 мин");
+    expect(text.split("\n")[3]).toBe("Карточки на закреплении вернутся через 8 минут. Я напомню.");
     expect(text).toContain("🔥 Серия: 5 дн.");
     expect(keyboard.flat().map((b) => [b.text, b.callback_data])).toEqual([["➕ Добавить слова", "help:add"], ["📚 Уровни", "levels"]]);
   });
@@ -424,6 +424,28 @@ describe("views", () => {
       }
     });
 
+    it.each(["ru", "tt"] as const)("with the longest line under a card — the top rung and a six-digit review number — every way of shortening still ends within one message, %s", (lang) => {
+      const line = lang === "ru" ? "🏆 Выучено · ступень 10 из 10 · повтор №100000" : "🏆 Өйрәндем · баскыч 10/10 · кабатлау №100000";
+      const mem = { ...newMem(T), state: "review" as const, scheduledDays: 180, reps: 99_999, lastReview: T };
+      const long = (over: Partial<CardView>) => card({ mem, reps: 99_999, transcription: "ә".repeat(300), pos: "post", ...over }, LEAD, lang);
+      for (const direction of ["tt_ru", "ru_tt"] as const) {
+        // The example is shortened; the example is dropped and the translation shortened; the word itself is cut.
+        const shortened = long({ direction, word: WORD, translation: "надёжный", exampleTt: "ә".repeat(5000), exampleRu: "я".repeat(5000) });
+        const dropped = long({ direction, word: WORD, translation: "я".repeat(9000), exampleTt: "ә".repeat(9000), exampleRu: "я".repeat(9000) });
+        const cut = long({ direction, word: `башы${"ә".repeat(6000)}ахыры`, translation: "я".repeat(6000), exampleTt: "ә".repeat(6000), exampleRu: "я".repeat(6000) });
+        expect(shortened).toMatch(/<i>ә+…<\/i>/);
+        expect(dropped).not.toContain("<blockquote>");
+        expect(dropped).toMatch(/<b>я+…<\/b>/);
+        expect(cut).toMatch(/<b>башы[^<]*…[^<]*ахыры<\/b>/);
+        for (const text of [shortened, dropped, cut]) {
+          fits(text);
+          // The line itself is never shortened, and the message is filled to the last character or the one before it.
+          expect(text.endsWith(line)).toBe(true);
+          expect(visibleLength(text)).toBeGreaterThan(TELEGRAM_TEXT_LIMIT - 2);
+        }
+      }
+    });
+
     it("keeps at least 40 characters of the translation when the word leaves less room than that", () => {
       // Without the transcription the word fills the message up to 30 characters short of the limit.
       const bare = card({ word: "ә", transcription: null, pos: "", translation: "я", exampleTt: "", exampleRu: "" });
@@ -500,9 +522,19 @@ describe("views", () => {
     expect(done.text).not.toMatch(/Сегодня|Всего|Серия/);
   });
 
-  it("long intervals use Tatar units for a tt user", () => {
-    expect([8 * 60_000, 3 * 3_600_000, 11 * 86_400_000, 36 * 86_400_000].map((ms) => formatLong(ms, "tt"))).toEqual(["8 минут", "3 сәгать", "11 көн", "1,2 ай"]);
-    expect(formatLong(36 * 86_400_000, "ru")).toBe("1,2 мес.");
+  it("the done screen says when the next card comes in the words of the grade buttons, in the form the sentence asks for", () => {
+    const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
+    const next = (ms: number, lang: "ru" | "tt") => renderDone({ reviewsToday: 1, learnedToday: 0, nextLearningInMs: ms, streak: 0 }, lang, null).text.split("\n")[3];
+    // Russian: after «через» the minute is «минуту» for 1, 21, 31…; every other word is as on the button.
+    expect([MIN + 1000, 2 * MIN, 5 * MIN, 10 * MIN, 21 * MIN, 3 * HOUR, DAY, 11 * DAY, 36 * DAY].map((ms) => next(ms, "ru"))).toEqual(
+      ["1 минуту", "2 минуты", "5 минут", "10 минут", "21 минуту", "3 часа", "1 день", "11 дней", "1,2 месяца"].map((after) => `Карточки на закреплении вернутся через ${after}. Я напомню.`));
+    // Tatar: the interval stands before «бар» and takes no ending.
+    expect([MIN + 1000, 5 * MIN, 8 * MIN, 3 * HOUR, DAY, 11 * DAY, 36 * DAY].map((ms) => next(ms, "tt"))).toEqual(
+      ["1 минут", "5 минут", "8 минут", "3 сәгать", "1 көн", "11 көн", "1,2 ай"].map((left) => `Ныгытудагы карточкалар кайтканчы ${left} бар. Искә төшерермен.`));
+    // A card is never less than a minute away on this screen; if it were, the sentence would still say a minute.
+    expect([next(20_000, "ru"), next(0, "tt")]).toEqual(["Карточки на закреплении вернутся через 1 минуту. Я напомню.", "Ныгытудагы карточкалар кайтканчы 1 минут бар. Искә төшерермен."]);
+    // No shortened unit is left on the screen: «10 мин», «11 дн.», «1,2 мес.» were its old form.
+    for (const ms of [10 * MIN, 3 * HOUR, 11 * DAY, 36 * DAY]) expect(next(ms, "ru")).not.toMatch(/\d (мин|ч|дн|мес)\.? /);
   });
 
   it("settings and the language choice name both languages in their own words", () => {
