@@ -247,10 +247,6 @@ export class Repo {
     const r = await this.db.prepare(`UPDATE users SET ${keys.map((k) => `${snake(k)} = ?`).join(", ")} WHERE id = ? AND onboarding_step = 'levels'`).bind(...vals, userId).run();
     return (r.meta.changes ?? 0) > 0;
   }
-  /** Forgets the hints the user has seen, all but those of the mask `keep`, in one statement over the stored set. */
-  async keepHints(userId: number, keep: number): Promise<void> {
-    await this.db.prepare("UPDATE users SET hints_seen = hints_seen & ?2 WHERE id = ?1").bind(userId, keep).run();
-  }
 
   /**
    * Takes one unit of a daily allowance kept in two columns of the user's row (the day and the count of that day),

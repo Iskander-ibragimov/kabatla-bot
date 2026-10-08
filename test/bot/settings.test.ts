@@ -19,7 +19,6 @@ const buttons = (m: Markup) => (m.inline_keyboard ?? []).flat().map((b) => [b.te
 const SETTINGS_RU = [
   ["🌐 Язык: Русский", "set:lang"], ["🆕 Новых в день: 10", "set:new"], ["⏰ Напоминание: 09:00", "set:rem"],
   ["🕒 Часовой пояс: UTC+3", "set:tz"], ["↔️ Направление: татарский → русский", "set:dir"], ["🔊 Автоозвучка: выкл", "set:auto"], ["📚 Уровни, темы, порядок слов", "set:hub"],
-  ["🎓 Показать обучение заново", "set:tut"],
 ];
 const ZONES_RU = [
   ["08:00 · UTC+2", "tz:120"], ["✅ 09:00 · UTC+3", "tz:180"], ["10:00 · UTC+4", "tz:240"], ["11:00 · UTC+5", "tz:300"], ["12:00 · UTC+6", "tz:360"], ["13:00 · UTC+7", "tz:420"],
@@ -44,11 +43,13 @@ async function session() {
 }
 
 describe("/settings", () => {
-  it("lists the settings with the time zone and the row that opens the levels; there is no row «Нагрузка»", async () => {
+  it("lists the settings with the time zone and the row that opens the levels, which is the last; there is no row «Нагрузка» and none «Показать обучение заново»", async () => {
     const s = await session();
     const u = await s.text("/settings");
     expect(s.h.lastText()).toBe(ru.settingsTitle);
     expect(buttons(s.h.lastMarkup())).toEqual(SETTINGS_RU);
+    expect(buttons(s.h.lastMarkup()).at(-1)).toEqual(["📚 Уровни, темы, порядок слов", "set:hub"]);
+    expect(buttons(s.h.lastMarkup()).filter(([text, data]) => /обучение|Нагрузка/.test(text!) || /^set:(tut|ret)$/.test(data!))).toEqual([]);
     expect((s.h.lastMarkup().inline_keyboard ?? []).every((row) => row.length === 1)).toBe(true);
     expect(u.methods).toEqual(["sendMessage"]);
     expect(u.d1).toBe(1);
@@ -58,7 +59,7 @@ describe("/settings", () => {
     const user = { lang: "tt", retention: 0.9, newPerDay: 10, remindAt: "09:00", tzOffsetMin: 300, direction: "ru_tt", autoplay: false } as User;
     expect(renderSettings(user).keyboard.flat().map((b) => b.text)).toEqual([
       "🌐 Тел: Татарча", "🆕 Көненә яңа сүзләр: 10", "⏰ Искә төшерү: 09:00",
-      "🕒 Сәгать поясы: UTC+5", "↔️ Юнәлеш: русча → татарча", "🔊 Автомат тавыш: сүндерелгән", "📚 Дәрәҗәләр, темалар, сүзләр тәртибе", "🎓 Өйрәтүне яңадан күрсәтү",
+      "🕒 Сәгать поясы: UTC+5", "↔️ Юнәлеш: русча → татарча", "🔊 Автомат тавыш: сүндерелгән", "📚 Дәрәҗәләр, темалар, сүзләр тәртибе",
     ]);
   });
 

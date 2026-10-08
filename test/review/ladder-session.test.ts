@@ -311,7 +311,7 @@ describe("a session on the ladder", () => {
 
   describe("the settings", () => {
     const withoutRow = (rows: (string | undefined)[][]) => {
-      expect(rows.map(([, data]) => data)).toEqual(["set:lang", "set:new", "set:rem", "set:tz", "set:dir", "set:auto", "set:hub", "set:tut"]);
+      expect(rows.map(([, data]) => data)).toEqual(["set:lang", "set:new", "set:rem", "set:tz", "set:dir", "set:auto", "set:hub"]);
       expect(rows.filter(([text]) => /Нагрузка|Йөкләнеш|%/.test(text!))).toEqual([]);
     };
 

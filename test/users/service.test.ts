@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Repo, type User } from "../../src/db/repo";
 import { HINT } from "../../src/tutorial/hints";
-import { advanceOnboarding, getOrCreate, langFromTelegram, nextOccurrence, setSetting, startOnboarding } from "../../src/users/service";
+import { advanceOnboarding, getOrCreate, langFromTelegram, nextOccurrence, onLanguageStep, onPracticeStep, setSetting, startOnboarding } from "../../src/users/service";
 import { seedCatalog, seedLearner } from "../helpers/seed";
 
 const T = Date.UTC(2026, 8, 30, 6, 0);
@@ -66,17 +66,21 @@ describe("users", () => {
     const line = (no: number, code: string, checked: boolean, total: number, size: number, coveragePct: number | null = null) => ({ no, code, checked, total, size, started: 0, coveragePct });
     const lines = (a1: boolean, a2: boolean) => [line(1, "A1", a1, 2, 500, 45), line(2, "A2", a2, 1, 850), line(3, "B1", false, 0, 850), line(4, "B2", false, 0, 800), line(5, "C1", false, 0, 850)];
 
-    it("the steps: language, two screens, the levels, and the finish with the defaults stored", async () => {
+    it("the steps: language, the screen about the bot, the practice card, the levels, and the finish with the defaults stored", async () => {
       const repo = new Repo(env.DB);
       await catalog();
       const { state, step } = await newcomer(repo, 9);
       expect(await startOnboarding(repo, state.user)).toEqual({ kind: "lang" });
-      expect(await step("tt")).toEqual({ kind: "intro", n: 1 });
+      expect(await step("tt")).toEqual({ kind: "intro" });
       expect(state.user).toMatchObject({ lang: "tt", onboardingStep: "intro1" });
-      expect(await startOnboarding(repo, state.user)).toEqual({ kind: "intro", n: 1 });
-      expect(await step("n1")).toEqual({ kind: "intro", n: 2 });
-      expect(state.user.onboardingStep).toBe("intro2");
-      expect(await startOnboarding(repo, state.user)).toEqual({ kind: "intro", n: 2 });
+      expect(await startOnboarding(repo, state.user)).toEqual({ kind: "intro" });
+      expect(await step("n1")).toEqual({ kind: "practice" });
+      expect(state.user.onboardingStep).toBe("practice");
+      expect(await startOnboarding(repo, state.user)).toEqual({ kind: "practice" });
+      // The step asks nothing of the learner's row: the practice card stores nothing, and its buttons are no answers of the introduction.
+      const practising = state.user;
+      for (const pressed of ["pr:0:3", "pr:start", "0:3", "3"]) expect(await step(pressed), pressed).toEqual({ kind: "invalid", step: "practice" });
+      expect(state.user).toEqual(practising);
       expect(await step("n2")).toEqual({ kind: "levels", lines: lines(true, false) });
       expect(state.user).toMatchObject({ onboardingStep: "levels", levels: 0b1 });
       expect(await startOnboarding(repo, state.user)).toEqual({ kind: "levels", lines: lines(true, false) });
@@ -116,19 +120,41 @@ describe("users", () => {
       await refused(["ru", "tt", "n1", "n2", "next", "lv:", "lv:x", "lv:1.5", "lv:12", "lv:0", "lv:6", ...old]);
     });
 
-    it("«Дальше» of the first screen pressed twice does not pass the second screen: each screen has an answer of its own", async () => {
+    it("«Попробовать» pressed twice does not pass the practice card: the screen and the card have an answer each", async () => {
       const repo = new Repo(env.DB);
       const { state, step } = await newcomer(repo, 17);
       await step("ru");
       const onFirst = state.user;
-      expect(await step("n1")).toEqual({ kind: "intro", n: 2 });
-      // The second tap is read after the first was stored: the learner stands on the second screen, which does not take it.
-      expect(await step("n1")).toEqual({ kind: "invalid", step: "intro2" });
-      expect(state.user.onboardingStep).toBe("intro2");
-      // Two taps read before either was stored both show the second screen.
+      expect(await step("n1")).toEqual({ kind: "practice" });
+      // The second tap is read after the first was stored: the learner stands on the practice card, which does not take it.
+      expect(await step("n1")).toEqual({ kind: "invalid", step: "practice" });
+      expect(state.user.onboardingStep).toBe("practice");
+      // Two taps read before either was stored both show the practice card.
       await repo.updateUser(onFirst.id, { onboardingStep: "intro1" });
-      expect(await Promise.all([advanceOnboarding(repo, onFirst, "n1", T), advanceOnboarding(repo, onFirst, "n1", T)])).toEqual([{ kind: "intro", n: 2 }, { kind: "intro", n: 2 }]);
-      expect((await repo.getUser(onFirst.id))!.onboardingStep).toBe("intro2");
+      expect(await Promise.all([advanceOnboarding(repo, onFirst, "n1", T), advanceOnboarding(repo, onFirst, "n1", T)])).toEqual([{ kind: "practice" }, { kind: "practice" }]);
+      expect((await repo.getUser(onFirst.id))!.onboardingStep).toBe("practice");
+    });
+
+    it("a learner stored on `intro2`, the second screen the introduction had, stands on the practice card: its screen, its answer, and not the language step", async () => {
+      const repo = new Repo(env.DB);
+      await catalog();
+      const { state, step } = await newcomer(repo, 18);
+      await step("tt");
+      await repo.updateUser(state.user.id, { onboardingStep: "intro2" });
+      state.user = (await repo.getUser(state.user.id))!;
+      const stored = state.user;
+      expect([onLanguageStep(stored), onPracticeStep(stored)]).toEqual([false, true]);
+      expect(await startOnboarding(repo, stored)).toEqual({ kind: "practice" });
+      // Only the answer of the practice card is taken; the others keep the row as it is, the stored name of the step with it.
+      for (const answer of ["ru", "tt", "n1", "go", "lv:1", "next"]) expect(await step(answer), answer).toEqual({ kind: "invalid", step: "intro2" });
+      expect(state.user).toEqual(stored);
+      expect(await step("n2")).toEqual({ kind: "levels", lines: lines(true, false) });
+      expect(state.user).toMatchObject({ lang: "tt", onboardingStep: "levels" });
+    });
+
+    it("says who stands on the practice card: a learner on that step, and nobody else", async () => {
+      expect((["practice", "intro2"] as const).map((onboardingStep) => onPracticeStep({ onboardingStep }))).toEqual([true, true]);
+      for (const onboardingStep of [null, "lang", "intro1", "levels", "placement", "zzz", ""]) expect(onPracticeStep({ onboardingStep }), String(onboardingStep)).toBe(false);
     });
 
     it("the only checked level is not unchecked, and a level without cards is not checked: invalid, with the reason, and nothing written", async () => {
@@ -179,7 +205,7 @@ describe("users", () => {
       const there = (await repo.getUser(user.id))!;
       expect(await startOnboarding(repo, there)).toEqual({ kind: "lang" });
       expect(await advanceOnboarding(repo, there, "1", T)).toEqual({ kind: "invalid", step: stored });
-      expect(await advanceOnboarding(repo, there, "ru", T)).toEqual({ kind: "intro", n: 1 });
+      expect(await advanceOnboarding(repo, there, "ru", T)).toEqual({ kind: "intro" });
       expect((await repo.getUser(user.id))!.onboardingStep).toBe("intro1");
     });
 

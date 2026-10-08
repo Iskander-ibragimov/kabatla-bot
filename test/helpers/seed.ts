@@ -42,13 +42,13 @@ export async function seedCatalog(db: D1Database, rows: CatalogRow[]): Promise<n
   return ids;
 }
 
-/** Every hint and the update notice are seen: the cards of such a learner carry no first lines. */
+/** The hint of the first card and the update notice are seen, and so are the hints of the grade buttons, which the bot had before the practice card: the cards of such a learner carry no first lines. */
 const HINTS_ALL_SEEN = 127;
 
 /**
  * A user who finished onboarding, with no deck: the new catalog words of a learner come from the checked levels
  * (`users.levels`, A1 by default). The hints are seen (`hintsSeen` 127) unless the patch says otherwise: 64 is a
- * learner fresh from the introduction, 63 one who knew the bot before the levels A1–C1.
+ * learner fresh from the introduction, 63 one who knew the bot before the levels A1–C1 (the hint of the first card, and the bits of the hints that are gone).
  */
 export async function seedLearner(db: D1Database, opts: { now: number; tgId?: number; patch?: Partial<User> }): Promise<{ repo: Repo; user: User }> {
   const repo = new Repo(db);

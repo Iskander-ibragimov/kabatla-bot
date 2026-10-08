@@ -2,26 +2,66 @@ import type { User } from "../db/repo";
 import { type Dict, dict } from "../i18n";
 import { ALL_POS, NEW_MODES, type NewMode, POS_GROUPS, levelCode } from "../levels/scale";
 import type { Hub, LevelLine, TopicLine } from "../levels/service";
-import type { Lang } from "../srs/ladder";
+import { formatInterval } from "../srs/interval";
+import { type Lang, RUNGS, type Rating } from "../srs/ladder";
 import type { Cumulative } from "../stats/service";
+import { ALL, PRACTICE_WORD, newWordIntervals, press, tried } from "../tutorial/practice";
 import type { OnboardingScreen } from "../users/service";
 import { TZ_OFFSETS } from "../users/service";
 import type { Button, Keyboard, PreviewItem, Rendered } from "./views";
-import { esc, fitMessage, previewLines } from "./views";
+import { esc, fitMessage, gradeRows, previewLines } from "./views";
 
 const btn = (text: string, data: string, style?: Button["style"]): Button => (style ? { text, callback_data: data, style } : { text, callback_data: data });
 const checkbox = (on: boolean) => (on ? "☑" : "☐");
 const tzLabel = (min: number) => `UTC${min >= 0 ? "+" : "−"}${Math.floor(Math.abs(min) / 60)}${Math.abs(min) % 60 ? ":" + String(Math.abs(min) % 60).padStart(2, "0") : ""}`;
 
 /**
- * One of the two screens about the bot. In the introduction both go on with «Дальше», each with an answer of its own
- * (`ob:n1`, `ob:n2`); shown again from the settings (`replay`), the first goes on to the second, and the second ends
- * with «Понятно», which is the settings again.
+ * The screen about the bot; «Попробовать» goes on to the practice card. In the introduction that is an answer of the
+ * step (`ob:n1`); shown again by /howto (`replay`) it only opens the card (`pr:start`).
  */
-export function renderIntro(n: 1 | 2, lang: Lang, replay = false): Rendered {
+export function renderAbout(lang: Lang, replay: boolean): Rendered {
   const t = dict(lang);
-  const next = !replay ? btn(t.nextBtn, `ob:n${n}`) : n === 1 ? btn(t.nextBtn, "tut:2") : btn(t.gotItBtn, "tut:ok");
-  return { text: n === 1 ? t.intro1 : t.intro2, keyboard: [[next]] };
+  return { text: t.intro1, keyboard: [[btn(t.tryBtn, replay ? "pr:start" : "ob:n1")]] };
+}
+
+/** After «Хорошо» a new word stands on rung 2; the sentence about that button names the three rungs above it. */
+const RUNGS_AFTER_GOOD = RUNGS.slice(2, 5);
+
+/**
+ * The practice card: a card with one word whose grade buttons change nothing, so the learner may press all four and
+ * read what each does. `mask`: the buttons tried (tutorial/practice.ts); `last`: the one just pressed, whose
+ * explanation stands above the word, or null on a card that follows no press. The buttons are those of a real card
+ * with a new word, and each carries the buttons tried, so the next press needs nothing stored. Once all four are
+ * tried the card is the final screen: the explanation of the fourth button, then the words that end the practice.
+ * The last row leaves the practice: in the introduction it answers the step (`ob:n2`: «Пропустить», after the four
+ * buttons «Дальше»); in a replay it is «Учить».
+ */
+export function renderPractice(mask: number, last: Rating | null, lang: Lang, replay: boolean): Rendered {
+  const t = dict(lang);
+  const ms = newWordIntervals();
+  const words = (interval: number, form: "plain" | "after" = "plain") => formatInterval(interval, lang, form);
+  // In the message an interval is escaped like any text that is not the bot's own. The Russian sentences have it
+  // after «через», all but that of «Трудно», where it follows «это».
+  const explained = last && {
+    1: () => t.practiceAgain(esc(words(ms[1], "after"))),
+    2: () => t.practiceHard(esc(words(ms[2]))),
+    3: () => t.practiceGood(esc(words(ms[3], "after")), esc(RUNGS_AFTER_GOOD.map((rung) => words(rung, "after")).join(", "))),
+    4: () => t.practiceEasy(esc(words(ms[4], "after"))),
+  }[last]();
+  const leave = replay ? learnKeyboard(lang) : [[btn(mask === ALL ? t.nextBtn : t.skipBtn, "ob:n2")]];
+  if (mask === ALL) return { text: [...(explained ? [explained, ""] : []), t.practiceDone].join("\n"), keyboard: leave };
+
+  const n = tried(mask);
+  const lines = [t.practiceTitle(n), t.practiceNote, ""];
+  if (explained) lines.push(explained, t.practiceLeft(4 - n), "");
+  lines.push(
+    // The word and its hidden translation, as a real card shows them.
+    `<b>${esc(PRACTICE_WORD.word)}</b>`, `<tg-spoiler><b>${esc(PRACTICE_WORD.translation)}</b></tg-spoiler>`, "",
+    t.practiceTask, "",
+    t.practiceLadder(esc(RUNGS.map((rung) => words(rung)).join(" → "))),
+  );
+  const grades = gradeRows({ 1: words(ms[1]), 2: words(ms[2]), 3: words(ms[3]), 4: words(ms[4]) }, (r) => `pr:${mask}:${r}`, lang, (r) => (press(mask, r) === mask ? "✅ " : ""));
+  return { text: lines.join("\n"), keyboard: [...grades, ...leave] };
 }
 
 /** A level on its button of the step «Уровни»: «☑ A1 · 400 слов · ≈45 % текста», or «☐ A2 · скоро» for a level without cards. */
@@ -38,7 +78,9 @@ export function renderOnboarding(s: OnboardingScreen, lang: Lang): Rendered {
     case "lang":
       return { text: t.welcome, keyboard: [[btn("Русский", "ob:ru"), btn("Татарча", "ob:tt")]] };
     case "intro":
-      return renderIntro(s.n, lang);
+      return renderAbout(lang, false);
+    case "practice":
+      return renderPractice(0, null, lang, false);
     case "levels":
       return { text: t.obLevels, keyboard: [...s.lines.map((l) => [btn(levelChoice(l, t), `ob:lv:${l.no}`)]), [btn(t.obGoBtn, "ob:go", "primary")]] };
     default:
@@ -139,7 +181,7 @@ export function renderSettings(u: User): Rendered {
     keyboard: [
       [btn(t.setLang, "set:lang")], [btn(t.setNew(u.newPerDay), "set:new")],
       [btn(t.setRemind(u.remindAt), "set:rem")], [btn(t.setTz(tzLabel(u.tzOffsetMin)), "set:tz")], [btn(t.setDir(u.direction), "set:dir")],
-      [btn(t.setAuto(u.autoplay), "set:auto")], [btn(t.setHub, "set:hub")], [btn(t.setTutorial, "set:tut")],
+      [btn(t.setAuto(u.autoplay), "set:auto")], [btn(t.setHub, "set:hub")],
     ],
   };
 }

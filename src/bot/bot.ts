@@ -14,11 +14,11 @@ import { ReviewService, type Screen } from "../review/service";
 import type { Rating } from "../srs/ladder";
 import { cumulative } from "../stats/service";
 import type { TgApi } from "../tg/client";
-import { HINTS_KEPT_ON_REPLAY } from "../tutorial/hints";
-import { REMIND_TIMES, TZ_OFFSETS, advanceOnboarding, getOrCreate, langFromTelegram, onLanguageStep, setSetting, startOnboarding } from "../users/service";
+import { parse as parsePractice, press as pressPractice } from "../tutorial/practice";
+import { REMIND_TIMES, TZ_OFFSETS, advanceOnboarding, getOrCreate, langFromTelegram, onLanguageStep, onPracticeStep, setSetting, startOnboarding } from "../users/service";
 import {
-  learnKeyboard, renderGenPreview, renderHub, renderIntro, renderLevelChecks, renderModes, renderOnboarding, renderPosChecks, renderSettings, renderStats, renderTimeZones,
-  renderTopics,
+  learnKeyboard, renderAbout, renderGenPreview, renderHub, renderLevelChecks, renderModes, renderOnboarding, renderPosChecks, renderPractice, renderSettings, renderStats,
+  renderTimeZones, renderTopics,
 } from "./screens";
 import { type Keyboard, type Rendered, addReplyText, esc, hostOf, renderAddPreview, renderCard, renderDone, renderLead } from "./views";
 
@@ -126,8 +126,8 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   });
 
   /*
-   * The introduction: the language, two screens about the bot and the levels to study follow one another in one
-   * message; «Начать» takes the buttons off that message and sends the first card.
+   * The introduction: the language, the screen about the bot, the practice card and the levels to study follow one
+   * another in one message; «Начать» takes the buttons off that message and sends the first card.
    */
   const answerOb = async (ctx: Ctx, answer: string) => {
     const t = dict(ctx.user.lang);
@@ -164,6 +164,22 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await ctx.reply(dict(ctx.user.lang).chooseAbove);
     return false;
   };
+
+  /*
+   * The practice card: a card whose four grade buttons write nothing; each press redraws its message with what the
+   * button does. It is a step of the introduction, and /howto («Как это работает») shows it again at any time. Which
+   * of the two a press belongs to is decided by where the learner stands, not by the message: on the practice step
+   * the card leads on to the levels, for anyone else it ends with «Учить». So a button of the introduction's card
+   * pressed after the introduction is a replay. The update reads the user's row and nothing else.
+   */
+  const practice = async (ctx: Ctx, mask: number, last: Rating | null) => redraw(ctx, renderPractice(mask, last, ctx.user.lang, !onPracticeStep(ctx.user)));
+  c.command("howto", async (ctx) => { if (await ready(ctx)) await send(ctx, renderAbout(ctx.user.lang, true)); });
+  c.callbackQuery("pr:start", async (ctx) => practice(ctx, 0, null));
+  c.callbackQuery(/^pr:/, async (ctx) => {
+    const pressed = parsePractice(ctx.callbackQuery.data);
+    if (!pressed) return toast(ctx, dict(ctx.user.lang).staleButton);
+    await practice(ctx, pressPractice(pressed.mask, pressed.rating), pressed.rating);
+  });
 
   /* review */
   c.command("learn", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().nextScreen(ctx.user), "send"); });
@@ -328,7 +344,8 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
 
   /* settings, stats, help */
   c.command("settings", async (ctx) => { if (await ready(ctx)) await send(ctx, renderSettings(ctx.user)); });
-  // «Нагрузка» (`set:ret`) left with the scheduler it tuned: its button in an old message is a button the bot no longer has.
+  // Two rows are gone, and their buttons in old messages are buttons the bot no longer has: «Нагрузка» (`set:ret`) left with the
+  // scheduler it tuned, «Показать обучение заново» (and the screens it opened) with /howto, which took its place.
   c.callbackQuery(/^set:(lang|new|rem|dir|auto)$/, async (ctx) => {
     const u = ctx.user;
     const cycle = <T>(list: readonly T[], v: T) => list[(list.indexOf(v) + 1) % list.length]!;
@@ -353,16 +370,6 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await reread(ctx);
     await redraw(ctx, renderSettings(ctx.user));
   });
-  /*
-   * «Показать обучение заново»: the two screens of the introduction in the message of the settings, and every hint
-   * comes again. Nothing else of the learner changes.
-   */
-  c.callbackQuery("set:tut", async (ctx) => {
-    await repo.keepHints(ctx.user.id, HINTS_KEPT_ON_REPLAY);
-    await redraw(ctx, renderIntro(1, ctx.user.lang, true));
-  });
-  c.callbackQuery("tut:2", async (ctx) => redraw(ctx, renderIntro(2, ctx.user.lang, true)));
-  c.callbackQuery("tut:ok", async (ctx) => redraw(ctx, renderSettings(ctx.user)));
   c.command("stats", async (ctx) => { if (await ready(ctx)) await ctx.reply(renderStats(await cumulative(repo, ctx.user, deps.now()), ctx.user.lang), HTML); });
   c.command("help", async (ctx) => { await ctx.reply(dict(ctx.user.lang).help, HTML); });
   c.callbackQuery("help:add", async (ctx) => { await toast(ctx); await ctx.reply(dict(ctx.user.lang).helpAdd, HTML); });

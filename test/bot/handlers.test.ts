@@ -22,7 +22,7 @@ const catalog = (db: D1Database) =>
 const callbacks = (m: { inline_keyboard?: { callback_data: string }[][] }) => (m.inline_keyboard ?? []).flat().map((b) => b.callback_data);
 
 describe("bot handlers", () => {
-  // The introduction, the hints and «Показать обучение заново» are in tutorial.test.ts.
+  // The introduction, the practice card, /howto and the hints are in tutorial.test.ts.
   async function startSession() {
     await catalog(env.DB);
     const h = harness(env.DB, { now: T });

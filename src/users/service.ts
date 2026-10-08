@@ -99,19 +99,29 @@ export async function setSetting(repo: Repo, userId: number, key: SettingKey, va
 export const DEFAULTS = { newPerDay: 10, remindAt: "09:00", tzOffsetMin: 180 } as const;
 
 /**
- * The introduction, `users.onboarding_step`: the language, two screens about the bot, the levels to study; NULL once
- * it is finished. Nothing else is asked: the rest is `DEFAULTS`.
+ * The introduction, `users.onboarding_step`: the language, the screen about the bot, the practice card, the levels to
+ * study; NULL once it is finished. Nothing else is asked: the rest is `DEFAULTS`.
  */
-const STEPS = ["lang", "intro1", "intro2", "levels"] as const;
+const STEPS = ["lang", "intro1", "practice", "levels"] as const;
 type Step = (typeof STEPS)[number];
+/** The second screen about the bot, which the practice card replaced: a learner stored on it stands on the practice. */
+const STEP_BEFORE_PRACTICE = "intro2";
 /** The step a learner stands on. A stored step the introduction does not have is its first one, so nobody is left on a step that takes no answer. */
-const stepOf = (user: Pick<User, "onboardingStep">): Step => STEPS.find((s) => s === user.onboardingStep) ?? "lang";
+const stepOf = (user: Pick<User, "onboardingStep">): Step => {
+  const stored = user.onboardingStep === STEP_BEFORE_PRACTICE ? "practice" : user.onboardingStep;
+  return STEPS.find((s) => s === stored) ?? "lang";
+};
 /** No language is chosen yet: the learner the bot has just met, and the one who left the language screen unanswered. */
 export const onLanguageStep = (user: Pick<User, "onboardingStep">): boolean => user.onboardingStep != null && stepOf(user) === "lang";
+/** The learner is in the introduction and stands on its practice card. Anyone else who presses a practice button is looking at it again. */
+export const onPracticeStep = (user: Pick<User, "onboardingStep">): boolean => user.onboardingStep != null && stepOf(user) === "practice";
 
 export type OnboardingScreen =
   | { kind: "lang" }
-  | { kind: "intro"; n: 1 | 2 }
+  /** The screen about the bot. */
+  | { kind: "intro" }
+  /** The practice card, with no button tried yet. */
+  | { kind: "practice" }
   /** The levels of the scale, to check and uncheck. */
   | { kind: "levels"; lines: LevelLine[] }
   /** The introduction is over: the first card comes next. */
@@ -127,18 +137,19 @@ export type OnboardingScreen =
 /** The screen of the step the learner stands on (shown on /start, and in place of a screen the introduction no longer has). */
 export async function startOnboarding(repo: Repo, user: User): Promise<OnboardingScreen> {
   switch (stepOf(user)) {
-    case "intro1": return { kind: "intro", n: 1 };
-    case "intro2": return { kind: "intro", n: 2 };
+    case "intro1": return { kind: "intro" };
+    case "practice": return { kind: "practice" };
     case "levels": return { kind: "levels", lines: await levelLines(repo, user) };
     default: return { kind: "lang" };
   }
 }
 
 /**
- * Applies one answer and returns the next screen. The answers: `ru` / `tt` on the language step; `n1` on the first
- * screen and `n2` on the second — each screen has its own, so a second tap on «Дальше» of the first, which arrives
- * when the learner already stands on the second, does not pass the second; on «Уровни», `lv:<n>` flips the level n
- * and `go` finishes. Any other answer is invalid and keeps the step.
+ * Applies one answer and returns the next screen. The answers: `ru` / `tt` on the language step; `n1` on the screen
+ * about the bot and `n2` on the practice card — each has its own, so a second tap on «Попробовать», which arrives
+ * when the learner already stands on the practice, does not pass it; on «Уровни», `lv:<n>` flips the level n and `go`
+ * finishes. Any other answer is invalid and keeps the step. The buttons of the practice card itself are no answers of
+ * the introduction: they change nothing of the learner (tutorial/practice.ts).
  */
 export async function advanceOnboarding(repo: Repo, user: User, answer: string, now: number): Promise<OnboardingScreen> {
   if (user.onboardingStep == null) return { kind: "stale" };
@@ -147,12 +158,12 @@ export async function advanceOnboarding(repo: Repo, user: User, answer: string, 
     case "lang":
       if (answer !== "ru" && answer !== "tt") return invalid;
       await repo.updateUser(user.id, { lang: answer, onboardingStep: "intro1" });
-      return { kind: "intro", n: 1 };
+      return { kind: "intro" };
     case "intro1":
       if (answer !== "n1") return invalid;
-      await repo.updateUser(user.id, { onboardingStep: "intro2" });
-      return { kind: "intro", n: 2 };
-    case "intro2":
+      await repo.updateUser(user.id, { onboardingStep: "practice" });
+      return { kind: "practice" };
+    case "practice":
       if (answer !== "n2") return invalid;
       await repo.updateUser(user.id, { onboardingStep: "levels" });
       return { kind: "levels", lines: await levelLines(repo, user) };

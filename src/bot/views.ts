@@ -144,17 +144,10 @@ function fitCard(render: (fit: CardFit) => string): string {
     ?? render({ ...least, word: LEAST.word });
 }
 
-/**
- * The text of a hint, see tutorial/hints.ts: what to do with a card, the update notice, or what the pressed button
- * did to the word — with the line about the order of a session under it when it is the first such hint.
- */
+/** The text of a hint, see tutorial/hints.ts: what to do with a card, or the update notice. */
 export function renderLead(l: Lead, lang: Lang): string {
   const t = dict(lang);
-  if (l.kind === "front") return t.hintFront;
-  if (l.kind === "update") return t.updateNotice;
-  // The interval is words, like «10 минут»; it is escaped for the message like any text that is not the bot's own.
-  const line = { 1: t.hintAgain, 2: t.hintHard, 3: t.hintGood, 4: t.hintEasy }[l.rating](esc(l.interval));
-  return l.withOrder ? `${line}\n${t.hintOrder}` : line;
+  return l.kind === "front" ? t.hintFront : t.updateNotice;
 }
 
 /** `lead` is what stands before the card in the same message, a hint; it counts toward the length. */
@@ -182,15 +175,22 @@ function cardText(v: CardView, c: Counts, lang: Lang, lead: string, fit: CardFit
   return text;
 }
 
+/**
+ * The two rows of the grade buttons, «Хорошо · 10 минут»: of a card, and of the practice card, which shows what a real
+ * one shows. `intervals`: what each button gives, in words; `data`: the callback data of a button; `mark`: what stands
+ * before its name, nothing on a real card.
+ */
+export function gradeRows(intervals: Record<Rating, string>, data: (r: Rating) => string, lang: Lang, mark: (r: Rating) => string = () => ""): Keyboard {
+  const t = dict(lang);
+  const grade = (r: Rating, name: string, style?: Button["style"]) => btn(`${mark(r)}${name} · ${intervals[r]}`, data(r), style);
+  return [[grade(1, t.again, "danger"), grade(2, t.hard)], [grade(3, t.good, "success"), grade(4, t.easy, "primary")]];
+}
+
 export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, string>, canUndo: boolean, lang: Lang, lead = ""): Rendered {
   const t = dict(lang);
   const text = fitCard((fit) => cardText(v, c, lang, lead, fit));
 
-  const g = (r: Rating) => `g:${v.cardId}:${v.reps}:${r}`;
-  const keyboard: Keyboard = [
-    [btn(`${t.again} · ${intervals[1]}`, g(1), "danger"), btn(`${t.hard} · ${intervals[2]}`, g(2))],
-    [btn(`${t.good} · ${intervals[3]}`, g(3), "success"), btn(`${t.easy} · ${intervals[4]}`, g(4), "primary")],
-  ];
+  const keyboard = gradeRows(intervals, (r) => `g:${v.cardId}:${v.reps}:${r}`, lang);
   const extra: Button[] = [];
   if (v.hasAudio) extra.push(btn(t.speak, `v:${v.noteId}`));
   if (canUndo) extra.push(btn(t.undo, "u"));

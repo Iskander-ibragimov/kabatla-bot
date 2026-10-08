@@ -1,6 +1,7 @@
 /** Registers the webhook, the bot commands and the bot description. Env: BOT_TOKEN, WEBHOOK_SECRET, WORKER_URL. */
 import { ru, type Dict } from "../src/i18n/ru";
 import { tt } from "../src/i18n/tt";
+import { commands } from "./lib/commands";
 
 const { BOT_TOKEN, WEBHOOK_SECRET, WORKER_URL } = process.env;
 if (!BOT_TOKEN || !WEBHOOK_SECRET || !WORKER_URL) throw new Error("BOT_TOKEN, WEBHOOK_SECRET and WORKER_URL are required");
@@ -46,11 +47,6 @@ async function cosmetic(label: string, read: () => Promise<unknown>, want: unkno
     console.log(`${label}: ok`);
   } catch (e) { console.log(`WARNING ${label}: ${(e as Error).message}`); }
 }
-
-/** Commands that exist today, in menu order; the texts live in the interface dictionaries. */
-const commands = (t: Dict) =>
-  ([["start", t.cmdStart], ["learn", t.cmdLearn], ["levels", t.cmdLevels], ["gen", t.cmdGen], ["stats", t.cmdStats], ["settings", t.cmdSettings], ["undo", t.cmdUndo], ["help", t.cmdHelp]] as const)
-    .map(([command, description]) => ({ command, description }));
 
 await must("setWebhook", {
   url: `${WORKER_URL.replace(/\/$/, "")}/tg`, secret_token: WEBHOOK_SECRET,

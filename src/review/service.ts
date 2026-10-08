@@ -138,11 +138,10 @@ export class ReviewService {
   }
 
   /**
-   * The next screen of the session. `hint`: the hint of the grade this screen follows. A screen that follows no grade,
-   * or a grade without a hint, carries the hint that is due by what the user has seen (`user.hintsSeen`); after a
-   * grade that is none, the grade having marked both of them.
+   * The next screen of the session. It carries the hint that is due by what the user has seen (`user.hintsSeen`);
+   * after a grade that is none, the grade having marked both of them.
    */
-  async nextScreen(user: User, feedback: Feedback | null = null, hint: Lead | null = null): Promise<Screen> {
+  async nextScreen(user: User, feedback: Feedback | null = null): Promise<Screen> {
     const w = dayWindow(user.tzOffsetMin, this.now);
     const read = await this.sessionQueue(user, w);
     const { q, fresh } = read;
@@ -162,7 +161,7 @@ export class ReviewService {
         : null;
       const nextDue = q.learning.length ? Math.min(...q.learning.map((x) => x.mem.due)) : null;
       return {
-        kind: "done", feedback, empty, lead: hint ?? onDone(user.hintsSeen),
+        kind: "done", feedback, empty, lead: onDone(user.hintsSeen),
         summary: { reviewsToday: end.reviewsToday, learnedToday: end.learnedToday, streak: user.streak,
           nextLearningInMs: nextDue == null ? null : Math.max(0, nextDue - this.now) },
       };
@@ -175,7 +174,7 @@ export class ReviewService {
     } else row = p.card;
     return {
       kind: "card", view: toView(row), counts: this.countsOf(user, read), intervals: this.intervalsOf(row.mem, user), feedback, canUndo: feedback != null,
-      lead: hint ?? onCard(user.hintsSeen),
+      lead: onCard(user.hintsSeen),
     };
   }
 
@@ -188,9 +187,8 @@ export class ReviewService {
     const yesterday = localDay(user.tzOffsetMin, this.now - 86_400_000);
     const streak = user.lastStudyDay === today ? user.streak : user.lastStudyDay === yesterday ? user.streak + 1 : 1;
     const learnedNow = stage(before) !== "learned" && stage(after) === "learned";
-    // The hint of the button names the interval the grade gave, which is the one that stood on the button; its Russian text has
-    // «через», so the interval is in the form after it. What is seen is stored with the grade, in the user's statement.
-    const hint = afterGrade(user.hintsSeen, rating, formatInterval(after.due - this.now, user.lang, "after"));
+    // The hints a graded card ends are marked as seen with the grade, in the user's statement.
+    const hintsSeen = afterGrade(user.hintsSeen);
     const stmts = [
       this.repo.gradeCardStmt(card.id, reps, after),
       this.repo.guardedLogStmt({
@@ -198,7 +196,7 @@ export class ReviewService {
         intervalAfterMs: after.due - this.now, reviewedAt: this.now, wasNew: before.state === "new", learnedNow,
         streakBefore: user.streak, lastStudyDayBefore: user.lastStudyDay,
       }),
-      this.repo.guardedUserStmt(user.id, { streak, lastStudyDay: today, lastReviewAt: this.now, mixCounter: user.mixCounter + 1, hintsSeen: hint.seen }),
+      this.repo.guardedUserStmt(user.id, { streak, lastStudyDay: today, lastReviewAt: this.now, mixCounter: user.mixCounter + 1, hintsSeen }),
       this.repo.guardedUsageStmt(new Date(this.now).toISOString().slice(0, 10), 1, ROWS_PER_REVIEW),
       // The counter of started words changes exactly one row whenever the grade was applied, so the statement after it is still guarded.
       this.repo.progressStmt(user.id, card.noteId, card.id, before.state === "new"),
@@ -209,8 +207,8 @@ export class ReviewService {
     }
     const res = await this.repo.batch(stmts);
     if (!res[0]?.meta.changes) return { kind: "stale" };
-    const updated: User = { ...user, streak, lastStudyDay: today, lastReviewAt: this.now, mixCounter: user.mixCounter + 1, hintsSeen: hint.seen };
-    return this.nextScreen(updated, feedbackOf(card.word, before, after, this.now), hint.lead);
+    const updated: User = { ...user, streak, lastStudyDay: today, lastReviewAt: this.now, mixCounter: user.mixCounter + 1, hintsSeen };
+    return this.nextScreen(updated, feedbackOf(card.word, before, after, this.now));
   }
 
   /**

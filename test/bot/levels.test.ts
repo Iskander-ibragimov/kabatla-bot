@@ -169,7 +169,8 @@ describe("/levels: the hub", () => {
     const user = (await repo.getUserByTg(42))!;
     const b = bot();
     // The steps after the language; on the language step every update is answered with its screen (tutorial.test.ts).
-    for (const step of ["intro1", "intro2", "levels"]) {
+    // `intro2` is what a row may still hold for the practice step.
+    for (const step of ["intro1", "practice", "intro2", "levels"]) {
       await repo.updateUser(user.id, { onboardingStep: step });
       for (const data of [
         "levels", "hub", "hub:lv", "lv:t:3", "hub:pos", "ps:t:0", "hub:mode", "md:freq", "hub:tp", "tp:1", "fix:pos", "fix:lv:3", "fix:topic", "set:hub", "set:tz", "tz:300", "set:back", "lv:skip",
