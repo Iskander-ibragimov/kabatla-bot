@@ -248,6 +248,15 @@ const EXCEPTION_ROWS: Row[] = [
   ["ниһаять", "ниһәйә́т"],
   ["могҗиза", "мөгъҗизә́"],
   ["ихтыяҗ", "ихтыйа́җ"],
+  // B1 portion 2, second pass: front vowels in Arabic and Persian loans; a back я in ихтыяр.
+  ["гадәттәгечә", "гъәдәттәге́чә"],
+  ["канәгатьләндерү", "къәнәгъәтләндерү́"],
+  ["гаҗәеп", "гъәҗәйе́п"],
+  ["галәм", "гъәлә́м"],
+  ["хакимият", "хакимийә́т"],
+  ["гаскәр", "гъәскә́р"],
+  ["хыянәт", "хыйәнә́т"],
+  ["ихтыяр", "ихтыйа́р"],
 ];
 
 /** Rows by the rule they were added for. The mandatory rows exercise every rule as well. */
