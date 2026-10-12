@@ -174,7 +174,7 @@ export function coverageDrops(meta: readonly LevelMeta[]): string[] {
 /**
  * Checks the catalog files and the topics. Returns the violations, one per line: `a1:5 <what is wrong>` — the file of
  * the level and the line in it (the header is line 1) — `a1: …` for a rule about the level as a whole, and
- * `topics.csv:3 …` for a topic. Words and Tatoeba sentences are compared across all the levels.
+ * `topics.csv:3 …` for a topic. Words, Tatoeba sentences and translations are compared across all the levels.
  */
 export function checkCatalog(levels: CatalogLevel[], o: CatalogCheck): string[] {
   const errors: string[] = [];
@@ -196,6 +196,8 @@ export function checkCatalog(levels: CatalogLevel[], o: CatalogCheck): string[] 
   /** Word key and Tatoeba sentence number → where it stands. */
   const words = new Map<string, string>();
   const sentences = new Map<number, string>();
+  /** Russian translation, trimmed → where it stands. */
+  const translations = new Map<string, string>();
   for (const { level, header, rows } of levels) {
     const scale = LEVELS.find((l) => l.no === level);
     if (!scale) { errors.push(`уровня ${level} нет: уровни 1–${LEVELS.length}`); continue; }
@@ -231,7 +233,13 @@ export function checkCatalog(levels: CatalogLevel[], o: CatalogCheck): string[] 
         }
       }
       if (!POS_CODES.includes(row.pos)) errors.push(`${at} часть речи «${row.pos}» не из списка ${POS_CODES.join(", ")}`);
-      if (row.translation.trim() === "") errors.push(`${at} пустой перевод`);
+      const translation = row.translation.trim();
+      if (translation === "") errors.push(`${at} пустой перевод`);
+      else {
+        const same = translations.get(translation);
+        if (same) errors.push(`${at} перевод «${translation}» уже стоит в ${same}`);
+        else translations.set(translation, at);
+      }
       if (!slugs.has(row.topic)) errors.push(`${at} темы «${row.topic}» нет в ${TOPICS_FILE}`);
 
       // Every card has an example, a phrase too.
