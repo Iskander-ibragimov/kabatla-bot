@@ -221,4 +221,11 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "васыять": "wасыйә́т",
   "суүсем": "суwүсе́м",
   "хоккейчы": "хоккейчы́",
+  // C1 portion 2, second pass: front vowels of галәм, кәгазь, гарип; аяк keeps its back vowel in сигезаяк; Russian roots keep plain к and their stress (пункт, атлетика).
+  "галәмәт": "гъәләмә́т",
+  "кәгазе": "кәгъәзе́",
+  "гарип": "гъәри́п",
+  "сигезаяк": "сигезайа́къ",
+  "пункт": "пункт",
+  "атлетика": "атле́тика",
 };
