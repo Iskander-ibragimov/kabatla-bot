@@ -130,6 +130,31 @@ describe("review service", () => {
     expect(db.calls).toBeLessThanOrEqual(4);
   });
 
+  describe("cardAgain: the card redrawn for «🔎 Разбор»", () => {
+    const GLOSS = JSON.stringify([["китап", "китап", "книга", null]]);
+    it("gives the card as it stands, with its breakdown and counters, in 2 D1 calls and without a write", async () => {
+      const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 2 });
+      await env.DB.prepare("UPDATE notes SET example_gloss = ? WHERE id = ?").bind(GLOSS, noteIds[0]!).run();
+      const s = asCard(await new ReviewService(repo, T).nextScreen(user));
+      const db = countingDb(env.DB);
+      const again = asCard(await new ReviewService(new Repo(db), T).cardAgain(user, s.view.cardId, 0, true));
+      expect(db.calls).toBeLessThanOrEqual(2);
+      expect(again).toMatchObject({ view: { ...s.view, gloss: [["китап", "китап", "книга", null]] }, counts: s.counts, intervals: s.intervals, feedback: null, canUndo: true });
+    });
+
+    it("is stale for a card graded since, another learner's card and a card without a breakdown", async () => {
+      const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 2 });
+      await env.DB.prepare("UPDATE notes SET example_gloss = ?").bind(GLOSS).run();
+      const svc = new ReviewService(repo, T);
+      const s = asCard(await svc.nextScreen(user));
+      expect((await svc.cardAgain(user, s.view.cardId, 1, false)).kind).toBe("stale");
+      const other = await repo.insertUser({ tgId: 77, chatId: 77, lang: "ru", now: T });
+      expect((await svc.cardAgain((await repo.getUser(other))!, s.view.cardId, 0, false)).kind).toBe("stale");
+      await env.DB.prepare("UPDATE notes SET example_gloss = NULL WHERE id = ?").bind(noteIds[0]!).run();
+      expect((await svc.cardAgain(user, s.view.cardId, 0, false)).kind).toBe("stale");
+    });
+  });
+
   describe("the counters of started words", () => {
     it("a first grade adds the word to the counter of its level and topic, a later grade adds nothing, and undo takes the word back", async () => {
       await seedCatalog(env.DB, [{ level: 1, word: "китап", topic: 8 }, { level: 1, word: "су", topic: 8 }]);

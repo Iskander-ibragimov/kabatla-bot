@@ -223,6 +223,25 @@ export class ReviewService {
   }
 
   /**
+   * The card a learner is looking at, drawn again for the button «🔎 Разбор» (spec B4): the same card with its counters
+   * (one read of the queue) and nothing stored. Stale, like any button of an old card, when the card is not the
+   * learner's, was graded since (`reps` differs) or has no breakdown. `canUndo` is what the card showed: the press
+   * changes nothing that ↩ depends on.
+   */
+  async cardAgain(user: User, cardId: number, reps: number, canUndo: boolean): Promise<Screen> {
+    const w = dayWindow(user.tzOffsetMin, this.now);
+    const card = await this.repo.cardForGrade(user.id, cardId, w.dayStartMs);
+    if (!card || card.mem.reps !== reps) return { kind: "stale" };
+    const view = toView(card);
+    if (view.gloss === null) return { kind: "stale" };
+    const read = await this.readQueue(user, w);
+    return {
+      kind: "card", view, intervals: this.intervalsOf(card.mem, user, card.answersToday), feedback: null, canUndo, counts: this.countsOf(user, read),
+      lead: onCard(user.hintsSeen),
+    };
+  }
+
+  /**
    * Restores the last graded card (one level, like Anki’s undo). The word is taken back from the counter of started
    * words when the grade had started it; that statement stands right after the mark of the undone grade, which guards
    * it: a second undo of the same grade takes nothing.

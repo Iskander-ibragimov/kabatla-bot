@@ -201,6 +201,19 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     const [, id, reps, r] = ctx.match;
     await show(ctx, await reviews().grade(ctx.user, Number(id), Number(reps), Number(r) as Rating), "replace");
   });
+  /*
+   * «🔎 Разбор» / «🔎 Скрыть разбор»: the same card in the same message, with the breakdown of its example open or
+   * closed. It edits in place, unlike a grade: the card is the same, so a spoiler the learner has revealed may stay so.
+   * The data carries the state after the press and whether ↩ stood on the card.
+   */
+  c.callbackQuery(/^gl:(\d+):(\d+):([01]):([01])$/, async (ctx) => {
+    const [, id, reps, open, undo] = ctx.match;
+    const lang = ctx.user.lang;
+    const s = await reviews().cardAgain(ctx.user, Number(id), Number(reps), undo === "1");
+    if (s.kind !== "card") return toast(ctx, dict(lang).staleButton);
+    const lead = s.lead ? renderLead(s.lead, lang) : "";
+    await redraw(ctx, renderCard(s.view, s.counts, s.intervals, s.canUndo, lang, lead, open === "1"));
+  });
   c.callbackQuery("u", async (ctx) => {
     const s = await reviews().undo(ctx.user);
     await show(ctx, s, "replace", s.kind === "card" ? dict(ctx.user.lang).undone : undefined);

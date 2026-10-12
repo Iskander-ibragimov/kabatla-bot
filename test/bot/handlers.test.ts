@@ -7,6 +7,7 @@ import { Repo } from "../../src/db/repo";
 import { ru } from "../../src/i18n/ru";
 import { tt } from "../../src/i18n/tt";
 import { levelBit } from "../../src/levels/scale";
+import { newMem } from "../../src/srs/ladder";
 import { countingDb } from "../helpers/countingDb";
 import { easyButton, harness } from "../helpers/botHarness";
 import { echoLlm } from "../helpers/llm";
@@ -118,6 +119,92 @@ describe("bot handlers", () => {
       await h.press(`v:${id}`, cardMsg);
       expect(h.tg.of("sendVoice")).toEqual([]);
       expect(answers(h)).toEqual([ru.staleButton]);
+    });
+  });
+
+  describe("«🔎 Разбор»", () => {
+    const GLOSS = (word: string) => JSON.stringify([["Бу", "бу", "это", "A1"], [word, word, "слово", null]]);
+    const count = async (table: string) => (await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>())!.n;
+    const rows = async () => ({ cards: await count("cards"), log: await count("review_log"), sessions: await env.DB.prepare("SELECT * FROM sessions").all().then((r) => r.results) });
+    const glossData = (h: ReturnType<typeof harness>) => callbacks(h.lastMarkup()).find((d) => d.startsWith("gl:"));
+
+    /** A session whose catalog words «китап» and «вакыт» have a breakdown; autoplay is on and «китап» has a voice. */
+    async function glossSession() {
+      await catalog(env.DB);
+      await env.DB.prepare("UPDATE notes SET example_gloss = CASE word WHEN 'китап' THEN ?1 WHEN 'вакыт' THEN ?2 END, audio_file_id = CASE word WHEN 'китап' THEN 'VOICE' END WHERE word IN ('китап', 'вакыт')")
+        .bind(GLOSS("китап"), GLOSS("вакыт")).run();
+      const h = harness(env.DB, { now: T });
+      await h.text("/start");
+      const repo = new Repo(env.DB);
+      const u = (await repo.getUserByTg(42))!;
+      await repo.updateUser(u.id, { onboardingStep: null, autoplay: true });
+      await h.text("/learn");
+      return { h, repo, u, cardMsg: h.tg.lastMessageId() };
+    }
+
+    it("edits the same message: the breakdown opens, the button becomes «Скрыть разбор»; a second press closes it; nothing is written", async () => {
+      const { h, cardMsg } = await glossSession();
+      const closed = h.lastText();
+      const data = glossData(h)!;
+      expect(data).toMatch(/^gl:\d+:0:1:0$/);
+      const before = { rows: await rows(), calls: h.tg.calls.length };
+
+      await h.press(data, cardMsg);
+      const update = h.tg.calls.slice(before.calls);
+      expect(update.map((c) => c.method)).toEqual(["editMessageText", "answerCallbackQuery"]);
+      expect(update[0]!.payload.message_id).toBe(cardMsg);
+      expect(h.lastText()).toContain("<blockquote><tg-spoiler>Бу → бу (A1) — это\n<b>китап → китап</b> — слово</tg-spoiler></blockquote>");
+      const hide = (h.lastMarkup().inline_keyboard ?? []).flat().find((b) => b.callback_data.startsWith("gl:"))!;
+      expect(hide).toEqual({ text: ru.glossHideBtn, callback_data: data.replace(/:1:0$/, ":0:0") });
+
+      await h.press(hide.callback_data, cardMsg);
+      expect(h.tg.calls.slice(before.calls).map((c) => c.method)).toEqual(["editMessageText", "answerCallbackQuery", "editMessageText", "answerCallbackQuery"]);
+      expect(h.lastText()).toBe(closed);
+      expect(glossData(h)).toBe(data);
+      expect(await rows()).toEqual(before.rows);
+      expect(h.tg.of("sendVoice")).toHaveLength(1);
+    });
+
+    it("after the card is graded its «🔎» is a stale button", async () => {
+      const { h, cardMsg } = await glossSession();
+      const data = glossData(h)!;
+      await h.press(easyButton(h), cardMsg);
+      const before = { rows: await rows(), calls: h.tg.calls.length };
+      await h.press(data, cardMsg);
+      const update = h.tg.calls.slice(before.calls);
+      expect(update.map((c) => [c.method, c.payload.text])).toEqual([["answerCallbackQuery", ru.staleButton]]);
+      expect(await rows()).toEqual(before.rows);
+    });
+
+    it("«🔎» with another learner's card id, or of a card without a breakdown, is a stale button", async () => {
+      const { h, repo, cardMsg } = await glossSession();
+      const other = await repo.insertUser({ tgId: 77, chatId: 77, lang: "ru", now: T });
+      const noteId = (await env.DB.prepare("SELECT id FROM notes WHERE word = 'китап'").first<{ id: number }>())!.id;
+      const theirs = await repo.ensureNewCard(other, noteId, "tt_ru", newMem(T));
+      const plainNote = (await env.DB.prepare("SELECT id FROM notes WHERE word = 'авыл'").first<{ id: number }>())!.id;
+      const u = (await repo.getUserByTg(42))!;
+      const plain = await repo.ensureNewCard(u.id, plainNote, "tt_ru", newMem(T));
+      const before = { rows: await rows(), calls: h.tg.calls.length };
+      await h.press(`gl:${theirs}:0:1:0`, cardMsg);
+      await h.press(`gl:${plain}:0:1:0`, cardMsg);
+      await h.press("gl:999999:0:1:0", cardMsg);
+      expect(h.tg.calls.slice(before.calls).map((c) => [c.method, c.payload.text])).toEqual(Array(3).fill(["answerCallbackQuery", ru.staleButton]));
+      expect(await rows()).toEqual(before.rows);
+    });
+
+    it("↩ stays on the redrawn card when it was there", async () => {
+      const { h, cardMsg } = await glossSession();
+      await h.press(easyButton(h), cardMsg);
+      const second = h.tg.lastMessageId();
+      expect(h.lastText()).toContain("<b>вакыт</b>");
+      const data = glossData(h)!;
+      expect(data).toMatch(/:1:1$/);
+      await h.press(data, second);
+      expect(callbacks(h.lastMarkup())).toContain("u");
+      expect(glossData(h)).toMatch(/:0:1$/);
+      await h.press(glossData(h)!, second);
+      expect(callbacks(h.lastMarkup())).toContain("u");
+      expect(h.lastText()).not.toContain("→");
     });
   });
 
