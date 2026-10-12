@@ -1,3 +1,4 @@
+import { type GlossEntry, parseGloss } from "../content/gloss";
 import type { CardRow, Direction, NewNote, NewScope, Queue, Repo, User } from "../db/repo";
 import { type EmptyReason, emptyReason, mergeStreams, nextSpans, readSpans, scopeKey, writeSpans } from "../levels/order";
 import { LEVELS, levelsOf, posCodesOf } from "../levels/scale";
@@ -7,11 +8,14 @@ import { type Lead, afterGrade, onCard, onDone } from "../tutorial/hints";
 import { type Window, dayWindow, localDay } from "../users/service";
 import { pick, recentOf } from "./pick";
 
-/** View-model types shared with the bot layer (kept here so services never import the bot). */
+/**
+ * View-model types shared with the bot layer (kept here so services never import the bot). `gloss`: the breakdown of
+ * the example word by word (spec B), null for a note without one — own and AI notes, a level not broken down yet.
+ */
 export interface CardView {
   cardId: number; noteId: number; reps: number; direction: Direction;
   word: string; transcription: string | null; pos: string; translation: string; exampleTt: string; exampleRu: string;
-  hasAudio: boolean; sourceUrl: string | null; mem: Mem;
+  hasAudio: boolean; sourceUrl: string | null; gloss: GlossEntry[] | null; mem: Mem;
 }
 export interface Feedback { word: string; kind: "grow" | "step" | "lapse" | "first"; beforeDays: number; afterMs: number }
 /** `n`: the new cards still to come today; while a level has a word to give it is what is left of the day's limit. */
@@ -75,7 +79,7 @@ function toView(row: CardRow | (NewNote & { id: number; mem: Mem })): CardView {
   return {
     cardId: row.id, noteId: row.noteId, reps: row.mem.reps, direction: row.direction, word: row.word, transcription: row.transcription, pos: row.pos,
     translation: row.translation, exampleTt: row.exampleTt, exampleRu: row.exampleRu,
-    hasAudio: !!row.audioFileId, sourceUrl: row.sourceUrl, mem: row.mem,
+    hasAudio: !!row.audioFileId, sourceUrl: row.sourceUrl, gloss: parseGloss(row.exampleGloss), mem: row.mem,
   };
 }
 

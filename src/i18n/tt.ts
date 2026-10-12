@@ -33,6 +33,8 @@ export const tt: Dict = {
   easy: "Җиңел",
   speak: "🔊",
   undo: "↩️ Кире алу",
+  glossBtn: "🔎 Тикшерү",
+  glossHideBtn: "🔎 Тикшерүне яшерү",
   stageNew: "🌱 Яңа",
   stageLearning: "🌿 Өйрәнәм",
   stageKnown: "🌳 Беләм",

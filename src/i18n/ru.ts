@@ -25,6 +25,8 @@ export const ru = {
   easy: "Легко",
   speak: "🔊",
   undo: "↩️ Отменить",
+  glossBtn: "🔎 Разбор",
+  glossHideBtn: "🔎 Скрыть разбор",
   stageNew: "🌱 Новое",
   stageLearning: "🌿 Учу",
   stageKnown: "🌳 Знаю",

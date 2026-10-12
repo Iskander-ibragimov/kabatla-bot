@@ -10,7 +10,7 @@ import { TELEGRAM_TEXT_LIMIT, visibleLength } from "../helpers/visible";
 const T = Date.UTC(2026, 8, 30, 6);
 const view = (over: Partial<CardView> = {}): CardView => ({
   cardId: 7, noteId: 3, reps: 3, direction: "tt_ru", word: "ышанычлы", transcription: "ышанычлы́", pos: "adj",
-  translation: "надёжный", exampleTt: "Ул ышанычлы кеше.", exampleRu: "Он надёжный человек.", hasAudio: true, sourceUrl: null,
+  translation: "надёжный", exampleTt: "Ул ышанычлы кеше.", exampleRu: "Он надёжный человек.", hasAudio: true, sourceUrl: null, gloss: null,
   mem: { ...newMem(T), state: "review", scheduledDays: 3, reps: 3, lastReview: T }, ...over,
 });
 /** What the buttons of a card on the 3-day rung say. */
@@ -18,6 +18,58 @@ const iv = { 1: "1 минута", 2: "3 дня", 3: "7 дней", 4: "14 дне�
 const counts = { n: 4, l: 1, r: 12 };
 
 describe("views", () => {
+  describe("«🔎 Разбор» (spec B4)", () => {
+    const GLOSS: CardView["gloss"] = [["Мин", "мин", "я", "A1"], ["китабымны", "китап", "мою книгу", "A1"], ["укыйм", "уку", "(я) читаю", null], ["кичен", "кич", "вечером", null]];
+    const glossed = (over: Partial<CardView> = {}) => view({ word: "уку", exampleTt: "Мин китабымны кичен укыйм.", exampleRu: "Я читаю свою книгу вечером.", gloss: GLOSS, ...over });
+
+    it("a card with a breakdown has «🔎 Разбор» in the row of 🔊 ↩ ⚑, before ⚑; a card without one has no such button", () => {
+      expect(renderCard(glossed(), counts, iv, true, "ru").keyboard[2]!.map((b) => [b.text, b.callback_data])).toEqual([
+        ["🔊", "v:3"], [ru.undo, "u"], [ru.glossBtn, "gl:7:3:1:1"], ["⚑", "r:3"],
+      ]);
+      expect(renderCard(glossed({ hasAudio: false }), counts, iv, false, "tt").keyboard[2]!.map((b) => [b.text, b.callback_data])).toEqual([
+        [tt.glossBtn, "gl:7:3:1:0"], ["⚑", "r:3"],
+      ]);
+      expect(renderCard(view(), counts, iv, true, "ru").keyboard[2]!.map((b) => b.callback_data)).toEqual(["v:3", "u", "r:3"]);
+      expect(renderCard(glossed(), counts, iv, true, "ru").text).not.toContain("→");
+    });
+
+    it("open: the breakdown stands under the example, all of it in a spoiler; the card's word is bold, a catalog lemma has its level", () => {
+      const r = renderCard(glossed(), counts, iv, false, "ru", "", true);
+      expect(r.text).toContain(
+        "<i>Мин китабымны кичен укыйм.</i>\nЯ читаю свою книгу вечером.</tg-spoiler></blockquote>" +
+          "<blockquote><tg-spoiler>Мин → мин (A1) — я\nкитабымны → китап (A1) — мою книгу\n<b>укыйм → уку</b> — (я) читаю\nкичен → кич — вечером</tg-spoiler></blockquote>",
+      );
+      expect(r.keyboard[2]!.map((b) => [b.text, b.callback_data])).toEqual([["🔊", "v:3"], [ru.glossHideBtn, "gl:7:3:0:0"], ["⚑", "r:3"]]);
+      // Open without a breakdown: as closed.
+      expect(renderCard(view(), counts, iv, false, "ru", "", true)).toEqual(renderCard(view(), counts, iv, false, "ru"));
+    });
+
+    it("a breakdown too long for one message loses its last lines first, then ends with «…»; the example and the word stay whole", () => {
+      const many: CardView["gloss"] = Array.from({ length: 200 }, (_, i) => [`сүз${i}`, `сүз${i}`, "я".repeat(40), i % 2 ? "B1" : null]);
+      const example = "Мин китабымны кичен укыйм. ".repeat(20).trim();
+      const text = renderCard(glossed({ gloss: many, exampleTt: example }), counts, iv, true, "ru", "", true).text;
+      expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+      expect(text).toContain(`<i>${example}</i>`);
+      expect(text).toContain("<b>уку</b>");
+      const block = text.match(/<blockquote><tg-spoiler>(сүз0[^]*?)<\/tg-spoiler><\/blockquote>/)![1]!.split("\n");
+      expect(block.at(-1)).toBe("…");
+      expect(block.length).toBeGreaterThan(20);
+      expect(block.at(-2)).toMatch(new RegExp(`^сүз${block.length - 2} → `));
+    });
+
+    it("a breakdown that cannot fit at all is left out, and the card is shortened as before", () => {
+      const text = renderCard(glossed({ gloss: [["сүз", "сүз", "я".repeat(40), null]], exampleTt: "ә".repeat(5000), exampleRu: "я".repeat(5000) }), counts, iv, true, "ru", "", true).text;
+      expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+      expect(text).not.toContain("→");
+      expect(text).toMatch(/<i>ә+…<\/i>/);
+    });
+
+    it("text in the breakdown is escaped", () => {
+      const text = renderCard(glossed({ gloss: [["a<b", "c&d", "<i>x</i> & y", null]] }), counts, iv, false, "ru", "", true).text;
+      expect(text).toContain("a&lt;b → c&amp;d — &lt;i&gt;x&lt;/i&gt; &amp; y");
+    });
+  });
+
   it("translation and example are inside tg-spoiler", () => {
     const { text } = renderCard(view(), counts, iv, false, "ru");
     expect(text).toContain("🔵 4 · 🔴 1 · 🟢 12");

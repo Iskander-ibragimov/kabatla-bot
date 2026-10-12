@@ -1,6 +1,7 @@
 import type { InlineKeyboardButton } from "grammy/types";
 import { formatInterval } from "../srs/interval";
 import { type Lang, type Mem, type Rating, rungOf, stage } from "../srs/ladder";
+import { type GlossEntry, cardWordLines } from "../content/gloss";
 import { dict } from "../i18n";
 import { levelCode } from "../levels/scale";
 import { esc } from "../tg/html";
@@ -119,10 +120,11 @@ export function progressLine(m: Mem, lang: Lang): string {
 /**
  * How much of a card in a review session is shown. Whole by default; the caps (in characters) are lowered only for a
  * card that would not fit one message, see `fitCard`. `example`: 0 leaves the example out. `extras`: the line with the
- * transcription and the part of speech is shown and the host of the link is whole.
+ * transcription and the part of speech is shown and the host of the link is whole. `gloss`: the lines of an open
+ * breakdown shown, 0 for none; below their number the shown ones end with a line «…».
  */
-interface CardFit { example: number; translation: number; extras: boolean; word: number }
-const WHOLE_CARD: CardFit = { example: Infinity, translation: Infinity, extras: true, word: Infinity };
+interface CardFit { example: number; translation: number; extras: boolean; word: number; gloss: number }
+const WHOLE_CARD: CardFit = { example: Infinity, translation: Infinity, extras: true, word: Infinity, gloss: Infinity };
 
 /**
  * The text of a card, always short enough for one Telegram message. The fields are limited where they are typed or
@@ -131,13 +133,20 @@ const WHOLE_CARD: CardFit = { example: Infinity, translation: Infinity, extras: 
  * order and no further than needed: the example is shortened, down to nothing; then the translation, to no less than
  * LEAST.translation characters; then the transcription line goes. The word is never shortened while anything else
  * can be: only a word that alone is longer than a message is cut, in the middle.
+ * An open breakdown of `glossLines` lines (spec B4) goes before all that: its last lines are dropped for «…» while
+ * the rest of the card stays whole; a breakdown that cannot stand beside the whole card is left out.
  */
-function fitCard(render: (fit: CardFit) => string): string {
+function fitCard(render: (fit: CardFit) => string, glossLines = 0): string {
   const whole = render(WHOLE_CARD);
   if (fits(whole)) return whole;
-  const bare: CardFit = { ...WHOLE_CARD, example: 0 };
+  const withGloss = glossLines > 0 ? largestFit(1, glossLines, (cap) => render({ ...WHOLE_CARD, gloss: cap })) : null;
+  if (withGloss !== null) return withGloss;
+  const closed: CardFit = { ...WHOLE_CARD, gloss: 0 };
+  const bare: CardFit = { ...closed, example: 0 };
   const least: CardFit = { ...bare, translation: LEAST.translation, extras: false };
-  return largestFit(0, TEXT_LIMIT, (cap) => render({ ...WHOLE_CARD, example: cap }))
+  const closedText = render(closed);
+  if (fits(closedText)) return closedText;
+  return largestFit(0, TEXT_LIMIT, (cap) => render({ ...closed, example: cap }))
     ?? largestFit(LEAST.translation, TEXT_LIMIT, (cap) => render({ ...bare, translation: cap }))
     ?? largestFit(LEAST.translation, TEXT_LIMIT, (cap) => render({ ...least, translation: cap }))
     ?? largestFit(LEAST.word, TEXT_LIMIT, (cap) => render({ ...least, word: cap }))
@@ -150,8 +159,28 @@ export function renderLead(l: Lead, lang: Lang): string {
   return l.kind === "front" ? t.hintFront : t.updateNotice;
 }
 
-/** `lead` is what stands before the card in the same message, a hint; it counts toward the length. */
-function cardText(v: CardView, c: Counts, lang: Lang, lead: string, fit: CardFit): string {
+/**
+ * One line of a breakdown: «китабымны → китап (A1) — мою книгу». The form and the lemma of the card's own word are
+ * bold; the level stands after a lemma that is a catalog word.
+ */
+function glossLine([form, lemma, gloss, level]: GlossEntry, isCard: boolean): string {
+  const head = `${esc(form)} → ${esc(lemma)}${level ? ` (${esc(level)})` : ""}`;
+  return `${isCard ? `<b>${head}</b>` : head} — ${esc(gloss)}`;
+}
+
+/** The block of an open breakdown, all of it under a spoiler; `cap` lines of it, then «…» when there are more. */
+function glossBlock(v: CardView & { gloss: GlossEntry[] }, cap: number): string {
+  const isCard = cardWordLines(v.word, v.gloss.map(([form, lemma]) => ({ form, lemma })));
+  const lines = v.gloss.slice(0, cap).map((g, k) => glossLine(g, isCard[k]!));
+  if (cap < v.gloss.length) lines.push("…");
+  return `<blockquote><tg-spoiler>${lines.join("\n")}</tg-spoiler></blockquote>`;
+}
+
+/**
+ * `lead` is what stands before the card in the same message, a hint; it counts toward the length. `glossOpen`: the
+ * breakdown of the example stands right under it (when the card has one and the example is shown).
+ */
+function cardText(v: CardView, c: Counts, lang: Lang, lead: string, fit: CardFit, glossOpen = false): string {
   const word = esc(clipMiddle(v.word, fit.word));
   const translation = esc(clip(v.translation, fit.translation));
   const transcription = fit.extras ? v.transcription : null;
@@ -169,6 +198,7 @@ function cardText(v: CardView, c: Counts, lang: Lang, lead: string, fit: CardFit
   let text = lines.join("\n");
   if (fit.example > 0 && (v.exampleTt || v.exampleRu)) {
     text += `<blockquote><tg-spoiler><i>${esc(clip(v.exampleTt, fit.example))}</i>\n${esc(clip(v.exampleRu, fit.example))}</tg-spoiler></blockquote>`;
+    if (glossOpen && v.gloss && fit.gloss > 0) text += glossBlock({ ...v, gloss: v.gloss }, fit.gloss);
   } else text += "\n";
   text += progressLine(v.mem, lang);
   if (v.sourceUrl) text += `\n🔗 <a href="${esc(v.sourceUrl)}">${esc(clip(hostOf(v.sourceUrl), fit.extras ? Infinity : LEAST.host))}</a>`;
@@ -187,14 +217,21 @@ export function gradeRows(intervals: Record<Rating, string>, data: (r: Rating) =
   return [[grade(1, t.again, "danger"), grade(2, t.hard)], [grade(3, t.good, "success"), grade(4, t.easy, "primary")]];
 }
 
-export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, string>, canUndo: boolean, lang: Lang, lead = ""): Rendered {
+/**
+ * A card of a review session with its buttons. `glossOpen`: the breakdown of the example is shown (spec B4); the
+ * button «🔎» says what a press does and carries the state after it: `gl:<card>:<reps>:<open 0|1>:<undo 0|1>`, so a
+ * press redraws the same card with ↩ where it was.
+ */
+export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, string>, canUndo: boolean, lang: Lang, lead = "", glossOpen = false): Rendered {
   const t = dict(lang);
-  const text = fitCard((fit) => cardText(v, c, lang, lead, fit));
+  const open = glossOpen && v.gloss !== null;
+  const text = fitCard((fit) => cardText(v, c, lang, lead, fit, open), open ? v.gloss!.length : 0);
 
   const keyboard = gradeRows(intervals, (r) => `g:${v.cardId}:${v.reps}:${r}`, lang);
   const extra: Button[] = [];
   if (v.hasAudio) extra.push(btn(t.speak, `v:${v.noteId}`));
   if (canUndo) extra.push(btn(t.undo, "u"));
+  if (v.gloss) extra.push(btn(open ? t.glossHideBtn : t.glossBtn, `gl:${v.cardId}:${v.reps}:${open ? 0 : 1}:${canUndo ? 1 : 0}`));
   extra.push(btn("⚑", `r:${v.noteId}`));
   keyboard.push(extra);
   return { text, keyboard };
