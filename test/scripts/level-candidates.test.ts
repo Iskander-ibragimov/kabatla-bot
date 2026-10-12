@@ -63,10 +63,13 @@ describe("levelCandidates", () => {
     expect(list(2, ["ул"]).filter((c) => c.source === "freq-late").map((c) => c.word)).toEqual(["китап"]);
   });
 
-  it("never carries a word of a KFU list over as a frequency word, and has nothing for a word after the last band", () => {
+  it("never carries a word of a KFU list over as a frequency word, and offers a word after the last band only to the last level", () => {
     const all = [1, 2, 3, 4, 5].flatMap((level) => list(level));
     expect(all.filter((c) => c.source.startsWith("freq")).map((c) => c.word).filter((word) => ["өй", "яңгыр", "белем", "алу", "район", "эш", "кояш", "табиб"].includes(word))).toEqual([]);
-    expect(all.map((c) => c.word)).not.toContain("су");
+    expect([1, 2, 3, 4].flatMap((level) => list(level)).map((c) => c.word)).not.toContain("су");
+    expect(list(5).filter((c) => c.source === "freq-next").map((c) => [c.word, c.rank])).toEqual([["су", 5000]]);
+    expect(list(5).at(-1)?.source).toBe("freq-next");
+    expect(list(5, ["су"]).filter((c) => c.source === "freq-next")).toEqual([]);
   });
 
   it("keeps the KFU words of the level whatever their frequency", () => {

@@ -12,9 +12,9 @@ import { type RankedWord, frequencyBand } from "./wordlist";
 /**
  * `kfu`: a word of the KFU list of the level; `kfu-early`: a word of a higher KFU list offered here for its frequency;
  * `freq`: a word of the frequency band of the level that no KFU list has; `freq-late`: such a word of a lower band
- * that the catalog still lacks.
+ * that the catalog still lacks; `freq-next` (the last level only): a word after the last band that no KFU list has.
  */
-export type CandidateSource = "kfu" | "kfu-early" | "freq" | "freq-late";
+export type CandidateSource = "kfu" | "kfu-early" | "freq" | "freq-late" | "freq-next";
 export interface LevelCandidate {
   /** The word in dictionary form. */
   word: string;
@@ -45,6 +45,8 @@ const printedAsVerb = (p: PoolEntry): boolean => /рг[аә]$/.test(entryKey(p.e
  *  3. `freq` — the words of the frequency band of this level that stand in no KFU list (rule 2). By frequency.
  *  4. `freq-late` — the words of the lower bands that stand in no KFU list and are still not in the catalog: what
  *     did not fit into its own level moves on to the next (rule 4). By frequency, so the most frequent come first.
+ *  5. `freq-next` — for the last level only: the words after the last band that stand in no KFU list, up to
+ *     `NEXT_BAND` places after it, by frequency — the pool of the top level when its own band is used up (ruling F-13).
  * A word the catalog already holds, in any level, is left out; so the list of a level gets shorter as the level is
  * filled. `catalog` holds the word keys of the
  * catalog, `cognates` the words set aside as known to a Russian speaker — they are listed and marked, the author
@@ -79,8 +81,15 @@ export function levelCandidates(level: number, o: {
   const frequent = o.ranked.filter((w) => !kfu.has(w.word) && fresh(w.word));
   const ofBand = frequent.filter((w) => frequencyBand(w.rank) === level).map((w) => candidate(w.word, "freq"));
   const late = frequent.filter((w) => (frequencyBand(w.rank) ?? Infinity) < level).map((w) => candidate(w.word, "freq-late"));
-  return [...ofList, ...early, ...ofBand, ...late];
+  const lastBandEnd = LEVELS.reduce((sum, l) => sum + l.size, 0);
+  const next = level === LEVELS[LEVELS.length - 1]!.no
+    ? frequent.filter((w) => w.rank > lastBandEnd && w.rank <= lastBandEnd + NEXT_BAND).map((w) => candidate(w.word, "freq-next"))
+    : [];
+  return [...ofList, ...early, ...ofBand, ...late, ...next];
 }
+
+/** How many places after the last band `freq-next` looks. */
+export const NEXT_BAND = 3000;
 
 export const CANDIDATES_HEADER = ["word", "source", "kfu_topic", "topic", "rank", "pos", "cognate", "tatoeba"] as const;
 

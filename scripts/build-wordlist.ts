@@ -79,6 +79,7 @@ function candidatesOfLevel(slug: string): void {
   console.log(`  kfu-early (списки КФУ старших уровней, по частоте — этот уровень или младше): ${of("kfu-early").length}`);
   console.log(`  freq (частотная полоса уровня, в списках КФУ нет): ${of("freq").length}`);
   console.log(`  freq-late (остаток младших частотных полос, в списках КФУ нет): ${of("freq-late").length}`);
+  if (of("freq-next").length) console.log(`  freq-next (после последней полосы, в списках КФУ нет): ${of("freq-next").length}`);
   console.log(`  отложены как совпадающие с русским: ${list.filter((c) => c.cognate).length}; без предложений Tatoeba: ${list.filter((c) => c.tatoeba === 0).length}`);
 }
 
