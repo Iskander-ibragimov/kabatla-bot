@@ -211,4 +211,8 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "сәнәгый": "сәнәгъи́",
   "газиз": "гъәзи́з",
   "гарәпчә": "гъәрә́пчә",
+  // B2 portion 4, second pass: Russian roots keep в and plain к (мордвача, штукатурчы); [и] after къ in шәркыятьче.
+  "мордвача": "мордва́ча",
+  "штукатурчы": "штукатурчы́",
+  "шәркыятьче": "шәркъийәтче́",
 };
