@@ -211,6 +211,41 @@ describe("bot handlers", () => {
       expect(await rows()).toEqual(before.rows);
     });
 
+    it("ru→tt: the open breakdown stands inside its spoiler, so it does not give the word away", async () => {
+      const { noteIds } = await seedUser(env.DB, { now: T, words: 1, tgId: 42, patch: { direction: "ru_tt" } });
+      await env.DB.prepare("UPDATE notes SET example_gloss = ? WHERE id = ?").bind(GLOSS("китап"), noteIds[0]!).run();
+      const h = harness(env.DB, { now: T });
+      await h.text("/learn");
+      expect(h.lastText().startsWith("🔵")).toBe(true);
+      await h.press(glossData(h)!, h.tg.lastMessageId());
+      const text = h.lastText();
+      expect(text).toContain("<blockquote><tg-spoiler>Бу → бу (A1) — это\n<b>китап → китап</b> — слово</tg-spoiler></blockquote>");
+      // Outside the spoilers the Tatar word stands nowhere.
+      expect(text.replace(/<tg-spoiler>[^]*?<\/tg-spoiler>/g, "")).not.toContain("китап");
+    });
+
+    it("a card with three answers today keeps «Трудно · 1 день» and its flag when the breakdown opens and closes", async () => {
+      const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1, tgId: 42 });
+      await env.DB.prepare("UPDATE notes SET example_gloss = ? WHERE id = ?").bind(GLOSS("китап"), noteIds[0]!).run();
+      const id = await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(T), state: "learning", step: 0, reps: 3, due: T - 1000, lastReview: T - 2 * 60_000 });
+      await env.DB.batch([4, 3, 2].map((m) => logStmt(env.DB, {
+        cardId: id, userId: user.id, rating: 1, stateBefore: { ...newMem(T), state: "learning", step: 0 }, intervalBeforeDays: 0, intervalAfterMs: 60_000, reviewedAt: T - m * 60_000, wasNew: false,
+      })));
+      const h = harness(env.DB, { now: T });
+      await h.text("/learn");
+      const grades = () => (h.lastMarkup().inline_keyboard ?? []).slice(0, 2).flat().map((b) => [b.text, b.callback_data]);
+      const shown = grades();
+      expect(shown).toEqual([
+        [`${ru.again} · 1 день`, `g:${id}:3:1:t`], [`${ru.hard} · 1 день`, `g:${id}:3:2:t`], [`${ru.good} · 10 минут`, `g:${id}:3:3`], [`${ru.easy} · 1 день`, `g:${id}:3:4`],
+      ]);
+      const msg = h.tg.lastMessageId();
+      await h.press(glossData(h)!, msg);
+      expect(h.lastText()).toContain("→");
+      expect(grades()).toEqual(shown);
+      await h.press(glossData(h)!, msg);
+      expect(grades()).toEqual(shown);
+    });
+
     it("↩ stays on the redrawn card when it was there", async () => {
       const { h, cardMsg } = await glossSession();
       await h.press(easyButton(h), cardMsg);
