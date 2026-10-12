@@ -49,6 +49,15 @@ export const hasRow = (user: string, noteId: string, direction: Direction) =>
 /** True unless a card of the note was hidden for today: the grade of one card of a word buries the word until tomorrow. */
 export const wordNotBuried = (user: string, noteId: string, a: Asked) =>
   `NOT EXISTS (SELECT 1 FROM cards b WHERE b.user_id = ${user} AND b.note_id = ${noteId} AND b.buried_day IS ${a.today})`;
+/**
+ * True for a card `c` on a learning step that the rule «enough for today» (spec A3) sent to tomorrow and that is not
+ * due before the day ends (`dayEndMs`, SQL). An ordinary learning step is never a day long, so a step of a day or more
+ * since the last answer is that rule's.
+ */
+export const waitsPastToday = (c: string, dayEndMs: string) => `(${c}.due >= ${dayEndMs} AND ${c}.due - ${c}.last_review >= 86400000)`;
+/** The answers of card `c` since the learner's day began (`dayStartMs`, SQL) that were not undone; read through idx_log_card_time. */
+export const answersToday = (c: string, dayStartMs: string) =>
+  `(SELECT COUNT(*) FROM review_log l WHERE l.card_id = ${c}.id AND l.reviewed_at >= ${dayStartMs} AND l.undone = 0)`;
 /** A card `c` with its note `n`; the viewer of the note is the user the card belongs to. */
 export const CARD_COLS = `c.id, c.note_id, c.direction, c.state, c.step, c.stability, c.difficulty, c.due, c.last_review, c.scheduled_days, c.reps, c.lapses, c.buried_day, ${noteCols("c.user_id")}`;
 

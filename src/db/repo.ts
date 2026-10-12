@@ -1,9 +1,9 @@
 import { ALL_LEVELS, ALL_POS, LEVELS, type NewMode, levelBit, tseqOf } from "../levels/scale";
 import type { Mem } from "../srs/ladder";
 import { type DayWindow, type NewScope, type Queue, ownedCopiesStmt, progressStmt, readQueue, unprogressStmt } from "./queue";
-import { type Asked, CARD_COLS, type CardRow, type Direction, NEW_CARDS, type NoteFields, askedDirection, noteCols, noteFields, rowToCard } from "./sql";
+import { type Asked, CARD_COLS, type CardRow, type Direction, NEW_CARDS, type NoteFields, answersToday, askedDirection, noteCols, noteFields, rowToCard } from "./sql";
 
-export type { CatalogNew, DayWindow, NewScope, Queue, RecentAnswer, StreamSeen } from "./queue";
+export type { CatalogNew, DayWindow, LearningRow, NewScope, Queue, RecentAnswer, StreamSeen } from "./queue";
 export type { Asked, CardRow, Direction, NewNote, NoteFields } from "./sql";
 
 export type Lang = "ru" | "tt";
@@ -510,6 +510,16 @@ export class Repo {
       .bind(cardId, userId).first<Record<string, unknown>>();
     return r ? rowToCard(r) : null;
   }
+  /**
+   * A card of the user for a grade or an undo, with its answers since the learner's day began (`dayStartMs`) that were
+   * not undone (spec A3), in one query; null when the card is not the user's.
+   */
+  async cardForGrade(userId: number, cardId: number, dayStartMs: number): Promise<(CardRow & { answersToday: number }) | null> {
+    const r = await this.db.prepare(
+      `SELECT ${CARD_COLS}, ${answersToday("c", "?3")} AS answers_today FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.id = ?1 AND c.user_id = ?2`,
+    ).bind(cardId, userId, dayStartMs).first<Record<string, unknown>>();
+    return r ? { ...rowToCard(r), answersToday: r.answers_today as number } : null;
+  }
   async getCardByNote(userId: number, noteId: number, direction: Direction): Promise<CardRow | null> {
     const r = await this.db.prepare(`SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ? AND c.note_id = ? AND c.direction = ?`)
       .bind(userId, noteId, direction).first<Record<string, unknown>>();
@@ -545,15 +555,26 @@ export class Repo {
   }
   /**
    * What the screen that ends a session reads, in one D1 call: today's grades that were not undone and the words
-   * learned today (through idx_log_user_time: only the rows of today) and, with `counters`, what `progress` and
-   * `catalogTotals` give — the facts for the reason there are no new words. Without `counters` both lists are empty
-   * and are not read.
+   * learned today (through idx_log_user_time: only the rows of today), the words that «Снова» or «Трудно» sent to
+   * tomorrow today (spec A3: a card on a learning step answered today and due a day or more after that answer; both
+   * cards of a word count once) and, with `counters`, what `progress` and `catalogTotals` give — the facts for the
+   * reason there are no new words. Without `counters` both lists are empty and are not read.
    */
-  async dayEnd(userId: number, dayStartMs: number, counters: boolean): Promise<{ reviewsToday: number; learnedToday: number; progress: PairStarted[]; totals: PairTotal[] }> {
-    const [log, started, totals] = await this.db.batch<Record<string, unknown>>(
-      [this.todayLogStmt(userId, dayStartMs), ...(counters ? [this.progressRowsStmt(userId), this.catalogTotalsStmt()] : [])],
-    );
-    return { ...todayOf(log!.results), progress: pairsStarted(started?.results ?? []), totals: pairTotals(totals?.results ?? []) };
+  async dayEnd(userId: number, dayStartMs: number, counters: boolean): Promise<{ reviewsToday: number; learnedToday: number; postponedToday: number; progress: PairStarted[]; totals: PairTotal[] }> {
+    const [log, postponed, started, totals] = await this.db.batch<Record<string, unknown>>([
+      this.todayLogStmt(userId, dayStartMs),
+      this.db.prepare(
+        // Without the hint the planner counts the distinct notes along the unique index of (user_id, note_id,
+        // direction), which reads every card of the user; this one reads the cards on a learning step alone.
+        `SELECT COUNT(DISTINCT note_id) AS n FROM cards INDEXED BY idx_cards_user_state_due
+         WHERE user_id = ? AND state IN ('learning','relearning') AND last_review >= ? AND due - last_review >= 86400000`,
+      ).bind(userId, dayStartMs),
+      ...(counters ? [this.progressRowsStmt(userId), this.catalogTotalsStmt()] : []),
+    ]);
+    return {
+      ...todayOf(log!.results), postponedToday: postponed!.results[0]!.n as number,
+      progress: pairsStarted(started?.results ?? []), totals: pairTotals(totals?.results ?? []),
+    };
   }
 
   /**

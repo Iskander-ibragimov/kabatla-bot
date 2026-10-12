@@ -13,8 +13,8 @@ import { STREAM_LIMIT, type Spans } from "../levels/order";
 import { type NewMode, tseqOf } from "../levels/scale";
 import type { CardState } from "../srs/ladder";
 import {
-  type Asked, CARD_COLS, type CardRow, type Direction, NEW_CARDS, type NewNote, askedDirection, hasNewRow, hasRow, noteCols, noteFields, ownsWord, rowToCard,
-  wordNotBuried,
+  type Asked, CARD_COLS, type CardRow, type Direction, NEW_CARDS, type NewNote, answersToday, askedDirection, hasNewRow, hasRow, noteCols, noteFields, ownsWord,
+  rowToCard, waitsPastToday, wordNotBuried,
 } from "./sql";
 
 export interface DayWindow { dayStartMs: number; dayEndMs: number; today: string; directions: Direction[]; limitEach?: number }
@@ -33,14 +33,18 @@ export interface CatalogNew extends NewNote { level: number; topicNo: number; se
 export interface StreamSeen { first: number | null; last: number | null; full: boolean }
 /** One answer of today from the review log: the card, its note, and the card's state before the answer. */
 export interface RecentAnswer { cardId: number; noteId: number; stateBefore: CardState }
+/** A card on a learning step, with its answers of today that were not undone (spec A3). */
+export interface LearningRow extends CardRow { answersToday: number }
 /** Everything the session queue needs; see `readQueue`. */
 export interface Queue {
-  learning: CardRow[]; review: CardRow[];
+  learning: LearningRow[]; review: CardRow[];
   ownNew: NewNote[]; newRows: NewNote[];
   streams: Partial<Record<number, CatalogNew[]>>;
   seen: Partial<Record<number, StreamSeen>>;
   counts: { learning: number; review: number; newDoneToday: number; easyNewToday: number };
   catalogVersion: number; hasCards: boolean;
+  /** The last two answers of today that were not undone, newest first. */
+  recent: RecentAnswer[];
 }
 
 /** 1 when a card of this direction was started, over the cards `c` of one note. */
@@ -166,7 +170,9 @@ function newCardsOf(rows: Record<string, unknown>[], directions: Direction[], tt
  * Everything the session queue needs, in one D1 call (one batch).
  *
  * `learning`, `review`: the cards to repeat — every card of the user in the asked directions, whatever deck or level
- * its note is in: a started word is repeated whatever is checked.
+ * its note is in: a started word is repeated whatever is checked. A learning card carries its answers of today that
+ * were not undone (`answersToday`, spec A3); one that rule sent to tomorrow is left out of `learning` and of its count
+ * until the day it is due (`waitsPastToday`).
  *
  * New cards come from three places; the caller gives them in this order:
  * - `ownNew`: the words of the decks the user owns («Мои слова», AI decks), in the order of the note ids. No setting of
@@ -194,6 +200,8 @@ function newCardsOf(rows: Record<string, unknown>[], directions: Direction[], tt
  *
  * `counts`: how many cards there are to repeat (the lists are cut at `w.limitEach`, the counts are not) and how many
  * new cards were graded today, those graded «Легко» counted apart. `hasCards`: the user has a card at all.
+ * `recent`: the last two answers of today that were not undone, newest first, for the order of `pick` (spec A1, A2);
+ * read backwards through idx_log_user_time, two rows.
  *
  * `pre`: statements that run first in the same batch — a write the read is to see, at no D1 call of its own.
  */
@@ -209,8 +217,9 @@ export async function readQueue(db: D1Database, userId: number, w: DayWindow, s:
   const levels = s.mode === "topic" && s.topicNo == null ? [] : s.levels;
   const all = await db.batch<Record<string, unknown>>([
     ...pre,
-    stmt((p) => `SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
-      WHERE c.user_id = ${p(userId)} AND c.state IN ('learning','relearning') AND ${inAsked} ORDER BY c.due LIMIT ${p(lim)}`),
+    stmt((p) => `SELECT ${CARD_COLS}, ${answersToday("c", p(w.dayStartMs))} AS answers_today FROM cards c JOIN notes n ON n.id = c.note_id
+      WHERE c.user_id = ${p(userId)} AND c.state IN ('learning','relearning') AND ${inAsked} AND NOT ${waitsPastToday("c", p(w.dayEndMs))}
+      ORDER BY c.due LIMIT ${p(lim)}`),
     stmt((p) => `SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
       WHERE c.user_id = ${p(userId)} AND c.state = 'review' AND c.due < ${p(w.dayEndMs)} AND ${inAsked} AND c.buried_day IS NOT ${p(w.today)} ORDER BY c.due LIMIT ${p(lim)}`),
     stmt((p) => newInOwnDecks(p(userId), asked(p(w.today)), p(lim))),
@@ -225,12 +234,15 @@ export async function readQueue(db: D1Database, userId: number, w: DayWindow, s:
           AND ${wordNotBuried(user, "n.id", a)} AND NOT ${ownsWord(user)}
         ORDER BY f.note_id, f.direction LIMIT ${NEW_ROWS_LIMIT}`;
     }),
+    stmt((p) => `SELECT l.card_id, c.note_id, json_extract(l.state_before, '$.state') AS state_before FROM review_log l JOIN cards c ON c.id = l.card_id
+      WHERE l.user_id = ${p(userId)} AND l.undone = 0 AND l.reviewed_at >= ${p(w.dayStartMs)} ORDER BY l.reviewed_at DESC, l.id DESC LIMIT 2`),
     ...levels.map((level) => streamStmt(db, userId, w.directions, s, level)),
     stmt((p) => {
       const user = p(userId);
       const due = `c.user_id = ${user} AND c.state = 'review' AND c.due < ${p(w.dayEndMs)} AND ${inAsked} AND c.buried_day IS NOT ${p(w.today)}`;
       return `SELECT
-        (SELECT COUNT(*) FROM cards c WHERE c.user_id = ${user} AND c.state IN ('learning','relearning') AND ${inAsked}) AS learning,
+        (SELECT COUNT(*) FROM cards c WHERE c.user_id = ${user} AND c.state IN ('learning','relearning') AND ${inAsked}
+           AND NOT ${waitsPastToday("c", p(w.dayEndMs))}) AS learning,
         (SELECT COUNT(*) FROM cards c WHERE ${due}) AS review,
         l.new_done, l.easy_new,
         (SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'catalog_version') AS catalog_version,
@@ -240,19 +252,19 @@ export async function readQueue(db: D1Database, userId: number, w: DayWindow, s:
     }),
   ]);
   const res = all.slice(pre.length);
-  const [learning, review, own, rows] = res;
+  const [learning, review, own, rows, recent] = res;
   const c = res[res.length - 1]!.results[0]!;
   const place = (d: Direction) => w.directions.indexOf(d);
   const streams: Queue["streams"] = {};
   const seen: Queue["seen"] = {};
   levels.forEach((level, i) => {
-    const notes = res[4 + i]!.results;
+    const notes = res[5 + i]!.results;
     streams[level] = notes.flatMap((r) => newCardsOf([r], w.directions, "has_tt", "has_ru")
       .map((n): CatalogNew => ({ ...n, level: r.level as number, topicNo: r.topic_no as number, seq: r.seq as number, tseq: r.tseq as number })));
     seen[level] = { first: (notes[0]?.ord as number) ?? null, last: (notes[notes.length - 1]?.ord as number) ?? null, full: notes.length === STREAM_LIMIT };
   });
   return {
-    learning: learning!.results.map(rowToCard),
+    learning: learning!.results.map((r): LearningRow => ({ ...rowToCard(r), answersToday: r.answers_today as number })),
     review: review!.results.map(rowToCard),
     ownNew: newCardsOf(own!.results, w.directions, "seen_tt", "seen_ru").slice(0, lim),
     // The index gives the directions of a note in the order of their names; the caller asked for an order of its own.
@@ -262,6 +274,7 @@ export async function readQueue(db: D1Database, userId: number, w: DayWindow, s:
     counts: { learning: c.learning as number, review: c.review as number, newDoneToday: c.new_done as number, easyNewToday: c.easy_new as number },
     catalogVersion: (c.catalog_version as number) ?? 0,
     hasCards: c.has_cards === 1,
+    recent: recent!.results.map((r): RecentAnswer => ({ cardId: r.card_id as number, noteId: r.note_id as number, stateBefore: r.state_before as CardState })),
   };
 }
 
