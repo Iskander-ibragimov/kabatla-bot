@@ -78,6 +78,7 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "гадәттә": "гъәдәттә́",
   "гадел": "гъәде́л",
   "гади": "гъәди́",
+  "гадәти": "гъәдәти́",
   "галим": "гъәли́м",
   "каләм": "къәлә́м",
   "кадер": "къәде́р",
@@ -95,9 +96,11 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "кыйммәт": "къиммә́т",
   "гыйлем": "гъиле́м",
   "гыйнвар": "гъинwа́р",
+  "шагыйрь": "шагъи́р",
 
   // Arabic loans where о after [гъ] is read [ө].
   "гомер": "гъөме́р",
+  "гореф": "гъөре́ф",
 
   // A compound whose second part keeps its own (back) vowel row: тимер + аяк.
   "тимераяк": "тимерайа́къ",
