@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RUNGS, TOP, HARD_BOTTOM_MS, grade, memoryDays, newMem, preview, rungOf, stage, type Mem, type Rating } from "../../src/srs/ladder";
+import { RUNGS, TOP, HARD_BOTTOM_MS, DAY_ANSWERS, TOMORROW_MS, grade, memoryDays, newMem, preview, rungOf, stage, type Mem, type Rating } from "../../src/srs/ladder";
 
 const NOW = Date.UTC(2026, 9, 8, 6, 0, 0);
 const MIN = 60_000;
@@ -172,5 +172,34 @@ describe("stage and memoryDays", () => {
     expect(memoryDays(old(11))).toBe(11);
     // What the old scheduler counted for a word that fell, its stability, is not counted.
     expect(memoryDays({ ...old(0), state: "relearning", step: 0, stability: 3.1 })).toBe(0);
+  });
+});
+
+describe("enough for today (spec A3)", () => {
+  const learning1: Mem = { ...newMem(NOW), state: "learning", step: 0, reps: 3 };
+  it("is three answers and one day", () => {
+    expect(DAY_ANSWERS).toBe(3);
+    expect(TOMORROW_MS).toBe(DAY);
+  });
+  it("«Снова» and «Трудно» after 3 answers today give 1 day on rung 1", () => {
+    for (const r of [1, 2] as const) {
+      const m = grade(learning1, r, NOW, 3);
+      expect(m).toMatchObject({ state: "learning", step: 0, due: NOW + TOMORROW_MS, scheduledDays: 0, reps: 4 });
+      expect(rungOf(m)).toBe(1);
+    }
+  });
+  it("a review card answered for the 4th time today goes to relearning, and «Снова» counts a lapse", () => {
+    const rel: Mem = { ...learning1, state: "relearning" };
+    expect(grade(rel, 2, NOW, 4)).toMatchObject({ state: "relearning", step: 0, due: NOW + TOMORROW_MS });
+    const rev: Mem = { ...newMem(NOW), state: "review", scheduledDays: 14, reps: 5, lapses: 1 };
+    expect(grade(rev, 1, NOW, 3)).toMatchObject({ state: "relearning", step: 0, due: NOW + TOMORROW_MS, lapses: 2 });
+  });
+  it("«Хорошо» and «Легко» ignore the count; fewer than 3 answers change nothing", () => {
+    expect(grade(learning1, 3, NOW, 5)).toEqual(grade(learning1, 3, NOW));
+    expect(grade(learning1, 4, NOW, 5)).toEqual(grade(learning1, 4, NOW));
+    expect(grade(learning1, 1, NOW, 2)).toEqual(grade(learning1, 1, NOW));
+  });
+  it("preview says exactly what grade stores, with the same count", () => {
+    expect(preview(learning1, NOW, 3)).toEqual({ 1: NOW + TOMORROW_MS, 2: NOW + TOMORROW_MS, 3: NOW + 10 * MIN, 4: NOW + DAY });
   });
 });

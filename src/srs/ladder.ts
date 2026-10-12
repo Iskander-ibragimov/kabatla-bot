@@ -24,6 +24,10 @@ export const RUNGS: readonly number[] = [1 * MIN, 10 * MIN, 1 * DAY, 3 * DAY, 7 
 export const TOP = 10;
 /** «Трудно» on rung 0 or 1 comes back after this long. */
 export const HARD_BOTTOM_MS = 5 * MIN;
+/** From this many answers of a card today on, «Снова» and «Трудно» send it to tomorrow (spec A3). */
+export const DAY_ANSWERS = 3;
+/** How far «Снова» and «Трудно» send a card that has had enough for today. */
+export const TOMORROW_MS = DAY;
 
 /** Rung 0…10 of a card, also for cards written by the old scheduler. */
 export function rungOf(m: Mem): number {
@@ -51,7 +55,25 @@ function intervalMs(rung: number, next: number, rating: Rating): number {
   return rating === 2 && rung <= 1 ? HARD_BOTTOM_MS : RUNGS[next - 1]!;
 }
 
-export function grade(m: Mem, rating: Rating, now: number): Mem {
+/**
+ * The card after one answer. `answersToday` is the card's answers today that were not undone,
+ * before this one; from DAY_ANSWERS on, «Снова» and «Трудно» put the card on rung 1 due in one day
+ * instead of in 1 or 5 minutes, so a hard word leaves the session for tomorrow (spec A3).
+ */
+export function grade(m: Mem, rating: Rating, now: number, answersToday = 0): Mem {
+  if (answersToday >= DAY_ANSWERS && rating <= 2) {
+    return {
+      state: m.state === "review" || m.state === "relearning" ? "relearning" : "learning",
+      step: 0,
+      stability: null,
+      difficulty: null,
+      due: now + TOMORROW_MS,
+      lastReview: now,
+      scheduledDays: 0,
+      reps: m.reps + 1,
+      lapses: rating === 1 && m.state === "review" ? m.lapses + 1 : m.lapses,
+    };
+  }
   const rung = rungOf(m);
   const next = nextRung(rung, rating);
   const minute = next <= 2;
@@ -68,9 +90,13 @@ export function grade(m: Mem, rating: Rating, now: number): Mem {
   };
 }
 
-/** Due time for each of the 4 ratings; the ladder has no fuzz, so this is exactly what grade() will store. */
-export function preview(m: Mem, now: number): Record<Rating, number> {
-  return { 1: grade(m, 1, now).due, 2: grade(m, 2, now).due, 3: grade(m, 3, now).due, 4: grade(m, 4, now).due };
+/**
+ * Due time for each of the 4 ratings; the ladder has no fuzz, so with the same `answersToday`
+ * this is exactly what grade() will store.
+ */
+export function preview(m: Mem, now: number, answersToday = 0): Record<Rating, number> {
+  const due = (r: Rating) => grade(m, r, now, answersToday).due;
+  return { 1: due(1), 2: due(2), 3: due(3), 4: due(4) };
 }
 
 export function stage(m: Mem): Stage {
