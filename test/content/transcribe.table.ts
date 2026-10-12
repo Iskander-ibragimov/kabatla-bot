@@ -288,6 +288,14 @@ const EXCEPTION_ROWS: Row[] = [
   ["автомәктәп", "автомәктә́п"],
   // B2 portion 1, second pass
   ["шулкадәр", "шулкъәдә́р"],
+  // B2 portion 2, second pass
+  ["беркадәр", "беркъәдә́р"],
+  ["гомерлек", "гъөмерле́к"],
+  ["гаделсезлек", "гъәделсезле́к"],
+  ["гайбәт", "гъәйбә́т"],
+  ["гарәп", "гъәрә́п"],
+  ["мөгаллим", "мөгъәлли́м"],
+  ["мөлаем", "мөләйе́м"],
 ];
 
 /** Rows by the rule they were added for. The mandatory rows exercise every rule as well. */
