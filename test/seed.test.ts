@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { type Rename, type SeedLevel, type SeedTopic, catalogToSql } from "../src/content/csv";
+import type { GlossLine } from "../src/content/gloss";
 import { Repo } from "../src/db/repo";
 import { LEVELS } from "../src/levels/scale";
 import { newMem } from "../src/srs/ladder";
@@ -484,5 +485,60 @@ describe("catalog seed", () => {
       expect(() => seed([corrected()], { renames: [{ oldWord: " ", newWord: "китап" }] })).toThrow(/rename.*old/);
       expect(() => seed([corrected()], { renames: [{ oldWord: "китаб", newWord: "?!" }] })).toThrow(/rename.*«китаб».*new/);
     });
+  });
+});
+
+describe("the breakdown of the examples", () => {
+  const g = (form: string, lemma: string, gloss: string): GlossLine => ({ form, lemma, gloss });
+  const A1G = (glossOfUku = "(я) читаю"): SeedLevel => ({
+    ...lvl(1, [row("китап", { example_tt: "Бу китап." }), row("уку", { example_tt: "Мин укыйм." }), row("су")]),
+    gloss: new Map([
+      ["китап", [g("Бу", "бу", "это"), g("китап", "китап", "книга")]],
+      ["уку", [g("Мин", "мин", "я"), g("укыйм", "уку", glossOfUku)]],
+    ]),
+  });
+  const A2G = (): SeedLevel => ({
+    ...lvl(2, [row("укучы", { example_tt: "Укучы китабымны укый." })]),
+    gloss: new Map([["укучы", [g("Укучы", "укучы", "ученик"), g("китабымны", "китап", "мою книгу"), g("укый", "уку", "читает")]]]),
+  });
+  const glossOf = async (word: string) =>
+    (await all<{ example_gloss: string | null }>(`SELECT example_gloss FROM notes WHERE word = '${word}' AND level IS NOT NULL`))[0]!.example_gloss;
+
+  it("a row with gloss lines stores them as JSON [form, lemma, gloss, level]; the level is the catalog level of the lemma, null for the card's word and for a lemma outside the catalog", async () => {
+    await load([A1G(), A2G()]);
+    expect(JSON.parse((await glossOf("китап"))!)).toEqual([["Бу", "бу", "это", null], ["китап", "китап", "книга", null]]);
+    expect(JSON.parse((await glossOf("уку"))!)).toEqual([["Мин", "мин", "я", null], ["укыйм", "уку", "(я) читаю", null]]);
+    expect(JSON.parse((await glossOf("укучы"))!)).toEqual([["Укучы", "укучы", "ученик", null], ["китабымны", "китап", "мою книгу", "A1"], ["укый", "уку", "читает", "A1"]]);
+    // A row of a level with a breakdown file but without lines of its own has none.
+    expect(await glossOf("су")).toBeNull();
+  });
+
+  it("a level without a gloss file stores NULL, and loading the same files again writes no row", async () => {
+    await load([A1G(), A2()]);
+    expect(await glossOf("авыл")).toBeNull();
+    expect(await load([A1G(), A2()])).toMatchObject({ changes: 0, rowsWritten: 0 });
+  });
+
+  it("a changed gloss rewrites only that note", async () => {
+    const hash = "same";
+    await load([A1G(), A2G()], { hash });
+    const before = await notes();
+    // Only the note: neither the version nor the hash.
+    expect(await load([A1G("читаю"), A2G()], { hash })).toMatchObject({ changes: 1 });
+    expect(JSON.parse((await glossOf("уку"))!)[1]).toEqual(["укыйм", "уку", "читаю", null]);
+    expect(await notes()).toEqual(before);
+  });
+
+  it("a gloss change does not raise catalog_version", async () => {
+    await load([A1G(), A2G()], { hash: "files" });
+    const v = await version();
+    await load([A1G("читаю"), A2G()], { hash: "files" });
+    expect(await version()).toBe(v);
+  });
+
+  it("a breakdown that is dropped is cleared", async () => {
+    await load([A1G(), A2G()], { hash: "files" });
+    await load([A1(), A2G()], { hash: "files" });
+    expect(await glossOf("китап")).toBeNull();
   });
 });

@@ -4,7 +4,7 @@ import type { CardRow, NewNote } from "../../src/db/repo";
 import { newMem } from "../../src/srs/ladder";
 
 const T = Date.UTC(2026, 8, 30, 6);
-const note = { word: "сүз", transcription: null, pos: "", translation: "слово", exampleTt: "", exampleRu: "", exampleSrc: "", audioFileId: null, sourceUrl: null };
+const note = { word: "сүз", transcription: null, pos: "", translation: "слово", exampleTt: "", exampleRu: "", exampleSrc: "", audioFileId: null, sourceUrl: null, exampleGloss: null };
 const card = (id: number, state: CardRow["mem"]["state"], due: number, noteId = id, direction: CardRow["direction"] = "tt_ru"): CardRow =>
   ({ ...note, id, noteId, direction, buriedDay: null, mem: { ...newMem(T), state, due } });
 const fresh = (id: number): NewNote => ({ ...note, noteId: 100 + id, direction: "tt_ru" });

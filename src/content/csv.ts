@@ -1,5 +1,7 @@
 import { wordKey } from "../db/repo";
 import { guidedTseq } from "../levels/order";
+import { levelCode } from "../levels/scale";
+import { type GlossEntry, type GlossLine, cardWordLines } from "./gloss";
 
 /** RFC 4180 CSV parser (quotes, doubled quotes, commas and newlines inside quotes). */
 export function parseCsv(text: string): Record<string, string>[] {
@@ -34,8 +36,15 @@ export function toCsv(header: string[], rows: Record<string, string | null | und
   return [header.join(","), ...rows.map((r) => header.map((h) => cell(r[h])).join(","))].join("\n") + "\n";
 }
 
-/** One level file of the catalog, as the seed loads it: the deck of the level and its rows in learning order. */
-export interface SeedLevel { level: number; slug: string; titleRu: string; titleTt: string; coveragePct: number | null; rows: Record<string, string>[] }
+/**
+ * One level file of the catalog, as the seed loads it: the deck of the level and its rows in learning order. `gloss` is
+ * the breakdown of the examples of the level (data/gloss/<level>.tsv): the exact word of a row → its lines; absent when
+ * the level has no breakdown file.
+ */
+export interface SeedLevel {
+  level: number; slug: string; titleRu: string; titleTt: string; coveragePct: number | null; rows: Record<string, string>[];
+  gloss?: ReadonlyMap<string, GlossLine[]>;
+}
 
 /** A topic of data/topics.csv. */
 export interface SeedTopic { no: number; slug: string; titleRu: string; titleTt: string }
@@ -91,7 +100,12 @@ const STARTED = `SELECT s.user_id AS user_id, s.level AS level, s.topic_no AS to
  *  - nothing is deleted: a note that left the files stays where it was. Cards, the review log, users and the learners'
  *    own notes (`level IS NULL`) are never written;
  *  - `audio_file_id` of a row only fills an empty one: a row never erases or replaces the voice a note already has,
- *    and `audio_tries` is left alone.
+ *    and `audio_tries` is left alone;
+ *  - `example_gloss` is the breakdown of the row's example as compact JSON, a list of `[form, lemma, gloss, level]`
+ *    (spec B3): `level` is the code (A1 … C1) of the level whose file has the lemma as a headword (by word key), null
+ *    for a lemma outside the catalog and for the lines of the card's own word (`cardWordLines`). A row without lines,
+ *    or of a level without a breakdown file, stores NULL. It is written like the other fields: only when it differs.
+ *    The breakdown is not part of `hash`, so a changed breakdown rewrites its notes and leaves the catalog version.
  * A corrected spelling changes the word key, which is what a row is matched by: without a rename the corrected row
  * would be a second note and the misspelled one would stay in the learners' queues. A rename moves the catalog note
  * from the old key to the new one before the rows are loaded: the id, the cards and the reports stay, and the voice is
@@ -139,6 +153,12 @@ export function catalogToSql(levels: SeedLevel[], topics: SeedTopic[], renames: 
   }
 
   const topicNo = new Map(topics.map((t) => [t.slug, t.no]));
+  /** Word key of a headword → the code of the level it stands in (the first, should it stand twice: the load stops below). */
+  const levelOfKey = new Map<string, string>();
+  for (const l of levels) for (const row of l.rows) {
+    const key = wordKey(row.word ?? "");
+    if (key !== "" && !levelOfKey.has(key)) levelOfKey.set(key, levelCode(l.level));
+  }
   /** Word key → where the word stands in the files. */
   const seen = new Map<string, string>();
   for (const l of levels) {
@@ -162,11 +182,16 @@ export function catalogToSql(levels: SeedLevel[], topics: SeedTopic[], renames: 
       if (topic === undefined) throw new Error(`${at}: unknown topic «${row.topic}»`);
 
       const seq = i + 1;
+      const glossLines = l.gloss?.get(row.word!) ?? [];
+      const isCard = cardWordLines(word, glossLines);
+      const gloss = glossLines.length === 0 ? "NULL"
+        : sqlText(JSON.stringify(glossLines.map((g, k): GlossEntry => [g.form, g.lemma, g.gloss, isCard[k] ? null : levelOfKey.get(wordKey(g.lemma)) ?? null])));
       /** Column → the value the file gives it. */
       const values: [string, string][] = [
         ["deck_id", deck], ["word", sqlText(word)], ["transcription", sqlTextOrNull(row.transcription!.trim())],
         ...NOTE_COLUMNS.slice(2).map((c): [string, string] => [c, sqlText(row[c]!)]),
         ["level", String(Math.trunc(l.level))], ["topic_no", String(topic)], ["seq", String(seq)], ["tseq", String(tseq[i]!)],
+        ["example_gloss", gloss],
       ];
       const audio = sqlTextOrNull(row.audio_file_id!.trim());
       // An audio id of the file is taken only by a note that has no voice yet.

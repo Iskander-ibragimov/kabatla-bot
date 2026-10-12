@@ -92,7 +92,7 @@ describe("repo", () => {
     expect([...mine.keys()].sort()).toEqual(["зур", "китап"]);
     expect(mine.get("китап")).toEqual({
       id: ids[0], deckId, deckTitleRu: "A1", deckTitleTt: "A1", owned: false,
-      word: "китап", transcription: "кита́п", pos: "n", translation: "книга", exampleTt: "Бу китап яңа.", exampleRu: "Эта книга новая.", exampleSrc: "own", audioFileId: null, sourceUrl: null,
+      word: "китап", transcription: "кита́п", pos: "n", translation: "книга", exampleTt: "Бу китап яңа.", exampleRu: "Эта книга новая.", exampleSrc: "own", audioFileId: null, sourceUrl: null, exampleGloss: null,
     });
     expect(await repo.visibleNote(userId, ids[0]!)).toMatchObject({ id: ids[0], deckId, word: "китап" });
     expect(await repo.visibleNote(userId, ids[2]!)).toMatchObject({ word: "зур" });

@@ -15,6 +15,8 @@ export interface NoteFields {
   exampleSrc: string;
   audioFileId: string | null;
   sourceUrl: string | null;
+  /** The breakdown of the example as the seed stored it (raw JSON, see `parseGloss`); null for own and AI notes. */
+  exampleGloss: string | null;
 }
 export interface CardRow extends NoteFields { id: number; noteId: number; direction: Direction; mem: Mem; buriedDay: string | null }
 export interface NewNote extends NoteFields { noteId: number; direction: Direction }
@@ -26,7 +28,7 @@ export interface NewNote extends NoteFields { noteId: number; direction: Directi
  * and whatever stands in `source_url` of a level note, which every learner sees, is read as NULL.
  */
 export const noteCols = (viewer: string | null, owner = "(SELECT owner_id FROM decks WHERE id = n.deck_id)") =>
-  "n.word, n.transcription, n.pos, n.translation, n.example_tt, n.example_ru, n.example_src, n.audio_file_id, " +
+  "n.word, n.transcription, n.pos, n.translation, n.example_tt, n.example_ru, n.example_src, n.audio_file_id, n.example_gloss, " +
   (viewer === null ? "NULL" : `CASE WHEN ${owner} = ${viewer} THEN n.source_url END`) + " AS source_url";
 /** True when the user owns a note with the word_key of `note`, in «Мои слова» or an AI deck. */
 export const ownsWord = (user: string, note = "n") =>
@@ -66,6 +68,7 @@ export function noteFields(r: Record<string, unknown>): NoteFields {
     word: r.word as string, transcription: (r.transcription as string) ?? null, pos: (r.pos as string) ?? "", translation: r.translation as string,
     exampleTt: (r.example_tt as string) ?? "", exampleRu: (r.example_ru as string) ?? "", exampleSrc: (r.example_src as string) ?? "",
     audioFileId: (r.audio_file_id as string) ?? null, sourceUrl: (r.source_url as string) ?? null,
+    exampleGloss: (r.example_gloss as string) ?? null,
   };
 }
 export function rowToCard(r: Record<string, unknown>): CardRow {

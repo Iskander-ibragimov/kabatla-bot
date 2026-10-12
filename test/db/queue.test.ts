@@ -58,7 +58,7 @@ describe("repo.queue: the streams of new catalog words", () => {
     expect(q.seen).toEqual({ 1: { first: 1, last: 1, full: true }, 2: { first: 1, last: 1, full: true } });
     expect(q.streams[1]![0]).toEqual({
       noteId: ids[0], direction: "tt_ru", level: 1, topicNo: 3, seq: 1, tseq: 3_000_001,
-      word: "а1", transcription: null, pos: "n", translation: "а1-ru", exampleTt: "а1.", exampleRu: "а1-ru.", exampleSrc: "own", audioFileId: null, sourceUrl: null,
+      word: "а1", transcription: null, pos: "n", translation: "а1-ru", exampleTt: "а1.", exampleRu: "а1-ru.", exampleSrc: "own", audioFileId: null, sourceUrl: null, exampleGloss: null,
     });
     expect(q.streams[2]![0]).toMatchObject({ noteId: ids[4], level: 2, topicNo: 2, seq: 1 });
     const s = scope({ levels: [1, 2], mode: "freq" });
@@ -389,7 +389,7 @@ describe("repo.queue: cards that exist", () => {
     const q = await repo.queue(user.id, win(BOTH), narrow);
     expect(q.newRows).toEqual([{
       noteId: ids[3], direction: "ru_tt", word: "б2", transcription: null, pos: "v", translation: "б2-ru",
-      exampleTt: "б2.", exampleRu: "б2-ru.", exampleSrc: "own", audioFileId: null, sourceUrl: null,
+      exampleTt: "б2.", exampleRu: "б2-ru.", exampleSrc: "own", audioFileId: null, sourceUrl: null, exampleGloss: null,
     }]);
     expect(q.streams).toEqual({ 1: [] });
     expect((await repo.queue(user.id, win(["tt_ru"]), narrow)).newRows).toEqual([]);
@@ -481,7 +481,7 @@ describe("repo.queue: own words", () => {
     expect(q.ownNew[0]).toMatchObject({ noteId: own[0], sourceUrl: "https://example.org/a" });
     expect(q.ownNew[1]).toEqual({
       noteId: own[2], direction: "tt_ru",
-      word: "өч", transcription: null, pos: "n", translation: "өч-ru", exampleTt: "өч.", exampleRu: "өч-ru.", exampleSrc: "own", audioFileId: null, sourceUrl: null,
+      word: "өч", transcription: null, pos: "n", translation: "өч-ru", exampleTt: "өч.", exampleRu: "өч-ru.", exampleSrc: "own", audioFileId: null, sourceUrl: null, exampleGloss: null,
     });
 
     expect((await repo.queue(user.id, { ...win(BOTH), limitEach: 2 }, scope())).ownNew).toEqual(q.ownNew.slice(0, 2));
