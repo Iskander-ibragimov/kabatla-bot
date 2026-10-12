@@ -177,13 +177,11 @@ function cardText(v: CardView, c: Counts, lang: Lang, lead: string, fit: CardFit
 
 /**
  * The two rows of the grade buttons, «Хорошо · 10 минут»: of a card, and of the practice card, which shows what a real
- * one shows. `intervals`: what each button gives, in words; `data`: the callback data of a button. `tried`: the
- * buttons the practice card marks as pressed — «Хорошо ✅ 10 минут», the mark in place of the dot, so the label is no
- * longer than it was; a real card marks none.
+ * one shows. `intervals`: what each button gives, in words; `data`: the callback data of a button.
  */
-export function gradeRows(intervals: Record<Rating, string>, data: (r: Rating) => string, lang: Lang, tried: (r: Rating) => boolean = () => false): Keyboard {
+export function gradeRows(intervals: Record<Rating, string>, data: (r: Rating) => string, lang: Lang): Keyboard {
   const t = dict(lang);
-  const grade = (r: Rating, name: string, style?: Button["style"]) => btn(`${name} ${tried(r) ? "✅" : "·"} ${intervals[r]}`, data(r), style);
+  const grade = (r: Rating, name: string, style?: Button["style"]) => btn(`${name} · ${intervals[r]}`, data(r), style);
   return [[grade(1, t.again, "danger"), grade(2, t.hard)], [grade(3, t.good, "success"), grade(4, t.easy, "primary")]];
 }
 

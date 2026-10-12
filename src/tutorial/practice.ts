@@ -30,25 +30,6 @@ export function parsePress(data: string): PracticePress | null {
   return /^pr:(0|[1-9]\d?):[1-4]$/.exec(data) && Number(data.split(":")[1]) <= 15 ? { kind: "restart" } : null;
 }
 
-/** The word the card practises on, the same for both interface languages: a Tatar word and its Russian translation, as on a real card. */
-export const PRACTICE_WORD = { word: "китап", translation: "книга" } as const;
-
-/** All four buttons tried. */
-export const ALL = 15;
-
-/** The buttons tried after `rating` is pressed; a button already tried changes nothing. */
-export const press = (mask: number, rating: Rating): number => mask | (1 << (rating - 1));
-
-/** How many of the four buttons are tried, 0…4. */
-export const tried = (mask: number): number => ([1, 2, 3, 4] as const).filter((rating) => press(mask, rating) === mask).length;
-
-/** The data of a practice button, `pr:<mask>:<rating>` with the mask 0…15 and the rating 1…4; null for anything else. */
-export function parse(data: string): { mask: number; rating: Rating } | null {
-  const m = /^pr:(0|[1-9]\d?):([1-4])$/.exec(data);
-  if (!m || Number(m[1]) > ALL) return null;
-  return { mask: Number(m[1]), rating: Number(m[2]) as Rating };
-}
-
 /**
  * In how many ms a new word comes back after each button: what the scheduler of the real cards answers for a new word,
  * so the card shows the intervals the first real card will show. The moment does not matter: the ladder counts every

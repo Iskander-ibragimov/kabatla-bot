@@ -37,21 +37,17 @@ describe("views", () => {
     expect(keyboard[2]!.map((b) => b.callback_data)).toEqual(["v:3", "u", "r:3"]);
   });
 
-  it("the grade rows of a card are what `gradeRows` builds with no button tried, byte for byte; a tried button has «✅» in place of the dot and is no longer", () => {
+  it("the grade rows of a card are what `gradeRows` builds, byte for byte; the practice card builds them the same way", () => {
     const data = (r: number) => `g:7:3:${r}`;
     const real = renderCard(view(), counts, iv, true, "ru").keyboard.slice(0, 2);
     expect(JSON.stringify(gradeRows(iv, data, "ru"))).toBe(JSON.stringify(real));
-    expect(JSON.stringify(gradeRows(iv, data, "ru", () => false))).toBe(JSON.stringify(real));
     expect(JSON.stringify(real)).toBe(JSON.stringify([
       [{ text: "Снова · 1 минута", callback_data: "g:7:3:1", style: "danger" }, { text: "Трудно · 3 дня", callback_data: "g:7:3:2" }],
       [{ text: "Хорошо · 7 дней", callback_data: "g:7:3:3", style: "success" }, { text: "Легко · 14 дней", callback_data: "g:7:3:4", style: "primary" }],
     ]));
-    // The practice card marks the buttons the learner has tried.
-    const marked = gradeRows(iv, data, "ru", (r) => r === 1 || r === 3).flat();
-    expect(marked.map((b) => b.text)).toEqual(["Снова ✅ 1 минута", "Трудно · 3 дня", "Хорошо ✅ 7 дней", "Легко · 14 дней"]);
-    expect(marked.map((b) => b.text.length)).toEqual(real.flat().map((b) => b.text.length));
-    expect(marked.map((b) => [b.callback_data, b.style])).toEqual(real.flat().map((b) => [b.callback_data, b.style]));
-    expect(gradeRows({ 1: "1 минут", 2: "5 минут", 3: "10 минут", 4: "1 көн" }, data, "tt", () => true).flat().map((b) => b.text)).toEqual(["Яңадан ✅ 1 минут", "Авыр ✅ 5 минут", "Яхшы ✅ 10 минут", "Җиңел ✅ 1 көн"]);
+    expect(gradeRows({ 1: "1 минут", 2: "5 минут", 3: "10 минут", 4: "1 көн" }, data, "tt").flat().map((b) => b.text)).toEqual(["Яңадан · 1 минут", "Авыр · 5 минут", "Яхшы · 10 минут", "Җиңел · 1 көн"]);
+    // `gradeRows` takes three arguments: no button is ever marked as tried.
+    expect(gradeRows.length).toBe(3);
   });
 
   it("voice button only when audio exists; undo only when allowed", () => {
