@@ -116,6 +116,10 @@ describe("checkGloss (spec B2)", () => {
     expect(check(withLine(4, `һәм\t1\tАша\tашау\t${"ё".repeat(41)}`))).toEqual(["a1:3 разбор, строка 4: gloss длиннее 40"]);
   });
 
+  it("names a gloss with «→», which the card puts between the form and the lemma", () => {
+    expect(check(withLine(4, "һәм\t1\tАша\tашау\tешь → кушай"))).toEqual(["a1:3 разбор, строка 4: «→» в gloss"]);
+  });
+
   it("names spaces at the edges of the lemma or the gloss", () => {
     expect(check(withLine(4, "һәм\t1\tАша\tашау\tешь "))).toEqual(["a1:3 разбор, строка 4: пробелы по краям"]);
     expect(check(withLine(4, "һәм\t1\tАша\t ашау\tешь"))).toEqual(["a1:3 разбор, строка 4: пробелы по краям", "a1:3 разбор, строка 4: « ашау» не татарскими буквами"]);

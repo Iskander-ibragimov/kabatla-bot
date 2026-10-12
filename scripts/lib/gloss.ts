@@ -47,12 +47,14 @@ const slugOf = (level: number): string => LEVELS.find((l) => l.no === level)?.sl
 /** Tabs of a header as `\t`, so a violation shows them. */
 const showTabs = (text: string): string => text.replaceAll("\t", "\\t");
 
-/** What is wrong with one line of a card: empty, too long, spaces at the edges, letters that are not Tatar. */
+/** What is wrong with one line of a card: empty, too long, an arrow in the gloss, spaces at the edges, letters that are not Tatar. */
 function lineErrors(at: string, l: GlossLine): string[] {
   const errors: string[] = [];
   if (l.lemma.trim() === "") errors.push(`${at}: пустая lemma`);
   if (l.gloss.trim() === "") errors.push(`${at}: пустой gloss`);
   if ([...l.gloss].length > GLOSS_MAX) errors.push(`${at}: gloss длиннее ${GLOSS_MAX}`);
+  // The card shows a line as «form → lemma — gloss»: an arrow in the gloss would read as a second lemma.
+  if (l.gloss.includes("→")) errors.push(`${at}: «→» в gloss`);
   if (l.lemma !== l.lemma.trim() || l.gloss !== l.gloss.trim()) errors.push(`${at}: пробелы по краям`);
   for (const word of [l.form, l.lemma]) if (word.trim() !== "" && !TATAR_WORD.test(word)) errors.push(`${at}: «${word}» не татарскими буквами`);
   return errors;
