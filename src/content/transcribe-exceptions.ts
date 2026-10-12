@@ -211,4 +211,14 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "сәнәгый": "сәнәгъи́",
   "газиз": "гъәзи́з",
   "гарәпчә": "гъәрә́пчә",
+  // B2 portion 4, second pass: Russian roots keep в and plain к (мордвача, штукатурчы); [и] after къ in шәркыятьче.
+  "мордвача": "мордва́ча",
+  "штукатурчы": "штукатурчы́",
+  "шәркыятьче": "шәркъийәтче́",
+  // C1 portion 1, second pass: front vowels of гаилә, гади in derivatives and in васыять; ү kept in суүсем; Russian root keeps plain к in хоккейчы.
+  "гаиләле": "гъәиләле́",
+  "гадиләштерү": "гъәдиләштерү́",
+  "васыять": "wасыйә́т",
+  "суүсем": "суwүсе́м",
+  "хоккейчы": "хоккейчы́",
 };
