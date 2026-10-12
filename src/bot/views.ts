@@ -211,6 +211,7 @@ export function renderDone(s: DaySummary, lang: Lang, empty: EmptyReason | null,
   lines.push(t.doneTitle, t.doneToday(s.reviewsToday, s.learnedToday));
   // The interval in the same words as on a grade button, in the form after «через»; never less than a minute, which the sentence has no form for.
   if (s.nextLearningInMs != null) lines.push("", t.doneNextLearning(formatInterval(Math.max(s.nextLearningInMs, MINUTE), lang, "after")));
+  if (s.postponedToday > 0) lines.push("", t.donePostponed(s.postponedToday));
   if (s.streak > 0) lines.push(t.streak(s.streak));
   const keyboard: Keyboard = [[btn(t.addWords, "help:add"), btn(t.decksBtn, "levels")]];
   if (empty) {

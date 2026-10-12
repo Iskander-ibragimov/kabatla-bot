@@ -25,7 +25,8 @@ export function recentOf(log: RecentAnswer[]): Recent {
  * Anki-style order: due learning cards, then reviews with new cards spread evenly
  * (one new after every ceil(reviews/newLeft) reviews), then learn-ahead within 60 s.
  * Two rules keep hard words from going round in a circle (spec part A):
- * - A1: after NEW_AFTER_LEARNING learning cards in a row, a new word (within the day's limit) comes before a due learning card;
+ * - A1: after NEW_AFTER_LEARNING learning cards in a row, a new word (within the day's limit) comes before a due learning
+ *   card; not the new card of a note that has a card on a learning step (in direction «both», the reverse of a hard word);
  * - A2: no card of the note answered last (in direction «both», neither of its two cards) while any other card can be
  *   shown, due, new or learn-ahead. Only when nothing else can be shown does the same card come again (decision L6).
  */
@@ -41,7 +42,11 @@ export function pick(c: Candidates, newLeft: number, now: number, mix: number, r
 function pickFrom(c: Candidates, newLeft: number, now: number, mix: number, learningRun: number): Pick | null {
   const fresh = newLeft > 0 ? c.newNotes[0] : undefined;
   const due = c.learning.find((x) => x.mem.due <= now);
-  if (due) return fresh && learningRun >= NEW_AFTER_LEARNING ? { kind: "new", note: fresh } : { kind: "card", card: due };
+  if (due) {
+    // A1 dilutes the learning cards with a word that is new; the reverse card of a word on a learning step is the same word.
+    const word = learningRun >= NEW_AFTER_LEARNING && newLeft > 0 ? c.newNotes.find((n) => !c.learning.some((x) => x.noteId === n.noteId)) : undefined;
+    return word ? { kind: "new", note: word } : { kind: "card", card: due };
+  }
   const review = c.review[0];
   if (review && fresh) {
     const every = Math.max(1, Math.ceil(c.review.length / newLeft));

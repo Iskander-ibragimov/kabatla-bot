@@ -36,6 +36,7 @@ export const ru = {
   doneToday: (reviews: number, learned: number) => `Сегодня: ${reviews} повт. · +${learned} выучено`,
   /** `after`: when the nearest of them is due, in the form after «через»: «1 минуту», «5 минут», «1 день». */
   doneNextLearning: (after: string) => `Карточки на закреплении вернутся через ${after}. Я напомню.`,
+  donePostponed: (n: number) => `Трудные слова отложены на завтра: ${n} — после сна они запоминаются лучше.`,
   streak: (d: number) => `🔥 Серия: ${d} дн.`,
   /** Last line of the done screen when no new word came although the day allows more, and the button under it that mends it. */
   emptyNoTopic: "Новых слов по вашим настройкам нет: тема не выбрана.",

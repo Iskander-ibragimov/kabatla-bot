@@ -22,6 +22,7 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   reviewNo: [[4]],
   doneToday: [[24, 3]],
   doneNextLearning: [["8 минут"]],
+  donePostponed: [[1], [4]],
   streak: [[5]],
   fixLevelBtn: [["A2"], ["C1"]],
   addAll: [[3]],

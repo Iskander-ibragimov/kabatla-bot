@@ -99,12 +99,19 @@ describe("a session on the ladder", () => {
       expect(await rowOf(id)).toMatchObject({ state: "relearning", step: 0, scheduled_days: 0, due: T + MIN, lapses: 1, reps: 6, stability: null, difficulty: null });
       // Until the minute is over a new word comes, not the word that fell.
       expect(next.view.cardId).not.toBe(id);
-      const back = asCard(await new ReviewService(repo, T + MIN).nextScreen((await repo.getUser(user.id))!));
+      // Once it is due, the word answered last does not come straight back while another card can be shown (spec A2):
+      // the new word on screen is answered first, then the word that fell comes back.
+      const other = asCard(await new ReviewService(repo, T + MIN).nextScreen((await repo.getUser(user.id))!));
+      expect(other.view.cardId).toBe(next.view.cardId);
+      const back = asCard(await gradeShown(repo, user, other, 3, T + MIN));
       expect(back.view.cardId).toBe(id);
       expect(back.intervals).toEqual({ 1: "1 минута", 2: "5 минут", 3: "10 минут", 4: "1 день" });
-      await gradeShown(repo, user, back, 3, T + MIN);
+      const after = asCard(await gradeShown(repo, user, back, 3, T + MIN));
       expect(await rowOf(id)).toMatchObject({ state: "relearning", step: 1, scheduled_days: 0, due: T + 11 * MIN, lapses: 1 });
-      const again = asCard(await new ReviewService(repo, T + 11 * MIN).nextScreen((await repo.getUser(user.id))!));
+      expect(after.view.cardId).not.toBe(id);
+      // Ten minutes later the other words, due as well, may come first; the word comes back among them.
+      let again = asCard(await gradeShown(repo, user, after, 3, T + 11 * MIN));
+      for (let i = 0; i < 2 && again.view.cardId !== id; i++) again = asCard(await gradeShown(repo, user, again, 3, T + 11 * MIN));
       expect(again.view.cardId).toBe(id);
       await gradeShown(repo, user, again, 3, T + 11 * MIN);
       expect(await rowOf(id)).toMatchObject({ state: "review", step: null, scheduled_days: 1, due: T + 11 * MIN + DAY, lapses: 1, reps: 8 });

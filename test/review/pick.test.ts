@@ -48,6 +48,13 @@ describe("pick and the last answers (spec A1, A2)", () => {
     expect(pick(c, 0, T, 0, { noteId: 9, learningRun: 2 })?.kind).toBe("card"); // the day's limit holds
   });
 
+  it("A1 gives a new word, not the new reverse card of a word on a learning step", () => {
+    const reverse = { ...fresh(1), noteId: 2, direction: "ru_tt" as const };
+    const c = cands([card(1, "learning", T - 1), card(2, "learning", T + 120_000)], [], [reverse, fresh(2)]);
+    expect(pick(c, 5, T, 0, { noteId: 9, learningRun: 2 })).toEqual({ kind: "new", note: expect.objectContaining({ noteId: 102 }) });
+    expect(pick(cands(c.learning, [], [reverse]), 5, T, 0, { noteId: 9, learningRun: 2 })).toEqual({ kind: "card", card: expect.objectContaining({ id: 1 }) });
+  });
+
   it("the word just answered is not next while another due card exists (A2)", () => {
     const p = pick(cands([card(1, "learning", T - 2), card(2, "learning", T - 1)], [], []), 0, T, 0, { noteId: 1, learningRun: 1 });
     expect(p).toEqual({ kind: "card", card: expect.objectContaining({ id: 2 }) });

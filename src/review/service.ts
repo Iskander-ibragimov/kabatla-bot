@@ -5,7 +5,7 @@ import { formatInterval } from "../srs/interval";
 import { type Mem, type Rating, grade as ladderGrade, newMem, preview, stage } from "../srs/ladder";
 import { type Lead, afterGrade, onCard, onDone } from "../tutorial/hints";
 import { type Window, dayWindow, localDay } from "../users/service";
-import { pick } from "./pick";
+import { pick, recentOf } from "./pick";
 
 /** View-model types shared with the bot layer (kept here so services never import the bot). */
 export interface CardView {
@@ -16,7 +16,8 @@ export interface CardView {
 export interface Feedback { word: string; kind: "grow" | "step" | "lapse" | "first"; beforeDays: number; afterMs: number }
 /** `n`: the new cards still to come today; while a level has a word to give it is what is left of the day's limit. */
 export interface Counts { n: number; l: number; r: number }
-export interface DaySummary { reviewsToday: number; learnedToday: number; nextLearningInMs: number | null; streak: number }
+/** `postponedToday`: the words «Снова» or «Трудно» sent to tomorrow today (spec A3), both cards of a word counted once. */
+export interface DaySummary { reviewsToday: number; learnedToday: number; postponedToday: number; nextLearningInMs: number | null; streak: number }
 export type { EmptyReason, Lead };
 export type Screen =
   /** `lead`: the hint that stands before the card in the same message, see tutorial/hints.ts; null when there is none. */
@@ -38,8 +39,8 @@ export const EASY_NEW_CAP = 200;
 export const newLeftOf = (user: Pick<User, "newPerDay">, c: { newDoneToday: number; easyNewToday: number }): number =>
   c.easyNewToday >= EASY_NEW_CAP ? 0 : Math.max(0, user.newPerDay - c.newDoneToday);
 
-/** D1 rows written per grade, index updates included (card, log, user, usage, the counter of started words). */
-const ROWS_PER_REVIEW = 9;
+/** D1 rows written per grade, index updates included (card, log and its two indexes, user, usage, the counter of started words). */
+const ROWS_PER_REVIEW = 10;
 
 export const directionsOf = (u: Pick<User, "direction">): Direction[] =>
   u.direction === "both" ? ["tt_ru", "ru_tt"] : [u.direction];
@@ -130,23 +131,27 @@ export class ReviewService {
     return { n: Math.min(newLeftOf(user, q.counts), candidates), l: q.counts.learning, r: q.counts.review };
   }
 
-  /** What the four grade buttons of a card say: the interval each grade gives, in words. */
-  private intervalsOf(mem: Mem, user: Pick<User, "lang">): Record<Rating, string> {
-    const due = preview(mem, this.now);
+  /**
+   * What the four grade buttons of a card say: the interval each grade gives, in words. `answersToday`: the card's
+   * answers today that were not undone, the same count the grade passes to the ladder (spec A3).
+   */
+  private intervalsOf(mem: Mem, user: Pick<User, "lang">, answersToday: number): Record<Rating, string> {
+    const due = preview(mem, this.now, answersToday);
     const words = (rating: Rating) => formatInterval(due[rating] - this.now, user.lang);
     return { 1: words(1), 2: words(2), 3: words(3), 4: words(4) };
   }
 
   /**
    * The next screen of the session. It carries the hint that is due by what the user has seen (`user.hintsSeen`);
-   * after a grade that is none, the grade having marked both of them.
+   * after a grade that is none, the grade having marked both of them. The card is picked with the last answers of
+   * today (`recentOf`), so a hard word does not come straight back and new words are mixed in (spec A1, A2).
    */
   async nextScreen(user: User, feedback: Feedback | null = null): Promise<Screen> {
     const w = dayWindow(user.tzOffsetMin, this.now);
     const read = await this.sessionQueue(user, w);
     const { q, fresh } = read;
     const newLeft = newLeftOf(user, q.counts);
-    const p = pick({ learning: q.learning, review: q.review, newNotes: fresh }, newLeft, this.now, user.mixCounter);
+    const p = pick({ learning: q.learning, review: q.review, newNotes: fresh }, newLeft, this.now, user.mixCounter, recentOf(q.recent));
     if (!p) {
       if (!q.hasCards && !feedback && !fresh.length) return { kind: "nothing" };
       // Why there is no new word is said only when one could still be given today; then the counters are read with the day's log.
@@ -162,7 +167,7 @@ export class ReviewService {
       const nextDue = q.learning.length ? Math.min(...q.learning.map((x) => x.mem.due)) : null;
       return {
         kind: "done", feedback, empty, lead: onDone(user.hintsSeen),
-        summary: { reviewsToday: end.reviewsToday, learnedToday: end.learnedToday, streak: user.streak,
+        summary: { reviewsToday: end.reviewsToday, learnedToday: end.learnedToday, postponedToday: end.postponedToday, streak: user.streak,
           nextLearningInMs: nextDue == null ? null : Math.max(0, nextDue - this.now) },
       };
     }
@@ -172,17 +177,19 @@ export class ReviewService {
       const id = await this.repo.ensureNewCard(user.id, p.note.noteId, p.note.direction, mem);
       row = { ...p.note, id, mem, buriedDay: null };
     } else row = p.card;
+    // Only a learning card can have answers today: a review is answered once a day, and a new card not yet.
+    const answersToday = q.learning.find((x) => x.id === row.id)?.answersToday ?? 0;
     return {
-      kind: "card", view: toView(row), counts: this.countsOf(user, read), intervals: this.intervalsOf(row.mem, user), feedback, canUndo: feedback != null,
+      kind: "card", view: toView(row), counts: this.countsOf(user, read), intervals: this.intervalsOf(row.mem, user, answersToday), feedback, canUndo: feedback != null,
       lead: onCard(user.hintsSeen),
     };
   }
 
   async grade(user: User, cardId: number, reps: number, rating: Rating): Promise<Screen> {
-    const card = await this.repo.getCard(user.id, cardId);
+    const card = await this.repo.cardForGrade(user.id, cardId, dayWindow(user.tzOffsetMin, this.now).dayStartMs);
     if (!card || card.mem.reps !== reps) return { kind: "stale" };
     const before = card.mem;
-    const after = ladderGrade(before, rating, this.now);
+    const after = ladderGrade(before, rating, this.now, card.answersToday);
     const today = localDay(user.tzOffsetMin, this.now);
     const yesterday = localDay(user.tzOffsetMin, this.now - 86_400_000);
     const streak = user.lastStudyDay === today ? user.streak : user.lastStudyDay === yesterday ? user.streak + 1 : 1;
@@ -225,10 +232,12 @@ export class ReviewService {
       this.repo.unprogressStmt(user.id, log.cardId),
       this.repo.updateUserStmt(user.id, { streak: log.streakBefore, lastStudyDay: log.lastStudyDayBefore }),
     ]);
-    const card = await this.repo.getCard(user.id, log.cardId);
+    const w = dayWindow(user.tzOffsetMin, this.now);
+    // Read after the undo: the undone answer is no longer one of today's (spec A3).
+    const card = await this.repo.cardForGrade(user.id, log.cardId, w.dayStartMs);
     if (!card) return { kind: "noundo" };
     // The queue is read for the counters alone: nothing of it is stored.
-    const read = await this.readQueue(user, dayWindow(user.tzOffsetMin, this.now));
-    return { kind: "card", view: toView(card), intervals: this.intervalsOf(card.mem, user), feedback: null, canUndo: false, counts: this.countsOf(user, read), lead: null };
+    const read = await this.readQueue(user, w);
+    return { kind: "card", view: toView(card), intervals: this.intervalsOf(card.mem, user, card.answersToday), feedback: null, canUndo: false, counts: this.countsOf(user, read), lead: null };
   }
 }

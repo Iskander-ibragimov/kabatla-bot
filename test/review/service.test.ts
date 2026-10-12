@@ -5,7 +5,8 @@ import { Repo, type User } from "../../src/db/repo";
 import { LEVELS, levelBit } from "../../src/levels/scale";
 import { ReviewService } from "../../src/review/service";
 import { formatInterval } from "../../src/srs/interval";
-import { newMem } from "../../src/srs/ladder";
+import { type Mem, newMem } from "../../src/srs/ladder";
+import { bulkCards } from "../helpers/catalog";
 import { HINT } from "../../src/tutorial/hints";
 import { countingDb } from "../helpers/countingDb";
 import { asCard, gradeShown } from "../helpers/review";
@@ -94,7 +95,7 @@ describe("review service", () => {
     // «Хорошо» on the 14-day rung is 30 days: the word is learned (21 days and more) from this grade on.
     const s = await new ReviewService(repo, T).grade((await repo.getUser(user.id))!, id, 4, 3);
     if (s.kind !== "done") throw new Error(s.kind);
-    expect(s.summary).toEqual({ reviewsToday: 1, learnedToday: 1, nextLearningInMs: null, streak: 1 });
+    expect(s.summary).toEqual({ reviewsToday: 1, learnedToday: 1, postponedToday: 0, nextLearningInMs: null, streak: 1 });
     // No new words are allowed today (the limit is 0), so nothing is said about why none came.
     expect(s.empty).toBeNull();
   });
@@ -312,6 +313,82 @@ describe("review service", () => {
       await insertEasyNewLogs(env.DB, user.id, 200, T);
       const s = await new ReviewService(repo, T).nextScreen(user);
       expect(s.kind).not.toBe("card");
+    });
+  });
+
+  describe("hard words (spec A)", () => {
+    const AGAIN_STEP = MIN + 1000;
+    /** One word answered «Снова» three times, each time once it is due; the screen after the third answer and its time. */
+    async function threeTimes() {
+      const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+      let s = asCard(await new ReviewService(repo, T).nextScreen(user));
+      let at = T;
+      for (let i = 0; i < 3; i++) {
+        s = asCard(await gradeShown(repo, user, s, 1, at));
+        at += AGAIN_STEP;
+      }
+      return { repo, user, s, at };
+    }
+
+    it("the fourth answer of a word today: «Снова» and «Трудно» say and give 1 day", async () => {
+      const { repo, user, s, at } = await threeTimes();
+      expect(s.intervals).toEqual({ 1: "1 день", 2: "1 день", 3: "10 минут", 4: "1 день" });
+      const done = await gradeShown(repo, user, s, 2, at);
+      if (done.kind !== "done") throw new Error(`expected done, got ${done.kind}`);
+      expect(done.summary.postponedToday).toBe(1);
+      expect(done.summary.nextLearningInMs).toBeNull();
+      const card = (await repo.getCard(user.id, s.view.cardId))!;
+      expect(card.mem).toMatchObject({ due: at + DAY, state: "learning", step: 0 });
+    });
+
+    it("«Хорошо» on the fourth answer goes on as before", async () => {
+      const { repo, user, s, at } = await threeTimes();
+      await gradeShown(repo, user, s, 3, at);
+      const card = (await repo.getCard(user.id, s.view.cardId))!;
+      expect(card.mem).toMatchObject({ due: at + 10 * MIN, state: "learning", step: 1 });
+    });
+
+    it("an undone answer does not count", async () => {
+      const { repo, user, at } = await threeTimes();
+      const back = asCard(await new ReviewService(repo, at).undo((await repo.getUser(user.id))!));
+      expect(back.intervals).toEqual({ 1: "1 минута", 2: "5 минут", 3: "10 минут", 4: "1 день" });
+      // Graded again after the undo, «Трудно» is a fourth answer only by the log rows that count: 5 minutes.
+      await gradeShown(repo, user, back, 2, at);
+      expect((await repo.getCard(user.id, back.view.cardId))!.mem.due).toBe(at + 5 * MIN);
+    });
+
+    it("ten hard words: a new word comes after every two learning cards, and no word twice in a row", async () => {
+      const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 10, patch: { newPerDay: 5 } });
+      await seedCatalog(env.DB, ["бер", "ике", "өч", "дүрт", "биш", "алты"].map((word) => ({ level: 1, word })));
+      const hard = (i: number): Mem => ({ ...newMem(T), state: "learning", step: 0, reps: 1, due: T - (20 - i) * MIN, lastReview: T - (25 - i) * MIN });
+      await bulkCards(env.DB, user.id, noteIds.map((id, i) => [id, "tt_ru", hard(i), null]));
+      let s = asCard(await new ReviewService(repo, T).nextScreen((await repo.getUser(user.id))!));
+      const seen: { noteId: number; kind: string }[] = [];
+      for (let i = 0; i < 12; i++) {
+        seen.push({ noteId: s.view.noteId, kind: s.view.reps === 0 ? "new" : "learning" });
+        s = asCard(await gradeShown(repo, user, s, 2, T + (i + 1) * 1000));
+      }
+      for (let i = 1; i < seen.length; i++) expect(seen[i]!.noteId).not.toBe(seen[i - 1]!.noteId);
+      expect(seen.map((x) => x.kind)).toEqual(Array.from({ length: 12 }, (_, i) => (i % 3 === 2 ? "new" : "learning")));
+    });
+
+    it("the next day the postponed word is an ordinary learning card", async () => {
+      const { repo, user, s, at } = await threeTimes();
+      await gradeShown(repo, user, s, 2, at);
+      const next = asCard(await new ReviewService(repo, at + DAY).nextScreen((await repo.getUser(user.id))!));
+      expect(next.view.cardId).toBe(s.view.cardId);
+      expect(next.counts.l).toBe(1);
+      expect(next.intervals).toEqual({ 1: "1 минута", 2: "5 минут", 3: "10 минут", 4: "1 день" });
+    });
+
+    it("direction «both»: the word just answered does not come back by its other card while another can be shown", async () => {
+      const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 2, patch: { direction: "both", newPerDay: 0 } });
+      const due = (d: number): Mem => ({ ...newMem(T), state: "learning", step: 0, reps: 1, due: T - d * MIN, lastReview: T - 10 * MIN });
+      await bulkCards(env.DB, user.id, [[noteIds[0]!, "tt_ru", due(3), null], [noteIds[0]!, "ru_tt", due(2), null], [noteIds[1]!, "tt_ru", due(1), null]]);
+      const first = asCard(await new ReviewService(repo, T).nextScreen((await repo.getUser(user.id))!));
+      expect(first.view.noteId).toBe(noteIds[0]);
+      const second = asCard(await gradeShown(repo, user, first, 2, T));
+      expect(second.view.noteId).toBe(noteIds[1]);
     });
   });
 });

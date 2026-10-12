@@ -120,7 +120,7 @@ describe("views", () => {
   });
 
   it("done screen shows the day, the next learning card and the streak; the totals for all time are not on it", () => {
-    const { text, keyboard } = renderDone({ reviewsToday: 24, learnedToday: 3, nextLearningInMs: 480_000, streak: 5 }, "ru", null);
+    const { text, keyboard } = renderDone({ reviewsToday: 24, learnedToday: 3, postponedToday: 0, nextLearningInMs: 480_000, streak: 5 }, "ru", null);
     expect(text.startsWith("✅")).toBe(true);
     expect(text).toContain("Сегодня: 24 повт. · +3 выучено");
     expect(text).not.toContain("Всего:");
@@ -130,8 +130,17 @@ describe("views", () => {
     expect(keyboard.flat().map((b) => [b.text, b.callback_data])).toEqual([["➕ Добавить слова", "help:add"], ["📚 Уровни", "levels"]]);
   });
 
+  it("done screen says how many hard words went to tomorrow, and nothing when none did", () => {
+    const s = { reviewsToday: 24, learnedToday: 3, nextLearningInMs: null, streak: 5 };
+    const two = renderDone({ ...s, postponedToday: 2 }, "ru", null).text;
+    expect(two).toContain(`\n\n${ru.donePostponed(2)}`);
+    expect(two).toContain("Трудные слова отложены на завтра: 2 — после сна они запоминаются лучше.");
+    expect(renderDone({ ...s, postponedToday: 2 }, "tt", null).text).toContain(tt.donePostponed(2));
+    expect(renderDone({ ...s, postponedToday: 0 }, "ru", null).text).not.toContain("отложены");
+  });
+
   describe("done screen when no new word came although the day allows more", () => {
-    const summary = { reviewsToday: 24, learnedToday: 3, nextLearningInMs: 480_000, streak: 5 };
+    const summary = { reviewsToday: 24, learnedToday: 3, postponedToday: 0, nextLearningInMs: 480_000, streak: 5 };
     const plain = renderDone(summary, "ru", null);
     const done = (empty: Parameters<typeof renderDone>[2], lang: "ru" | "tt" = "ru") => {
       const r = renderDone(summary, lang, empty);
@@ -531,7 +540,7 @@ describe("views", () => {
     expect(card.keyboard.slice(0, 2).flat().map((b) => b.text)).toEqual(["Яңадан · 1 минут", "Авыр · 3 көн", "Яхшы · 7 көн", "Җиңел · 14 көн"]);
     expect(card.keyboard[2]!.map((b) => b.text)).toEqual(["🔊", "↩️ Кире алу", "⚑"]);
     expect(card.text).toContain("🌿 Өйрәнәм · баскыч 4/10 · кабатлау №4");
-    const done = renderDone({ reviewsToday: 24, learnedToday: 3, nextLearningInMs: 480_000, streak: 5 }, "tt", null);
+    const done = renderDone({ reviewsToday: 24, learnedToday: 3, postponedToday: 0, nextLearningInMs: 480_000, streak: 5 }, "tt", null);
     expect(done.text).toContain("Бүген: 24 кабатлау · +3 өйрәнелде");
     expect(done.text).not.toContain("Барлыгы:");
     expect(done.text).toContain("8 минут");
@@ -541,7 +550,7 @@ describe("views", () => {
 
   it("the done screen says when the next card comes in the words of the grade buttons, in the form the sentence asks for", () => {
     const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
-    const next = (ms: number, lang: "ru" | "tt") => renderDone({ reviewsToday: 1, learnedToday: 0, nextLearningInMs: ms, streak: 0 }, lang, null).text.split("\n")[3];
+    const next = (ms: number, lang: "ru" | "tt") => renderDone({ reviewsToday: 1, learnedToday: 0, postponedToday: 0, nextLearningInMs: ms, streak: 0 }, lang, null).text.split("\n")[3];
     // Russian: after «через» the minute is «минуту» for 1, 21, 31…; every other word is as on the button.
     expect([MIN + 1000, 2 * MIN, 5 * MIN, 10 * MIN, 21 * MIN, 3 * HOUR, DAY, 11 * DAY, 36 * DAY].map((ms) => next(ms, "ru"))).toEqual(
       ["1 минуту", "2 минуты", "5 минут", "10 минут", "21 минуту", "3 часа", "1 день", "11 дней", "1,2 месяца"].map((after) => `Карточки на закреплении вернутся через ${after}. Я напомню.`));
