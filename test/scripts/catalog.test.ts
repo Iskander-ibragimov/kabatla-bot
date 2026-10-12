@@ -204,6 +204,31 @@ describe("checkCatalog", () => {
     expect(check(levels)).toEqual(["a2:3 предложение tatoeba:1000 уже стоит в a1:2"]);
   });
 
+  describe("a translation stands once in the whole catalog", () => {
+    it("names both places when two levels share a translation", () => {
+      const same = (rows: Row[], at: number) => rows.map((r, i) => (i === at ? { ...r, translation: "прежний, бывший" } : r));
+      const levels = [level(1, same(a1(), 2)), level(2, same(next(), 1))];
+      expect(check(levels)).toEqual(["a2:3 перевод «прежний, бывший» уже стоит в a1:4"]);
+    });
+
+    it("refuses the same translation within one level", () => {
+      expect(check(withRow(3, { translation: "слово 0" }))).toEqual(["a1:5 перевод «слово 0» уже стоит в a1:2"]);
+    });
+
+    it("counts translations that differ only by surrounding spaces as the same", () => {
+      expect(check(withRow(3, { translation: "  слово 0 " }))).toEqual(["a1:5 перевод «слово 0» уже стоит в a1:2"]);
+    });
+
+    it("accepts different translations", () => {
+      expect(check(withRow(3, { translation: "слово 0 (другое)" }))).toEqual([]);
+    });
+
+    it("does not compare empty translations: those are reported once as empty", () => {
+      const rows = a1().map((r, i) => (i === 0 || i === 3 ? { ...r, translation: "  " } : r));
+      expect(check([level(1, rows), level(2, next())])).toEqual(["a1:2 пустой перевод", "a1:5 пустой перевод"]);
+    });
+  });
+
   it("allows a word once in the whole catalog, whatever its case and outer punctuation", () => {
     const again = row(700, { word: `${word(0).toUpperCase()}!`, example_tt: `Бу — ${word(0)}.` });
     expect(check([level(1, a1()), level(3, [row(650), again])])).toEqual([`b1:3 дубль слова «${again.word}»: уже есть в a1:2`]);
