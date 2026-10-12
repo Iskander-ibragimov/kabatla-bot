@@ -57,6 +57,7 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   pushStep: [[4]],
   posName: POS_CODES.map((c): [string] => [c]),
   outOf: [[137, 400], [0, 3]],
+  levelStarted: [[137, 400], [0, 3]],
   levelWillBe: [[500]],
   levelCoverage: [[45]],
   modeName: MODES.map((m): [string] => [m]),
@@ -166,6 +167,7 @@ describe("i18n dictionaries", () => {
   it("the parts of a level line of /levels", () => {
     expect([ru.outOf(137, 400), ru.levelWillBe(500), ru.levelCoverage(45), ru.levelSoon]).toEqual(["137 из 400", "(будет 500)", "≈45 % текста", "скоро"]);
     expect([tt.outOf(137, 400), tt.levelWillBe(500), tt.levelCoverage(45), tt.levelSoon]).toEqual(["137/400", "(500 булачак)", "текстның ≈45 %", "тиздән"]);
+    expect([ru.levelStarted(0, 850), tt.levelStarted(0, 850)]).toEqual(["начато 0 из 850", "башланган 0/850"]);
   });
 
   it("names the three orders of new words and says what each does", () => {

@@ -158,9 +158,11 @@ export const ru = {
   levelsTitle: "📚 <b>Уровни</b>",
   /** «137 из 400»: the words started of those a level or a topic has. */
   outOf: (n: number, total: number) => `${n} из ${total}`,
+  /** On a level line of /levels: «начато 0 из 850» — the words started of those the level has. */
+  levelStarted: (n: number, total: number) => `начато ${n} из ${total}`,
   /** After the words of a level that is still being filled: the cards it will hold. */
   levelWillBe: (size: number) => `(будет ${size})`,
-  /** The share of an ordinary text that the words up to and including the level cover. */
+  /** The share of an ordinary text that the words up to and including the level cover (shown when levels are chosen at the start). */
   levelCoverage: (pct: number) => `≈${pct} % текста`,
   /** In place of the numbers of a level that has no card yet. */
   levelSoon: "скоро",

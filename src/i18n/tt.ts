@@ -132,6 +132,7 @@ export const tt: Dict = {
   reportAlready: "Сез бу карточка турында инде хәбәр иттегез",
   levelsTitle: "📚 <b>Дәрәҗәләр</b>",
   outOf: (n, total) => `${n}/${total}`,
+  levelStarted: (n, total) => `башланган ${n}/${total}`,
   levelWillBe: (size) => `(${size} булачак)`,
   levelCoverage: (pct) => `текстның ≈${pct} %`,
   levelSoon: "тиздән",

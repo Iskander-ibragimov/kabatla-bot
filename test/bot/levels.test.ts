@@ -77,9 +77,9 @@ async function learnerWithTopics(db: D1Database) {
 
 const HUB_RU = [
   "📚 <b>Уровни</b>",
-  "☑ A1 · 36 из 40 (будет 500) · ≈45 % текста",
-  "☑ A2 · 0 из 3 (будет 850)",
-  "☐ B1 · 0 из 2 (будет 850)",
+  "☑ A1 · начато 36 из 40 (будет 500)",
+  "☑ A2 · начато 0 из 3 (будет 850)",
+  "☐ B1 · начато 0 из 2 (будет 850)",
   "☐ B2 · скоро",
   "☐ C1 · скоро",
   "",
@@ -117,9 +117,9 @@ describe("/levels: the hub", () => {
     await b.text("/levels");
     expect(b.h.lastText()).toBe([
       "📚 <b>Дәрәҗәләр</b>",
-      "☑ A1 · 36/40 (500 булачак) · текстның ≈45 %",
-      "☑ A2 · 0/3 (850 булачак)",
-      "☐ B1 · 0/2 (850 булачак)",
+      "☑ A1 · башланган 36/40 (500 булачак)",
+      "☑ A2 · башланган 0/3 (850 булачак)",
+      "☐ B1 · башланган 0/2 (850 булачак)",
       "☐ B2 · тиздән",
       "☐ C1 · тиздән",
       "",
@@ -140,7 +140,7 @@ describe("/levels: the hub", () => {
     expect(buttons(b.h.lastMarkup())).toEqual([[ru.addWords, "help:add"], ["📚 Уровни", "levels"]]);
     const u = await b.press("levels", b.h.tg.lastMessageId());
     expect(u.methods).toEqual(["answerCallbackQuery", "sendMessage"]);
-    expect(b.h.lastText()).toBe(["📚 <b>Уровни</b>", "☑ A1 · 1 из 1 (будет 500)", "☐ A2 · скоро", "☐ B1 · скоро", "☐ B2 · скоро", "☐ C1 · скоро", "", "🧭 Бот ведёт по темам"].join("\n"));
+    expect(b.h.lastText()).toBe(["📚 <b>Уровни</b>", "☑ A1 · начато 1 из 1 (будет 500)", "☐ A2 · скоро", "☐ B1 · скоро", "☐ B2 · скоро", "☐ C1 · скоро", "", "🧭 Бот ведёт по темам"].join("\n"));
     expect(buttons(b.h.lastMarkup())).toEqual(HUB_BUTTONS);
   });
 
@@ -193,24 +193,24 @@ describe("«Уровни»: the checkboxes of the levels", () => {
     edited(open);
     expect(open.d1).toBe(2);
     expect(b.h.lastText()).toBe(LEVELS_TEXT);
-    expect(buttons(b.h.lastMarkup())).toEqual([["☑ A1 · 36 из 40", "lv:t:1"], ["☑ A2 · 0 из 3", "lv:t:2"], ["☐ B1 · 0 из 2", "lv:t:3"], ["☐ B2 · скоро", "lv:t:4"], ["☐ C1 · скоро", "lv:t:5"], ["Готово", "hub"]]);
+    expect(buttons(b.h.lastMarkup())).toEqual([["☑ A1 · начато 36 из 40", "lv:t:1"], ["☑ A2 · начато 0 из 3", "lv:t:2"], ["☐ B1 · начато 0 из 2", "lv:t:3"], ["☐ B2 · скоро", "lv:t:4"], ["☐ C1 · скоро", "lv:t:5"], ["Готово", "hub"]]);
 
     const check = await b.press("lv:t:3");
     edited(check);
     expect(check.d1).toBe(4);
     expect(check.toast).toBeUndefined();
     expect((await repo.getUser(user.id))!.levels).toBe(0b111);
-    expect(buttons(b.h.lastMarkup())[2]).toEqual(["☑ B1 · 0 из 2", "lv:t:3"]);
+    expect(buttons(b.h.lastMarkup())[2]).toEqual(["☑ B1 · начато 0 из 2", "lv:t:3"]);
 
     edited(await b.press("lv:t:2"));
     expect((await repo.getUser(user.id))!.levels).toBe(0b101);
-    expect(buttons(b.h.lastMarkup()).slice(0, 3)).toEqual([["☑ A1 · 36 из 40", "lv:t:1"], ["☐ A2 · 0 из 3", "lv:t:2"], ["☑ B1 · 0 из 2", "lv:t:3"]]);
+    expect(buttons(b.h.lastMarkup()).slice(0, 3)).toEqual([["☑ A1 · начато 36 из 40", "lv:t:1"], ["☐ A2 · начато 0 из 3", "lv:t:2"], ["☑ B1 · начато 0 из 2", "lv:t:3"]]);
 
     // «Готово» is the hub again, in the same message, with the levels as they are now.
     const done = await b.press("hub");
     edited(done);
     expect(done.d1).toBe(2);
-    expect(b.h.lastText().split("\n").slice(1, 4)).toEqual(["☑ A1 · 36 из 40 (будет 500) · ≈45 % текста", "☐ A2 · 0 из 3 (будет 850)", "☑ B1 · 0 из 2 (будет 850)"]);
+    expect(b.h.lastText().split("\n").slice(1, 4)).toEqual(["☑ A1 · начато 36 из 40 (будет 500)", "☐ A2 · начато 0 из 3 (будет 850)", "☑ B1 · начато 0 из 2 (будет 850)"]);
     expect(buttons(b.h.lastMarkup())).toEqual(HUB_BUTTONS);
     expect(b.h.tg.of("sendMessage")).toHaveLength(1);
   });
@@ -602,16 +602,16 @@ describe("the renderers of the hub and its screens", () => {
   const hubOf = (over: Partial<Hub>): Hub => ({ levels: [], mode: "guided", posGroups: 255, topic: null, own: [], ...over });
   const topic = (over: Partial<TopicLine> = {}): TopicLine => ({ no: 2, titleRu: "Семья и близкие", titleTt: "Гаилә һәм якыннар", started: 12, total: 40, ...over });
 
-  it("a level line: «(будет N)» only while the level holds fewer cards than its size, the coverage only when the level has one, «скоро» for a level without cards", () => {
+  it("a level line: «начато N из M», «(будет N)» only while the level holds fewer cards than its size, no coverage, «скоро» for a level without cards", () => {
     const lines = (levels: LevelLine[]) => renderHub(hubOf({ levels }), "ru").text.split("\n").slice(1, 1 + levels.length);
     expect(lines([
       level(1, { checked: true, total: 400, started: 137, coveragePct: 45 }), level(2, { checked: true, total: 850, started: 850, coveragePct: 62 }),
       level(3, { total: 850, started: 3 }), level(4, { total: 12, started: 0 }), level(5),
     ])).toEqual([
-      "☑ A1 · 137 из 400 (будет 500) · ≈45 % текста", "☑ A2 · 850 из 850 · ≈62 % текста", "☐ B1 · 3 из 850", "☐ B2 · 0 из 12 (будет 800)", "☐ C1 · скоро",
+      "☑ A1 · начато 137 из 400 (будет 500)", "☑ A2 · начато 850 из 850", "☐ B1 · начато 3 из 850", "☐ B2 · начато 0 из 12 (будет 800)", "☐ C1 · скоро",
     ]);
     // A counter above the cards of its level is shown as the level started whole.
-    expect(lines([level(1, { checked: true, total: 400, started: 403 })])).toEqual(["☑ A1 · 400 из 400 (будет 500)"]);
+    expect(lines([level(1, { checked: true, total: 400, started: 403 })])).toEqual(["☑ A1 · начато 400 из 400 (будет 500)"]);
   });
 
   it("the line of the order: the topic the guided order stands in, the chosen topic or its absence, and nothing in «По частоте»", () => {
@@ -645,7 +645,7 @@ describe("the renderers of the hub and its screens", () => {
   it("the checkboxes of the levels and of the parts of speech, the orders and the topics in Tatar", () => {
     const levels = renderLevelChecks([level(1, { checked: true, total: 400, started: 137, coveragePct: 45 }), level(2)], "tt");
     expect(levels.text).toBe(`${tt.levelsTitle}\n${tt.levelChecksHint}`);
-    expect(levels.keyboard.flat().map((b) => b.text)).toEqual(["☑ A1 · 137/400", "☐ A2 · тиздән", "Әзер"]);
+    expect(levels.keyboard.flat().map((b) => b.text)).toEqual(["☑ A1 · башланган 137/400", "☐ A2 · тиздән", "Әзер"]);
     const pos = renderPosChecks(0b1000_0010, "tt");
     expect(pos.text).toBe(`${tt.posTitle}\n${tt.posChecksHint}`);
     expect(pos.keyboard.flat().map((b) => b.text)).toEqual(["☐ Исемнәр", "☑ Фигыльләр", "☐ Сыйфатлар", "☐ Рәвешләр", "☐ Алмашлыклар", "☐ Саннар", "☐ Ярдәмлек сүзләр", "☑ Гыйбарәләр", "Әзер"]);

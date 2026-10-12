@@ -96,17 +96,16 @@ const inRows = (buttons: Button[], n: number): Keyboard => Array.from({ length: 
 const topicTitle = (topic: TopicLine, lang: Lang) => (lang === "ru" ? topic.titleRu : topic.titleTt);
 
 /**
- * A level with its checkbox: «☑ A1 · 137 из 400», or «☐ A2 · скоро» for a level without cards. `whole` adds what the
- * hub says besides: «(будет 500)» while the level holds fewer cards than its size, and the coverage when the level has one.
+ * A level with its checkbox: «☑ A1 · начато 137 из 400», or «☐ A2 · скоро» for a level without cards. `whole` adds
+ * what the hub says besides: «(будет 500)» while the level holds fewer cards than its size. The coverage is not shown
+ * here: beside the learner's own count it read as their result (owner, 2026-10-12).
  */
 function levelLine(l: LevelLine, t: Dict, whole: boolean): string {
   const head = `${checkbox(l.checked)} ${l.code}`;
   if (l.total === 0) return `${head} · ${t.levelSoon}`;
   // A counter above the cards of its level is the level started whole.
-  let line = `${head} · ${t.outOf(Math.min(l.started, l.total), l.total)}`;
-  if (whole && l.total < l.size) line += ` ${t.levelWillBe(l.size)}`;
-  if (whole && l.coveragePct != null) line += ` · ${t.levelCoverage(l.coveragePct)}`;
-  return line;
+  const line = `${head} · ${t.levelStarted(Math.min(l.started, l.total), l.total)}`;
+  return whole && l.total < l.size ? `${line} ${t.levelWillBe(l.size)}` : line;
 }
 
 /**

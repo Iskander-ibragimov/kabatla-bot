@@ -129,7 +129,7 @@ describe("/settings", () => {
     const u = await s.press("set:hub");
     expect(u.methods).toEqual(["answerCallbackQuery", "sendMessage"]);
     expect(u.d1).toBe(2);
-    expect(s.h.lastText()).toBe(["📚 <b>Уровни</b>", "☑ A1 · 0 из 1 (будет 500)", "☐ A2 · скоро", "☐ B1 · скоро", "☐ B2 · скоро", "☐ C1 · скоро", "", "🧭 Бот ведёт по темам · сейчас «Семья и близкие»: 0 из 1"].join("\n"));
+    expect(s.h.lastText()).toBe(["📚 <b>Уровни</b>", "☑ A1 · начато 0 из 1 (будет 500)", "☐ A2 · скоро", "☐ B1 · скоро", "☐ B2 · скоро", "☐ C1 · скоро", "", "🧭 Бот ведёт по темам · сейчас «Семья и близкие»: 0 из 1"].join("\n"));
     expect(buttons(s.h.lastMarkup()).map(([, data]) => data)).toEqual(["hub:lv", "hub:pos", "hub:mode", "hub:tp", "learn"]);
   });
 });
