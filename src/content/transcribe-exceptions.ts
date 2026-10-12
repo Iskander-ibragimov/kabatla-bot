@@ -117,4 +117,13 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "врач": "врач",
   "магазин": "магази́н",
   "машина": "маши́на",
+
+  // A2 portion 3, second pass: Arabic loans read with front vowels or [и] where the spelling does not show it.
+  "кадерле": "къәдерле́",
+  "сәламләү": "сәләмлә́w",
+  "гаҗәпләндерү": "гъәҗәпләндерү́",
+  "гомумән": "гъөмүмә́н",
+  "вакыйга": "wакъигъа́",
+  "кагыйдә": "къагъидә́",
+  "мәкалә": "мәкъәлә́",
 };

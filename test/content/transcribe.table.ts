@@ -217,6 +217,14 @@ const EXCEPTION_ROWS: Row[] = [
   ["врач", "врач"],
   ["магазин", "магази́н"],
   ["машина", "маши́на"],
+  // A2 portion 3, second pass: Arabic loans read with front vowels or [и]
+  ["кадерле", "къәдерле́"],
+  ["сәламләү", "сәләмлә́w"],
+  ["гаҗәпләндерү", "гъәҗәпләндерү́"],
+  ["гомумән", "гъөмүмә́н"], // verify
+  ["вакыйга", "wакъигъа́"], // verify
+  ["кагыйдә", "къагъидә́"], // verify
+  ["мәкалә", "мәкъәлә́"], // verify
 ];
 
 /** Rows by the rule they were added for. The mandatory rows exercise every rule as well. */
