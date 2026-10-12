@@ -305,6 +305,9 @@ const EXCEPTION_ROWS: Row[] = [
   ["сәнәгый", "сәнәгъи́"],
   ["газиз", "гъәзи́з"],
   ["гарәпчә", "гъәрә́пчә"],
+  ["мордвача", "мордва́ча"],
+  ["штукатурчы", "штукатурчы́"],
+  ["шәркыятьче", "шәркъийәтче́"],
 ];
 
 /** Rows by the rule they were added for. The mandatory rows exercise every rule as well. */
