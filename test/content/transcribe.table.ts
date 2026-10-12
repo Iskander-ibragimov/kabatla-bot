@@ -136,6 +136,11 @@ const EXCEPTION_ROWS: Row[] = [
   ["бармый", "ба́рмый"],
   ["белмим", "бе́лмим"],
   ["беркем", "бе́ркем"],
+  ["бернәрсә", "бе́рнәрсә"],
+  ["беркайда", "бе́ркъайда"],
+  ["беркая", "бе́ркъайа"],
+  ["беркайчан", "бе́ркъайчан"],
+  ["бернинди", "бе́рнинди"],
   ["һичкем", "һи́чкем"],
   // conjunctions and adverbs with stress on the first syllable
   ["ләкин", "лә́кин"], // verify
@@ -169,10 +174,14 @@ const EXCEPTION_ROWS: Row[] = [
   ["суык", "суwы́къ"], // verify: or сыwы́къ
   ["куу", "къуwу́"], // verify: or къыwу́
   ["юу", "йуwу́"], // verify: or йыwу́
+  ["суыткыч", "суwыткъы́ч"],
   // Arabic loans: а (я) read as [ә] ([йә]) with nothing in the spelling to show it
   ["кадәр", "къәдә́р"], // verify
   ["гаилә", "гъәилә́"], // verify
   ["гадәт", "гъәдә́т"], // verify
+  ["гадәттә", "гъәдәттә́"],
+  ["гадел", "гъәде́л"],
+  ["гади", "гъәди́"],
   ["галим", "гъәли́м"],
   ["каләм", "къәлә́м"],
   ["кадер", "къәде́р"],
@@ -191,6 +200,8 @@ const EXCEPTION_ROWS: Row[] = [
   ["гыйнвар", "гъинwа́р"],
   // Arabic loans: о after [гъ] read as [ө]
   ["гомер", "гъөме́р"],
+  // a compound whose second part keeps its own (back) vowel row
+  ["тимераяк", "тимерайа́къ"],
   // Russian loans: в stays [в], к and г stay plain, stress as in Russian
   ["вагон", "ваго́н"],
   ["диван", "дива́н"],
