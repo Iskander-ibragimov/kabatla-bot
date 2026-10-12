@@ -24,8 +24,8 @@ describe("first day and next day", () => {
     await seedCatalog(env.DB, A1.map((word) => ({ level: 1, word })));
     const h = harness(env.DB, { now: T });
     await h.text("/start");
-    // The language, «Попробовать», the four buttons of the practice card, «Дальше», «Начать».
-    for (const answer of ["ob:ru", "ob:n1", "pr:0:1", "pr:1:2", "pr:3:3", "pr:7:4"]) await h.press(answer, 100);
+    // The language, «Попробовать», one button on each of the three words of the practice, «Дальше», «Начать».
+    for (const answer of ["ob:ru", "ob:n1", "pr:s1:1", "pr:s2:3", "pr:s3:4"]) await h.press(answer, 100);
     expect(h.lastText()).toBe(`${ru.practiceEasy("1 день", "10 минут")}\n\n${ru.practiceDone}`);
     expect((h.lastMarkup().inline_keyboard ?? []).flat().map((b) => [b.text, b.callback_data])).toEqual([["Дальше", "ob:n2"]]);
     // The practice left nothing behind: no card, no grade.
@@ -107,13 +107,11 @@ describe("first day and next day", () => {
     await press("ob:tt");
     expect(h.lastText()).toBe(tt.intro1);
     await press("ob:n1");
-    // The practice card, in Tatar: the four buttons, then «Алга таба».
-    expect(h.lastText()).toContain(`${tt.practiceTitle(0)}\n${tt.practiceNote}\n\n<b>китап</b>\n<tg-spoiler><b>книга</b></tg-spoiler>\n\n${tt.practiceTask}`);
-    let tried = 0;
-    for (const [i, rating] of [4, 3, 2, 1].entries()) {
-      await press(`pr:${tried}:${rating}`);
-      tried |= 1 << (rating - 1);
-      if (i < 3) expect(h.lastText().startsWith(`${tt.practiceTitle(i + 1)}\n${tt.practiceNote}\n\n✅ `)).toBe(true);
+    // The practice, in Tatar: three words, one button each, then «Алга таба».
+    expect(h.lastText()).toBe(`${tt.practiceTitle(1)}\n${tt.practiceNote}\n\n<b>китап</b>\n<tg-spoiler><b>книга</b></tg-spoiler>`);
+    for (const [i, rating] of [4, 3, 1].entries()) {
+      await press(`pr:s${i + 1}:${rating}`);
+      if (i < 2) expect(h.lastText().startsWith("✅ ") && h.lastText().includes(`\n\n${tt.practiceTitle(i + 2)}\n${tt.practiceNote}\n\n`)).toBe(true);
     }
     expect(h.lastText()).toBe(`${tt.practiceAgain("1 минут")}\n\n${tt.practiceDone}`);
     await press("ob:n2");

@@ -5,7 +5,7 @@ import type { Hub, LevelLine, TopicLine } from "../levels/service";
 import { formatInterval } from "../srs/interval";
 import { type Lang, RUNGS, type Rating } from "../srs/ladder";
 import type { Cumulative } from "../stats/service";
-import { ALL, PRACTICE_WORD, newWordIntervals, press, tried } from "../tutorial/practice";
+import { PRACTICE_WORDS, newWordIntervals, practiceData } from "../tutorial/practice";
 import type { OnboardingScreen } from "../users/service";
 import { TZ_OFFSETS } from "../users/service";
 import type { Button, Keyboard, PreviewItem, Rendered } from "./views";
@@ -16,7 +16,7 @@ const checkbox = (on: boolean) => (on ? "☑" : "☐");
 const tzLabel = (min: number) => `UTC${min >= 0 ? "+" : "−"}${Math.floor(Math.abs(min) / 60)}${Math.abs(min) % 60 ? ":" + String(Math.abs(min) % 60).padStart(2, "0") : ""}`;
 
 /**
- * The screen about the bot; «Попробовать» goes on to the practice card. In the introduction that is an answer of the
+ * The screen about the bot; «Попробовать» goes on to the practice. In the introduction that is an answer of the
  * step (`ob:n1`); shown again by /howto (`replay`) it only opens the card (`pr:start`).
  */
 export function renderAbout(lang: Lang, replay: boolean): Rendered {
@@ -28,39 +28,33 @@ export function renderAbout(lang: Lang, replay: boolean): Rendered {
 const RUNGS_AFTER_GOOD = RUNGS.slice(2, 5);
 
 /**
- * The practice card: a card with one word whose grade buttons change nothing, so the learner may press all four and
- * read what each does. `mask`: the buttons tried (tutorial/practice.ts); `last`: the one just pressed, whose
- * explanation stands above the word, or null on a card that follows no press. The buttons are those of a real card
- * with a new word, the tried ones marked («Хорошо ✅ 10 минут»), and each carries the buttons tried, so the next press needs nothing stored. Once all four are
- * tried the card is the final screen: the explanation of the fourth button, then the words that end the practice.
- * The last row leaves the practice: in the introduction it answers the step (`ob:n2`: «Пропустить», after the four
- * buttons «Дальше»); in a replay it is «Учить».
+ * The practice: three cards, one after another in one message, whose grade buttons change nothing. `next`: the word
+ * on the card, 1…3, or 4 for the final screen; `last`: the button pressed on the word before, whose explanation —
+ * what the press means and when a real word would come back — stands above the card, or null on the first card and
+ * on a practice started again. The buttons are those of a real card with a new word, and each names its word
+ * (tutorial/practice.ts), so the next press needs nothing stored. The final screen is the explanation of the third
+ * word's button, then the words that end the practice. The last row leaves the practice: in the introduction it
+ * answers the step (`ob:n2`: «Пропустить», on the final screen «Дальше»); in a replay it is «Учить».
  */
-export function renderPractice(mask: number, last: Rating | null, lang: Lang, replay: boolean): Rendered {
+export function renderPractice(next: 1 | 2 | 3 | 4, last: Rating | null, lang: Lang, replay: boolean): Rendered {
   const t = dict(lang);
   const ms = newWordIntervals();
   const words = (interval: number, form: "plain" | "after" = "plain") => formatInterval(interval, lang, form);
-  // In the message an interval is escaped like any text that is not the bot's own. The Russian sentences have it
-  // after «через», all but that of «Трудно», where it follows «это».
+  // In the message an interval is escaped like any text that is not the bot's own. Every Russian sentence has it after «через».
   const explained = last && {
     1: () => t.practiceAgain(esc(words(ms[1], "after"))),
-    2: () => t.practiceHard(esc(words(ms[2]))),
+    2: () => t.practiceHard(esc(words(ms[2], "after"))),
     3: () => t.practiceGood(esc(words(ms[3], "after")), esc(RUNGS_AFTER_GOOD.map((rung) => words(rung, "after")).join(", "))),
     4: () => t.practiceEasy(esc(words(ms[4], "after")), esc(words(ms[3], "after"))),
   }[last]();
-  const leave = replay ? learnKeyboard(lang) : [[btn(mask === ALL ? t.nextBtn : t.skipBtn, "ob:n2")]];
-  if (mask === ALL) return { text: [...(explained ? [explained, ""] : []), t.practiceDone].join("\n"), keyboard: leave };
+  const leave = replay ? learnKeyboard(lang) : [[btn(next === 4 ? t.nextBtn : t.skipBtn, "ob:n2")]];
+  const lines = explained ? [explained, ""] : [];
+  if (next === 4) return { text: [...lines, t.practiceDone].join("\n"), keyboard: leave };
 
-  const n = tried(mask);
-  const lines = [t.practiceTitle(n), t.practiceNote, ""];
-  if (explained) lines.push(explained, t.practiceLeft(4 - n), "");
-  lines.push(
-    // The word and its hidden translation, as a real card shows them.
-    `<b>${esc(PRACTICE_WORD.word)}</b>`, `<tg-spoiler><b>${esc(PRACTICE_WORD.translation)}</b></tg-spoiler>`, "",
-    t.practiceTask, "",
-    t.practiceLadder(esc(RUNGS.map((rung) => words(rung)).join(" → "))),
-  );
-  const grades = gradeRows({ 1: words(ms[1]), 2: words(ms[2]), 3: words(ms[3]), 4: words(ms[4]) }, (r) => `pr:${mask}:${r}`, lang, (r) => press(mask, r) === mask);
+  const { word, translation } = PRACTICE_WORDS[next - 1]!;
+  // The word and its hidden translation, as a real card shows them.
+  lines.push(t.practiceTitle(next), t.practiceNote, "", `<b>${esc(word)}</b>`, `<tg-spoiler><b>${esc(translation)}</b></tg-spoiler>`);
+  const grades = gradeRows({ 1: words(ms[1]), 2: words(ms[2]), 3: words(ms[3]), 4: words(ms[4]) }, (r) => practiceData(next, r), lang);
   return { text: lines.join("\n"), keyboard: [...grades, ...leave] };
 }
 
@@ -80,7 +74,7 @@ export function renderOnboarding(s: OnboardingScreen, lang: Lang): Rendered {
     case "intro":
       return renderAbout(lang, false);
     case "practice":
-      return renderPractice(0, null, lang, false);
+      return renderPractice(1, null, lang, false);
     case "levels":
       return { text: t.obLevels, keyboard: [...s.lines.map((l) => [btn(levelChoice(l, t), `ob:lv:${l.no}`)]), [btn(t.obGoBtn, "ob:go", "primary")]] };
     default:

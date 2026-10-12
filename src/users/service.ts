@@ -120,7 +120,7 @@ export type OnboardingScreen =
   | { kind: "lang" }
   /** The screen about the bot. */
   | { kind: "intro" }
-  /** The practice card, with no button tried yet. */
+  /** The practice, on its first word. */
   | { kind: "practice" }
   /** The levels of the scale, to check and uncheck. */
   | { kind: "levels"; lines: LevelLine[] }

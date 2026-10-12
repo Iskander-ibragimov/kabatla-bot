@@ -14,7 +14,7 @@ import { ReviewService, type Screen } from "../review/service";
 import type { Rating } from "../srs/ladder";
 import { cumulative } from "../stats/service";
 import type { TgApi } from "../tg/client";
-import { parse as parsePractice, press as pressPractice } from "../tutorial/practice";
+import { parsePress } from "../tutorial/practice";
 import { REMIND_TIMES, TZ_OFFSETS, advanceOnboarding, getOrCreate, langFromTelegram, onLanguageStep, onPracticeStep, setSetting, startOnboarding } from "../users/service";
 import {
   learnKeyboard, renderAbout, renderGenPreview, renderHub, renderLevelChecks, renderModes, renderOnboarding, renderPosChecks, renderPractice, renderSettings, renderStats,
@@ -61,6 +61,20 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   /** Shows a screen in the message whose button was pressed, then answers the tap, with `note` when there is something to say. */
   const redraw = async (ctx: Ctx, r: Rendered, note?: string) => { await editOrSend(ctx, clickedId(ctx), r); await toast(ctx, note); };
 
+  /** Removes a message the learner is done with; bots can't delete messages older than 48 h, so then at least its buttons go. */
+  const drop = (ctx: Ctx, messageId: number) =>
+    ctx.api.deleteMessage(ctx.user.chatId, messageId).catch(() => ctx.api.editMessageReplyMarkup(ctx.user.chatId, messageId).catch(() => undefined));
+  /**
+   * Sends a screen as a new message, quietly, in place of the message whose button was pressed, then answers the tap.
+   * Telegram clients keep a spoiler revealed when a message is edited, so a screen with a translation of its own under
+   * a spoiler never goes into the message of another one.
+   */
+  const replaceClicked = async (ctx: Ctx, r: Rendered) => {
+    await ctx.api.sendMessage(ctx.user.chatId, r.text, { ...HTML, reply_markup: markup(r.keyboard), disable_notification: true });
+    const old = clickedId(ctx);
+    if (old !== undefined) await drop(ctx, old);
+    await toast(ctx);
+  };
   /**
    * Shows a review screen. "replace" (after a grade or undo) sends a NEW message and deletes the one that was clicked:
    * Telegram clients keep a spoiler revealed when a message is edited, so every card needs its own message.
@@ -85,8 +99,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
       const m = await ctx.api.sendMessage(chatId, r.text, { ...HTML, reply_markup: markup(r.keyboard), disable_notification: true });
       const oldVoice = await repo.replaceSessionMessage(ctx.user.id, chatId, m.message_id, cardId);
       await Promise.all([
-        // Bots can't delete messages older than 48 h; then at least take the buttons off the old card.
-        ctx.api.deleteMessage(chatId, old).catch(() => ctx.api.editMessageReplyMarkup(chatId, old).catch(() => undefined)),
+        drop(ctx, old),
         oldVoice ? ctx.api.deleteMessage(chatId, oldVoice).catch(() => undefined) : undefined,
       ]);
     }
@@ -171,27 +184,33 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   };
 
   /*
-   * The practice card: a card whose four grade buttons write nothing; each press redraws its message with what the
-   * button does. It is a step of the introduction, and /howto («Как это работает») shows it again at any time. Which
-   * of the two a press belongs to is decided by where the learner stands, not by the message: on the practice step
-   * the card leads on to the levels; for a learner whose introduction is over it is a replay and ends with «Учить»,
-   * also when the button is one of the introduction's old card. On another step of the introduction a practice button
-   * is a button of a step already passed (or of a card not reached yet), and is answered as the introduction answers
-   * those: its message becomes the step the learner stands on. A press reads the user's row and, but for that last
-   * case on «Уровни», nothing else.
+   * The practice: three cards whose grade buttons write nothing. A press sends the next screen — what the button
+   * means, then the next card (`next` 4: the final screen) — as a new message and removes the one pressed: the card
+   * pressed may have its translation revealed, and an edited message would keep the next one revealed too (the same
+   * reason every real card is a message of its own). It is a step of the introduction, and /howto («Как это
+   * работает») shows it again at any time. Which of the two a press belongs to is decided by where the learner stands,
+   * not by the message: on the practice step the practice leads on to the levels; for a learner whose introduction is
+   * over it is a replay and ends with «Учить», also when the button is one of the introduction's old message. On
+   * another step of the introduction a practice button is a button of a step already passed (or of a card not reached
+   * yet), and is answered as the introduction answers those: its message becomes the step the learner stands on. A
+   * press reads the user's row and, but for that last case on «Уровни», nothing else. A button of the earlier
+   * four-button card starts the practice again from its first word, also in a new message; «Попробовать» of the screen
+   * about the bot, which hides nothing, opens the first card in its own message.
    */
-  const practice = async (ctx: Ctx, mask: number, last: Rating | null) => {
+  const practice = async (ctx: Ctx, next: 1 | 2 | 3 | 4, last: Rating | null, how: "edit" | "replace") => {
     if (ctx.user.onboardingStep && !onPracticeStep(ctx.user)) {
       return redraw(ctx, renderOnboarding(await startOnboarding(repo, ctx.user), ctx.user.lang), dict(ctx.user.lang).chooseAbove);
     }
-    await redraw(ctx, renderPractice(mask, last, ctx.user.lang, !ctx.user.onboardingStep));
+    const r = renderPractice(next, last, ctx.user.lang, !ctx.user.onboardingStep);
+    await (how === "edit" ? redraw(ctx, r) : replaceClicked(ctx, r));
   };
   c.command("howto", async (ctx) => { if (await ready(ctx)) await send(ctx, renderAbout(ctx.user.lang, true)); });
-  c.callbackQuery("pr:start", async (ctx) => practice(ctx, 0, null));
+  c.callbackQuery("pr:start", async (ctx) => practice(ctx, 1, null, "edit"));
   c.callbackQuery(/^pr:/, async (ctx) => {
-    const pressed = parsePractice(ctx.callbackQuery.data);
+    const pressed = parsePress(ctx.callbackQuery.data);
     if (!pressed) return toast(ctx, dict(ctx.user.lang).staleButton);
-    await practice(ctx, pressPractice(pressed.mask, pressed.rating), pressed.rating);
+    if (pressed.kind === "restart") return practice(ctx, 1, null, "replace");
+    await practice(ctx, (pressed.word + 1) as 2 | 3 | 4, pressed.rating, "replace");
   });
 
   /* review */

@@ -61,32 +61,28 @@ export const ru = {
   aiNote: "🤖 <i>перевод сделан AI, проверьте</i>",
   welcome: "Привет! Я <b>Кабатла</b> 👋\nПомогу выучить татарские слова методом интервальных повторений, как в Anki.\n\nНа каком языке общаться?",
   /* The introduction: the screen about the bot, the practice card, then the levels to study. /howto shows the first two again. */
-  intro1: "Кабатла учит татарские слова карточками. Слово возвращается тогда, когда вы начинаете его забывать: сначала через минуты, потом через дни и месяцы. Так оно остаётся в памяти надолго.",
-  /** The button of the screen about the bot: on to the practice card. */
+  intro1: "Кабатла учит татарские слова карточками. Слово возвращается тогда, когда вы начинаете его забывать: сначала через минуты, потом через дни и месяцы. Так оно остаётся в памяти надолго.\n\nСейчас попробуем на трёх словах — это займёт полминуты.",
+  /** The button of the screen about the bot: on to the practice. */
   tryBtn: "Попробовать",
   /*
-   * The practice card (tutorial/practice.ts, bot/screens.ts): a card with the word «китап» whose four grade buttons the
-   * learner presses to read what each does. `n`: the buttons tried so far, of four.
+   * The practice (tutorial/practice.ts, bot/screens.ts): three cards, китап, су, әни, on each of which the learner
+   * presses one grade button; the next card explains that press. `k`: the word on the card, of three.
    */
-  practiceTitle: (n: number) => `🎓 Тренировка · ${n} из 4`,
-  practiceNote: "Прогресс не считается.",
-  practiceTask: "Вспомните перевод, откройте скрытый текст и нажмите по очереди все четыре кнопки — покажу, что делает каждая.",
-  /** `rungs`: the intervals of the ten rungs, «1 минута → 10 минут → …». */
-  practiceLadder: (rungs: string) => `Лесенка слова: ${rungs}`,
+  practiceTitle: (k: number) => `🎓 Тренировка · слово ${k} из 3`,
+  practiceNote: "Так выглядит карточка. Вспомните перевод, откройте скрытый текст и нажмите одну кнопку — как честно вспомнили.",
   /*
-   * What the pressed button does. `interval`: the one that stands on the button, for a new word; after «через» it is
-   * in the form that follows it, «1 минуту». `then`: the intervals of the three rungs above, «1 день, 3 дня, 7 дней».
+   * What the pressed button means and when the word would come back. `interval`: the one that stands on the button,
+   * for a new word, in the form that follows «через», «1 минуту». `then`: the intervals of the three rungs above,
+   * «1 день, 3 дня, 7 дней».
    */
-  practiceAgain: (interval: string) => `✅ «Снова» — не вспомнили. Слово возвращается в начало лесенки: придёт через ${interval} и будет подниматься заново.`,
-  practiceHard: (interval: string) => `✅ «Трудно» — вспомнили с трудом. Слово остаётся на своей ступеньке и придёт через тот же срок; у нового слова это ${interval}.`,
-  practiceGood: (interval: string, then: string) => `✅ «Хорошо» — вспомнили. Слово поднимается на ступеньку: придёт через ${interval}, потом через ${then} — всё реже.`,
+  practiceAgain: (interval: string) => `✅ Вы нажали «Снова» — не вспомнили. Слово вернулось бы через ${interval} и начало бы лесенку заново.`,
+  practiceHard: (interval: string) => `✅ Вы нажали «Трудно» — вспомнили с трудом. Слово вернулось бы через ${interval} на той же ступеньке.`,
+  practiceGood: (interval: string, then: string) => `✅ Вы нажали «Хорошо» — вспомнили. Слово вернулось бы через ${interval}, потом через ${then} — всё реже.`,
   /** `good`: the interval of «Хорошо» on the same card, which «Легко» is told against; also after «через». */
-  practiceEasy: (interval: string, good: string) => `✅ «Легко» — знаете уверенно. Слово перепрыгивает ступеньку: придёт не через ${good}, а через ${interval}.`,
-  /** Under the explanation: the buttons not tried yet. */
-  practiceLeft: (n: number) => `Осталось кнопок: ${n}`,
-  /** After the fourth button. */
-  practiceDone: "🎉 Готово, вы попробовали все четыре кнопки.\nОценивайте честно: вспомнили — вверх по лесенке, забыли — с начала. Вернуться к этому обучению — команда /howto.",
-  /** The last row of the practice card in the introduction, before all four buttons are tried; after them it is `nextBtn`. */
+  practiceEasy: (interval: string, good: string) => `✅ Вы нажали «Легко» — знаете уверенно. Слово вернулось бы не через ${good}, а сразу через ${interval}.`,
+  /** After the third word, under the explanation of its button. */
+  practiceDone: "🎉 Готово! Так и идёт обучение: бот показывает слова по одному, вы честно оцениваете, и каждое слово возвращается тогда, когда его пора повторить — трудные чаще, лёгкие реже.\nВернуться к этой тренировке — /howto.",
+  /** The last row of the practice card in the introduction, on the three words; on the final screen it is `nextBtn`. */
   skipBtn: "Пропустить",
   nextBtn: "Дальше",
   /** The step «Уровни»; under it a button for every level, with its checkbox, and the button that finishes. It names the defaults of users/service.ts. */
