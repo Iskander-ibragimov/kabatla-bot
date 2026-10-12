@@ -4,8 +4,9 @@ import type { Dict } from "./ru";
  * Tatar UI strings: the same keys as `ru`, plain literary Tatar for a reader whose Tatar is weak.
  * Only the letters ә ө ү җ ң һ (U+04D9, U+04E9, U+04AF, U+0497, U+04A3, U+04BB and capitals) besides the Russian
  * alphabet; test/i18n/dict.test.ts rejects look-alikes. Numbers never take a suffix here («кайтканчы 8 минут бар»,
- * «Вакыты: 09:00», «37/100»), so no text depends on how a number is read aloud; an interval of the practice card
- * («10 минут», «1 көн») stands the same way, before «узар иде». The levels of the scale are named by their codes, A1…C1, as in Russian;
+ * «Вакыты: 09:00», «37/100»), so no text depends on how a number is read aloud; an interval of the practice
+ * («10 минут», «1 көн») stands the same way, before «узар иде», in an explanation that names its button as «Сез «Яхшы»
+ * төймәсенә бастыгыз». The levels of the scale are named by their codes, A1…C1, as in Russian;
  * a case ending goes on the word «дәрәҗә» after the code («A2 дәрәҗәсен өстәү»).
  */
 const POS: Record<string, string> = {
@@ -64,10 +65,10 @@ export const tt: Dict = {
   tryBtn: "Сынап карау",
   practiceTitle: (k) => `🎓 Күнегү · сүз ${k}/3`,
   practiceNote: "Карточка шундый күренә. Тәрҗемәсен искә төшерегез, яшерелгән текстны ачыгыз һәм бер генә төймәгә басыгыз — искә төшерүегезне гадел бәяләп.",
-  practiceAgain: (interval) => `✅ Сез «Яңадан» дип бастыгыз — искә төшермәдегез. Сүз кайтканчы ${interval} узар иде, һәм ул баскычны яңадан башлар иде.`,
-  practiceHard: (interval) => `✅ Сез «Авыр» дип бастыгыз — авырлык белән искә төшердегез. Сүз кайтканчы ${interval} узар иде, ул шул ук баскычта калыр иде.`,
-  practiceGood: (interval, then) => `✅ Сез «Яхшы» дип бастыгыз — искә төшердегез. Сүз кайтканчы ${interval} узар иде, аннары ${then} — барган саен сирәгрәк.`,
-  practiceEasy: (interval, good) => `✅ Сез «Җиңел» дип бастыгыз — яхшы беләсез. Сүз кайтканчы ${good} түгел, ә бер юлы ${interval} узар иде.`,
+  practiceAgain: (interval) => `✅ Сез «Яңадан» төймәсенә бастыгыз — искә төшермәдегез. Сүз кайтканчы ${interval} узар иде, һәм ул баскычны яңадан башлар иде.`,
+  practiceHard: (interval) => `✅ Сез «Авыр» төймәсенә бастыгыз — авырлык белән искә төшердегез. Сүз кайтканчы ${interval} узар иде, ул шул ук баскычта калыр иде.`,
+  practiceGood: (interval, then) => `✅ Сез «Яхшы» төймәсенә бастыгыз — искә төшердегез. Сүз кайтканчы ${interval} узар иде, аннары ${then} — барган саен сирәгрәк.`,
+  practiceEasy: (interval, good) => `✅ Сез «Җиңел» төймәсенә бастыгыз — яхшы беләсез. Сүз кайтканчы ${good} түгел, ә бер юлы ${interval} узар иде.`,
   practiceDone: "🎉 Булды! Өйрәнү шулай бара: бот сүзләрне берәм-берәм күрсәтә, сез үзегезгә гадел бәя куясыз, һәм һәр сүз кабатлау вакыты җиткәч кайта — авырлары ешрак, җиңелләре сирәгрәк.\nБу күнегүгә кире кайту — /howto.",
   skipBtn: "Үткәреп җибәрү",
   nextBtn: "Алга таба",
