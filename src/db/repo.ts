@@ -3,7 +3,7 @@ import type { Mem } from "../srs/ladder";
 import { type DayWindow, type NewScope, type Queue, ownedCopiesStmt, progressStmt, readQueue, unprogressStmt } from "./queue";
 import { type Asked, CARD_COLS, type CardRow, type Direction, NEW_CARDS, type NoteFields, askedDirection, noteCols, noteFields, rowToCard } from "./sql";
 
-export type { CatalogNew, DayWindow, NewScope, Queue, StreamSeen } from "./queue";
+export type { CatalogNew, DayWindow, NewScope, Queue, RecentAnswer, StreamSeen } from "./queue";
 export type { Asked, CardRow, Direction, NewNote, NoteFields } from "./sql";
 
 export type Lang = "ru" | "tt";

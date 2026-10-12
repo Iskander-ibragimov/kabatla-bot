@@ -11,6 +11,7 @@
  */
 import { STREAM_LIMIT, type Spans } from "../levels/order";
 import { type NewMode, tseqOf } from "../levels/scale";
+import type { CardState } from "../srs/ladder";
 import {
   type Asked, CARD_COLS, type CardRow, type Direction, NEW_CARDS, type NewNote, askedDirection, hasNewRow, hasRow, noteCols, noteFields, ownsWord, rowToCard,
   wordNotBuried,
@@ -30,6 +31,8 @@ export interface CatalogNew extends NewNote { level: number; topicNo: number; se
  * whether it is as long as a stream gets (STREAM_LIMIT notes): then more may lie beyond its last note.
  */
 export interface StreamSeen { first: number | null; last: number | null; full: boolean }
+/** One answer of today from the review log: the card, its note, and the card's state before the answer. */
+export interface RecentAnswer { cardId: number; noteId: number; stateBefore: CardState }
 /** Everything the session queue needs; see `readQueue`. */
 export interface Queue {
   learning: CardRow[]; review: CardRow[];
