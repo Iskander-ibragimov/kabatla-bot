@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CATALOG_HEADER } from "../../scripts/lib/catalog";
-import { FILES, levelCandidatesPath, readCatalog, readCatalogMeta, readKfuTexts, readLines, readText, strayCatalogFiles, writeText } from "../../scripts/lib/files";
+import { FILES, GLOSS_DIR, levelCandidatesPath, readCatalog, readCatalogMeta, readGloss, readKfuTexts, readLines, readText, strayCatalogFiles, strayGlossFiles, writeText } from "../../scripts/lib/files";
 
 /** The test runtime has a file system of its own under /tmp: nothing here touches the repository. */
 const dir = (name: string): string => {
@@ -65,6 +65,27 @@ describe("the catalog files", () => {
     const path = `${dir("meta-broken")}/meta.json`;
     writeFileSync(path, "[{level:1}]");
     expect(() => readCatalogMeta(path)).toThrow(/^meta\.json: не JSON/);
+  });
+});
+
+describe("the breakdown files", () => {
+  const file = (word: string) => `word\tn\tform\tlemma\tgloss\n${word}\t1\tБу\tбу\tэто\n`;
+
+  it("reads the level files that exist, A1 first, and names the others", () => {
+    const gloss = dir("gloss");
+    writeFileSync(`${gloss}/b1.tsv`, file("су"));
+    writeFileSync(`${gloss}/a1.tsv`, file("өй"));
+    writeFileSync(`${gloss}/a3.tsv`, file("ял"));
+    writeFileSync(`${gloss}/A2.TSV`, file("көн"));
+    writeFileSync(`${gloss}/notes.txt`, "");
+    expect(readGloss(gloss).map((g) => [g.level, g.lines[0]!.fields[0]])).toEqual([[1, "өй"], [3, "су"]]);
+    expect(strayGlossFiles(gloss)).toEqual(["A2.TSV", "a3.tsv"]);
+  });
+
+  it("has none where there is no folder", () => {
+    expect(readGloss("/tmp/files-test/no-gloss")).toEqual([]);
+    expect(strayGlossFiles("/tmp/files-test/no-gloss")).toEqual([]);
+    expect(GLOSS_DIR).toBe("data/gloss");
   });
 });
 

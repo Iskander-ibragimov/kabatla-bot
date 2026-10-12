@@ -1,6 +1,8 @@
 /**
  * Checks the catalog files data/catalog/a1.csv … c1.csv, data/topics.csv and data/renames.csv against the rules of the
- * catalog (scripts/lib/catalog.ts). Runs in CI and in the deploy, before the catalog is loaded.
+ * catalog (scripts/lib/catalog.ts), and the breakdowns of the examples data/gloss/a1.tsv … c1.tsv against the examples
+ * (scripts/lib/gloss.ts; a level without its file has no breakdown and is not checked). Runs in CI and in the deploy,
+ * before the catalog is loaded.
  *   npx tsx scripts/validate-catalog.ts                  (the same: pnpm validate)
  *   npx tsx scripts/validate-catalog.ts --base <git-ref> the same, and no headword of the level files of that commit may be gone
  *   npx tsx scripts/validate-catalog.ts --db-keys <file> only: no headword of the file (one per line: the catalog notes of the database) may be gone
@@ -18,7 +20,8 @@
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "./lib/args";
 import { type CatalogLevel, checkCatalog, checkRenames, headwordsSummary, mergedRenames, parseCatalogLevel, vanishedHeadwords } from "./lib/catalog";
-import { CATALOG_DIR, readAttested, readCatalog, readCatalogMeta, readRenames, readText, readTopics, strayCatalogFiles } from "./lib/files";
+import { CATALOG_DIR, GLOSS_DIR, readAttested, readCatalog, readCatalogMeta, readGloss, readRenames, readText, readTopics, strayCatalogFiles, strayGlossFiles } from "./lib/files";
+import { checkGloss } from "./lib/gloss";
 import { LEVELS } from "../src/levels/scale";
 
 /** The most headwords named when the database has some the files lack. */
@@ -87,6 +90,11 @@ function main(): number {
   }
   // Corrected headwords (data/renames.csv): the new word must stand in the catalog and the old one must be gone from it.
   errors.push(...checkRenames(readRenames(), levels));
+  // The breakdowns of the examples: a file such as a3.tsv is read by nothing, and each level file must match its examples.
+  errors.push(
+    ...strayGlossFiles().map((name) => `${GLOSS_DIR}/${name}: не уровень — уровни только a1.tsv, a2.tsv, b1.tsv, b2.tsv, c1.tsv`),
+    ...checkGloss(levels, readGloss()),
+  );
 
   if (values.base !== undefined) {
     const before = catalogAt(values.base).flatMap((l) => l.rows.map((row) => row.word ?? ""));

@@ -10,9 +10,12 @@ import { gunzipSync } from "node:zlib";
 import { GUIDED_RULE_VERSION } from "../../src/levels/order";
 import { LEVELS } from "../../src/levels/scale";
 import { type CatalogLevel, type Topic, catalogDigest, parseCatalogLevel, parseTopics } from "./catalog";
+import { type GlossLevel, parseGlossLevel } from "./gloss";
 
 /** The catalog by CEFR level: a1.csv … c1.csv and meta.json. */
 export const CATALOG_DIR = "data/catalog";
+/** The word-by-word breakdowns of the examples by CEFR level: a1.tsv … c1.tsv (spec 2026-10-12 §B1). */
+export const GLOSS_DIR = "data/gloss";
 /** The texts of the KFU specifications (branch `kfu-specs`) and what is built from them. Not in git: the lists are another party's work. */
 export const KFU_DIR = "data/work/kfu";
 export const FILES = {
@@ -79,6 +82,19 @@ export function readCatalog(dir = CATALOG_DIR): CatalogLevel[] {
 export function strayCatalogFiles(dir = CATALOG_DIR): string[] {
   const levelFiles = new Set(LEVELS.map((l) => `${l.slug}.csv`));
   return (existsSync(dir) ? readdirSync(dir) : []).filter((name) => /\.csv$/i.test(name) && !levelFiles.has(name)).sort();
+}
+
+/** The breakdown files that exist (data/gloss/a1.tsv … c1.tsv), A1 first; none when there is no such folder. */
+export function readGloss(dir = GLOSS_DIR): GlossLevel[] {
+  return LEVELS.map((l) => ({ level: l.no, path: `${dir}/${l.slug}.tsv` }))
+    .filter((f) => existsSync(f.path))
+    .map((f) => parseGlossLevel(f.level, readFileSync(f.path, "utf8")));
+}
+
+/** TSV files of data/gloss that are not a level (a3.tsv, A1.tsv): nothing would read them. */
+export function strayGlossFiles(dir = GLOSS_DIR): string[] {
+  const levelFiles = new Set(LEVELS.map((l) => `${l.slug}.tsv`));
+  return (existsSync(dir) ? readdirSync(dir) : []).filter((name) => /\.tsv$/i.test(name) && !levelFiles.has(name)).sort();
 }
 
 export const readTopics = (): Topic[] => parseTopics(readText(FILES.topics, "темы каталога: no,slug,title_ru,title_tt"));
