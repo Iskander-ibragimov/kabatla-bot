@@ -192,4 +192,6 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "программачы": "программачы́",
   "заказчы": "заказчы́",
   "автомәктәп": "автомәктә́п",
+  // B2 portion 1, second pass: кадәр keeps its front vowel in шулкадәр.
+  "шулкадәр": "шулкъәдә́р",
 };
