@@ -12,9 +12,11 @@ import { type RankedWord, frequencyBand } from "./wordlist";
 /**
  * `kfu`: a word of the KFU list of the level; `kfu-early`: a word of a higher KFU list offered here for its frequency;
  * `freq`: a word of the frequency band of the level that no KFU list has; `freq-late`: such a word of a lower band
- * that the catalog still lacks; `freq-next` (the last level only): a word after the last band that no KFU list has.
+ * that the catalog still lacks; `freq-next` (the last level only): a word after the last band that no KFU list has;
+ * `corpus-other` (the last level only): a word the corpus counts but its analyser does not, so it has no place in the
+ * frequency list — many are inflected forms or names, the author decides.
  */
-export type CandidateSource = "kfu" | "kfu-early" | "freq" | "freq-late" | "freq-next";
+export type CandidateSource = "kfu" | "kfu-early" | "freq" | "freq-late" | "freq-next" | "corpus-other";
 export interface LevelCandidate {
   /** The word in dictionary form. */
   word: string;
@@ -47,6 +49,8 @@ const printedAsVerb = (p: PoolEntry): boolean => /рг[аә]$/.test(entryKey(p.e
  *     did not fit into its own level moves on to the next (rule 4). By frequency, so the most frequent come first.
  *  5. `freq-next` — for the last level only: the words after the last band that stand in no KFU list, up to
  *     `NEXT_BAND` places after it, by frequency — the pool of the top level when its own band is used up (ruling F-13).
+ *  6. `corpus-other` — for the last level only: the words of `unanalysed` (corpus rows the analyser left without a
+ *     lemma, counted at least `OTHER_MIN` times) that stand nowhere above, by count (ruling F-14).
  * A word the catalog already holds, in any level, is left out; so the list of a level gets shorter as the level is
  * filled. `catalog` holds the word keys of the
  * catalog, `cognates` the words set aside as known to a Russian speaker — they are listed and marked, the author
@@ -54,7 +58,7 @@ const printedAsVerb = (p: PoolEntry): boolean => /рг[аә]$/.test(entryKey(p.e
  */
 export function levelCandidates(level: number, o: {
   pool: readonly PoolEntry[]; ranked: readonly RankedWord[]; catalog: ReadonlySet<string>; cognates: ReadonlySet<string>;
-  examples: (word: string, pos: string) => number;
+  examples: (word: string, pos: string) => number; unanalysed?: readonly { word: string; count: number }[];
 }): LevelCandidate[] {
   if (!LEVELS.some((l) => l.no === level)) throw new Error(`уровня ${level} нет: уровни 1–${LEVELS.length}`);
   const corpus = new Map(o.ranked.map((w) => [w.word, w]));
@@ -85,8 +89,17 @@ export function levelCandidates(level: number, o: {
   const next = level === LEVELS[LEVELS.length - 1]!.no
     ? frequent.filter((w) => w.rank > lastBandEnd && w.rank <= lastBandEnd + NEXT_BAND).map((w) => candidate(w.word, "freq-next"))
     : [];
-  return [...ofList, ...early, ...ofBand, ...late, ...next];
+  const last = level === LEVELS[LEVELS.length - 1]!.no;
+  const known = new Set([...corpus.keys(), ...kfu.keys()]);
+  const other = last
+    ? [...(o.unanalysed ?? [])].filter((w) => w.count >= OTHER_MIN && !known.has(w.word) && fresh(w.word))
+      .sort((a, b) => b.count - a.count).map((w) => candidate(w.word, "corpus-other"))
+    : [];
+  return [...ofList, ...early, ...ofBand, ...late, ...next, ...other];
 }
+
+/** The least count of a `corpus-other` word. */
+export const OTHER_MIN = 100;
 
 /** How many places after the last band `freq-next` looks. */
 export const NEXT_BAND = 3000;

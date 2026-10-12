@@ -69,7 +69,9 @@ function candidatesOfLevel(slug: string): void {
   const catalog = catalogKeys(readCatalog());
   const pool = buildPool(parseKfuLists(readKfuTexts()), { ranks: rankMap(ranked), finite: finiteVerbForms(lemmas, forms), catalog });
   const cognates = new Set((readCognates()?.cognates ?? []).map((c) => c.word));
-  const list = levelCandidates(level, { pool, ranked, catalog: new Set(catalog.keys()), cognates, examples: exampleCounter(parseTatoeba(readText(FILES.tatoeba, SOURCES_HINT))) });
+  const unanalysed = lemmas.filter((l) => l.pos === "asterisk" && /^[а-яәөүҗңһ]{3,}(?:-[а-яәөүҗңһ]+)*$/.test(l.lemma) && forms.has(l.lemma))
+    .map((l) => ({ word: l.lemma, count: l.count }));
+  const list = levelCandidates(level, { pool, ranked, catalog: new Set(catalog.keys()), cognates, examples: exampleCounter(parseTatoeba(readText(FILES.tatoeba, SOURCES_HINT))), unanalysed });
   const path = levelCandidatesPath(slug);
   writeText(path, formatLevelCandidates(list));
   const of = (source: CandidateSource) => list.filter((c) => c.source === source);
@@ -80,6 +82,7 @@ function candidatesOfLevel(slug: string): void {
   console.log(`  freq (частотная полоса уровня, в списках КФУ нет): ${of("freq").length}`);
   console.log(`  freq-late (остаток младших частотных полос, в списках КФУ нет): ${of("freq-late").length}`);
   if (of("freq-next").length) console.log(`  freq-next (после последней полосы, в списках КФУ нет): ${of("freq-next").length}`);
+  if (of("corpus-other").length) console.log(`  corpus-other (слова корпуса без разбора, по частоте): ${of("corpus-other").length}`);
   console.log(`  отложены как совпадающие с русским: ${list.filter((c) => c.cognate).length}; без предложений Tatoeba: ${list.filter((c) => c.tatoeba === 0).length}`);
 }
 

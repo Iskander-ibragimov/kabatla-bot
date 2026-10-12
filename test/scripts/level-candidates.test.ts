@@ -72,6 +72,15 @@ describe("levelCandidates", () => {
     expect(list(5, ["су"]).filter((c) => c.source === "freq-next")).toEqual([]);
   });
 
+  it("offers the last level the words the analyser left without a lemma, by count, after everything else", () => {
+    const unanalysed = [{ word: "ниһаять", count: 150 }, { word: "кинәт", count: 900 }, { word: "сирәк", count: 99 }, { word: "су", count: 500 }, { word: "эш", count: 500 }, { word: "имеш", count: 300 }];
+    const of = (level: number, catalog: string[] = []) =>
+      levelCandidates(level, { pool, ranked, catalog: new Set(catalog), cognates: new Set(), examples, unanalysed }).filter((c) => c.source === "corpus-other");
+    expect(of(5).map((c) => [c.word, c.rank])).toEqual([["кинәт", null], ["имеш", null], ["ниһаять", null]]);
+    expect(of(4)).toEqual([]);
+    expect(of(5, ["кинәт"]).map((c) => c.word)).toEqual(["имеш", "ниһаять"]);
+  });
+
   it("keeps the KFU words of the level whatever their frequency", () => {
     expect(list(2).filter((c) => c.source === "kfu").map((c) => c.word)).toEqual(["эш", "кояш"]);
   });
