@@ -23,6 +23,11 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "белмим": "бе́лмим",
   "беркем": "бе́ркем",
   "һичкем": "һи́чкем",
+  "бернәрсә": "бе́рнәрсә",
+  "беркайда": "бе́ркъайда",
+  "беркая": "бе́ркъайа",
+  "беркайчан": "бе́ркъайчан",
+  "бернинди": "бе́рнинди",
 
   // Other words with the stress off the last syllable.
   "бүген": "бү́ген",
@@ -63,12 +68,17 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "суык": "суwы́къ",
   "куу": "къуwу́",
   "юу": "йуwу́",
+  "суыткыч": "суwыткъы́ч",
 
   // Arabic loans where а (я) after [къ], [гъ] or in a front word is read [ә] ([йә]) and the spelling does not show it.
   "сәлам": "сәлә́м",
   "кадәр": "къәдә́р",
   "гаилә": "гъәилә́",
   "гадәт": "гъәдә́т",
+  "гадәттә": "гъәдәттә́",
+  "гадел": "гъәде́л",
+  "гади": "гъәди́",
+  "гадәти": "гъәдәти́",
   "галим": "гъәли́м",
   "каләм": "къәлә́м",
   "кадер": "къәде́р",
@@ -86,9 +96,14 @@ export const EXCEPTIONS: Readonly<Record<string, string>> = {
   "кыйммәт": "къиммә́т",
   "гыйлем": "гъиле́м",
   "гыйнвар": "гъинwа́р",
+  "шагыйрь": "шагъи́р",
 
   // Arabic loans where о after [гъ] is read [ө].
   "гомер": "гъөме́р",
+  "гореф": "гъөре́ф",
+
+  // A compound whose second part keeps its own (back) vowel row: тимер + аяк.
+  "тимераяк": "тимерайа́къ",
 
   // Russian loans: в is [в], к and г stay plain before back vowels, stress as in Russian.
   "вагон": "ваго́н",
