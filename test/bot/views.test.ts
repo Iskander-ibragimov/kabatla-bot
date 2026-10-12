@@ -10,7 +10,7 @@ import { TELEGRAM_TEXT_LIMIT, visibleLength } from "../helpers/visible";
 const T = Date.UTC(2026, 8, 30, 6);
 const view = (over: Partial<CardView> = {}): CardView => ({
   cardId: 7, noteId: 3, reps: 3, direction: "tt_ru", word: "ышанычлы", transcription: "ышанычлы́", pos: "adj",
-  translation: "надёжный", exampleTt: "Ул ышанычлы кеше.", exampleRu: "Он надёжный человек.", hasAudio: true, sourceUrl: null,
+  translation: "надёжный", exampleTt: "Ул ышанычлы кеше.", exampleRu: "Он надёжный человек.", hasAudio: true, sourceUrl: null, tomorrow: false,
   mem: { ...newMem(T), state: "review", scheduledDays: 3, reps: 3, lastReview: T }, ...over,
 });
 /** What the buttons of a card on the 3-day rung say. */
@@ -112,6 +112,12 @@ describe("views", () => {
     const { text } = renderCard(view(), counts, iv, true, "ru");
     expect(text.split("\n")[1]).toBe("<b>ышанычлы</b>");
     expect(text).not.toContain("→");
+  });
+
+  it("a card whose «Снова» and «Трудно» say «1 день» carries that in their data; «Хорошо» and «Легко» do not change", () => {
+    const data = (v: CardView) => renderCard(v, counts, iv, false, "ru").keyboard.slice(0, 2).flat().map((b) => b.callback_data);
+    expect(data(view({ tomorrow: true }))).toEqual(["g:7:3:1:t", "g:7:3:2:t", "g:7:3:3", "g:7:3:4"]);
+    expect(data(view())).toEqual(["g:7:3:1", "g:7:3:2", "g:7:3:3", "g:7:3:4"]);
   });
 
   it("ru to tt direction hides the Tatar word and its transcription", () => {

@@ -9,7 +9,7 @@ import { type Mem, newMem } from "../../src/srs/ladder";
 import { bulkCards } from "../helpers/catalog";
 import { HINT } from "../../src/tutorial/hints";
 import { countingDb } from "../helpers/countingDb";
-import { asCard, gradeShown } from "../helpers/review";
+import { asCard, gradeShown, logStmt } from "../helpers/review";
 import { WORDS, note, seedCatalog, seedLearner, seedUser } from "../helpers/seed";
 import { applySeed } from "../helpers/seedSql";
 import { study } from "../helpers/sim";
@@ -318,6 +318,60 @@ describe("review service", () => {
 
   describe("hard words (spec A)", () => {
     const AGAIN_STEP = MIN + 1000;
+    /** A word on its first learning step, due at `due`, answered three times in the minutes before `at`. */
+    async function answeredThrice(at: number, due: number) {
+      const { repo, user, noteIds } = await seedUser(env.DB, { now: at, words: 1 });
+      await bulkCards(env.DB, user.id, [[noteIds[0]!, "tt_ru", { ...newMem(at), state: "learning", step: 0, reps: 3, due, lastReview: at - 2 * MIN }, null]]);
+      const id = (await env.DB.prepare("SELECT id FROM cards WHERE user_id = ?").bind(user.id).first<{ id: number }>())!.id;
+      await env.DB.batch([4, 3, 2].map((m) => logStmt(env.DB, {
+        cardId: id, userId: user.id, rating: 1, stateBefore: { ...newMem(at), state: "learning", step: 0 }, intervalBeforeDays: 0, intervalAfterMs: MIN, reviewedAt: at - m * MIN, wasNew: false,
+      })));
+      return { repo, user, id };
+    }
+    /** 04:00 local (+03:00) on 2026-09-30: the learner's day begins. */
+    const DAY_START = Date.UTC(2026, 8, 30, 1, 0);
+
+    it("the day boundary: a card shown at 03:59 with «1 день» and graded at 04:00 goes to tomorrow as its button said", async () => {
+      const shownAt = DAY_START - MIN;
+      const { repo, user, id } = await answeredThrice(shownAt, shownAt - 1000);
+      const s = asCard(await new ReviewService(repo, shownAt).nextScreen(user));
+      expect(s.view.tomorrow).toBe(true);
+      expect(s.intervals).toEqual({ 1: "1 день", 2: "1 день", 3: "10 минут", 4: "1 день" });
+      // At 04:00 the count of today's answers is 0, but the button said «1 день».
+      await gradeShown(repo, user, s, 2, DAY_START);
+      expect((await repo.getCard(user.id, id))!.mem.due).toBe(DAY_START + DAY);
+    });
+
+    it("a button that did not say «1 день» gives no postponement, though the count reached three since", async () => {
+      const { repo, user, id } = await answeredThrice(T, T - 1000);
+      // An old button, or one shown before the third answer: no flag.
+      await new ReviewService(repo, T).grade(user, id, 3, 2, false);
+      expect((await repo.getCard(user.id, id))!.mem.due).toBe(T + 5 * MIN);
+    });
+
+    it("the owner's case: ten hard words graded «Трудно» until the session ends", async () => {
+      const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 10, patch: { newPerDay: 5 } });
+      await seedCatalog(env.DB, ["бер", "ике", "өч", "дүрт", "биш", "алты"].map((word) => ({ level: 1, word })));
+      const hard = (i: number): Mem => ({ ...newMem(T), state: "learning", step: 0, reps: 1, due: T - (20 - i) * MIN, lastReview: T - (25 - i) * MIN });
+      await bulkCards(env.DB, user.id, noteIds.map((id, i) => [id, "tt_ru", hard(i), null]));
+      const labels: string[] = [];
+      const shown = await study(repo, user.id, T, { rate: () => 2, onCard: async (c) => { labels.push(c.intervals[2]); } });
+      // Every label shown is the interval the grade stored.
+      const log = (await env.DB.prepare("SELECT interval_after_ms AS ms, was_new FROM review_log WHERE user_id = ? ORDER BY id").bind(user.id).all<{ ms: number; was_new: number }>()).results;
+      expect(log.map((l) => formatInterval(l.ms, "ru"))).toEqual(labels);
+      // New words never go over the day's limit, and the limit is used.
+      expect(log.filter((l) => l.was_new === 1)).toHaveLength(5);
+      // The session ends: every word shown waits for tomorrow, and the done screen says so.
+      const words = new Set(shown.map((x) => x.noteId));
+      expect(words.size).toBe(15);
+      const end = shown[shown.length - 1]!.at + 10_000;
+      const done = await new ReviewService(repo, end).nextScreen((await repo.getUser(user.id))!);
+      if (done.kind !== "done") throw new Error(`expected done, got ${done.kind}`);
+      expect(done.summary.postponedToday).toBe(15);
+      expect(done.summary.nextLearningInMs).toBeNull();
+      expect(labels.filter((l) => l === "1 день")).toHaveLength(15);
+    });
+
     /** One word answered «Снова» three times, each time once it is due; the screen after the third answer and its time. */
     async function threeTimes() {
       const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
