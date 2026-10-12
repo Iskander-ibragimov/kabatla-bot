@@ -12,6 +12,7 @@ import { countingDb } from "../helpers/countingDb";
 import { easyButton, harness } from "../helpers/botHarness";
 import { echoLlm } from "../helpers/llm";
 import { levelWords, note, seedCatalog, seedUser } from "../helpers/seed";
+import { logStmt } from "../helpers/review";
 import { TELEGRAM_TEXT_LIMIT, visibleLength } from "../helpers/visible";
 
 const T = Date.UTC(2026, 8, 30, 6);
@@ -53,6 +54,24 @@ describe("bot handlers", () => {
     await h.press(grade, cardMsg);
     expect(h.tg.of("answerCallbackQuery").at(-1)!.payload.text).toBe("Эта кнопка уже неактуальна");
     expect(h.tg.of("deleteMessage")).toHaveLength(1);
+  });
+
+  it("«Трудно · 1 день» carries its flag, and the press sends the word to tomorrow; a button without the flag does not", async () => {
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1, tgId: 42 });
+    const id = await repo.insertCard(user.id, noteIds[0]!, "tt_ru", { ...newMem(T), state: "learning", step: 0, reps: 3, due: T - 1000, lastReview: T - 2 * 60_000 });
+    await env.DB.batch([4, 3, 2].map((m) => logStmt(env.DB, {
+      cardId: id, userId: user.id, rating: 1, stateBefore: { ...newMem(T), state: "learning", step: 0 }, intervalBeforeDays: 0, intervalAfterMs: 60_000, reviewedAt: T - m * 60_000, wasNew: false,
+    })));
+    const h = harness(env.DB, { now: T });
+    await h.text("/learn");
+    const data = callbacks(h.lastMarkup() as never);
+    expect(data.slice(0, 4)).toEqual([`g:${id}:3:1:t`, `g:${id}:3:2:t`, `g:${id}:3:3`, `g:${id}:3:4`]);
+    await h.press(`g:${id}:3:2:t`, h.tg.lastMessageId());
+    expect((await repo.getCard(user.id, id))!.mem.due).toBe(T + 86_400_000);
+    // The same state pressed through a button without the flag (one drawn before the feature): 5 minutes.
+    await env.DB.prepare("UPDATE cards SET reps = 3, due = ?, last_review = ? WHERE id = ?").bind(T - 1000, T - 2 * 60_000, id).run();
+    await h.press(`g:${id}:3:2`, h.tg.lastMessageId());
+    expect((await repo.getCard(user.id, id))!.mem.due).toBe(T + 5 * 60_000);
   });
 
   it("undo also re-sends the card as a new message", async () => {

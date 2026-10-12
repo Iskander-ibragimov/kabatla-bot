@@ -11,10 +11,10 @@ export const asCard = (s: Screen) => { if (s.kind !== "card") throw new Error(`e
 export const gradedMem = (now: number): Mem =>
   ({ ...newMem(now), state: "review", due: now + 3 * DAY, lastReview: now, scheduledDays: 3, reps: 1 });
 
-/** Grades the card on screen `s` at `now` with the user's current database row and returns the next screen. */
+/** Grades the card on screen `s` at `now` with the user's current database row, as its button would, and returns the next screen. */
 export async function gradeShown(repo: Repo, user: Pick<User, "id">, s: Screen, rating: Rating, now: number): Promise<Screen> {
   const c = asCard(s);
-  return new ReviewService(repo, now).grade((await repo.getUser(user.id))!, c.view.cardId, c.view.reps, rating);
+  return new ReviewService(repo, now).grade((await repo.getUser(user.id))!, c.view.cardId, c.view.reps, rating, c.view.tomorrow);
 }
 
 /** A row of review_log as a grade writes it, for tests that need a history without grading: not undone, the streak fields at their defaults. */

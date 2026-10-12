@@ -511,7 +511,7 @@ export class Repo {
     return r ? rowToCard(r) : null;
   }
   /**
-   * A card of the user for a grade or an undo, with its answers since the learner's day began (`dayStartMs`) that were
+   * A card of the user for the screen of an undo, with its answers since the learner's day began (`dayStartMs`) that were
    * not undone (spec A3), in one query; null when the card is not the user's.
    */
   async cardForGrade(userId: number, cardId: number, dayStartMs: number): Promise<(CardRow & { answersToday: number }) | null> {

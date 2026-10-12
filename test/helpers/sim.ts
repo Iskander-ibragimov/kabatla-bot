@@ -95,7 +95,7 @@ export async function study(repo: Repo, userId: number, start: number, o: StudyO
     await o.onCard?.(s, now);
     shown.push({ at: now, word: s.view.word, noteId: s.view.noteId, direction: s.view.direction, fresh: s.view.mem.state === "new" });
     now += 5000;
-    s = await new ReviewService(repo, now).grade(await user(), s.view.cardId, s.view.reps, o.rate(s.view, shown.length - 1));
+    s = await new ReviewService(repo, now).grade(await user(), s.view.cardId, s.view.reps, o.rate(s.view, shown.length - 1), s.view.tomorrow);
   }
   return shown;
 }

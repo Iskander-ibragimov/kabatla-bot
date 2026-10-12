@@ -3,7 +3,7 @@ import type { CardRow, Direction, NewNote, NewScope, Queue, Repo, User } from ".
 import { type EmptyReason, emptyReason, mergeStreams, nextSpans, readSpans, scopeKey, writeSpans } from "../levels/order";
 import { LEVELS, levelsOf, posCodesOf } from "../levels/scale";
 import { formatInterval } from "../srs/interval";
-import { type Mem, type Rating, grade as ladderGrade, newMem, preview, stage } from "../srs/ladder";
+import { DAY_ANSWERS, type Mem, type Rating, grade as ladderGrade, newMem, preview, stage } from "../srs/ladder";
 import { type Lead, afterGrade, onCard, onDone } from "../tutorial/hints";
 import { type Window, dayWindow, localDay } from "../users/service";
 import { pick, recentOf } from "./pick";
@@ -16,6 +16,12 @@ export interface CardView {
   cardId: number; noteId: number; reps: number; direction: Direction;
   word: string; transcription: string | null; pos: string; translation: string; exampleTt: string; exampleRu: string;
   hasAudio: boolean; sourceUrl: string | null; gloss: GlossEntry[] | null; mem: Mem;
+  /**
+   * The card is shown with the intervals of «enough for today» (spec A3): «Снова» and «Трудно» say «1 день». Their
+   * buttons carry this, and the grade honours what the button said, not the count at the time of the press: the two
+   * differ when the learner's day ends between the screen and the press.
+   */
+  tomorrow: boolean;
 }
 export interface Feedback { word: string; kind: "grow" | "step" | "lapse" | "first"; beforeDays: number; afterMs: number }
 /** `n`: the new cards still to come today; while a level has a word to give it is what is left of the day's limit. */
@@ -75,8 +81,9 @@ interface QueueRead { q: Queue; fresh: NewNote[]; streamed: boolean; cursors: st
 const byLevel = (pairs: { level: number; n: number }[]): Record<number, number> =>
   Object.fromEntries(LEVELS.map((l) => [l.no, pairs.reduce((sum, p) => (p.level === l.no ? sum + p.n : sum), 0)]));
 
-function toView(row: CardRow | (NewNote & { id: number; mem: Mem })): CardView {
+function toView(row: CardRow | (NewNote & { id: number; mem: Mem }), answersToday: number): CardView {
   return {
+    tomorrow: answersToday >= DAY_ANSWERS,
     cardId: row.id, noteId: row.noteId, reps: row.mem.reps, direction: row.direction, word: row.word, transcription: row.transcription, pos: row.pos,
     translation: row.translation, exampleTt: row.exampleTt, exampleRu: row.exampleRu,
     hasAudio: !!row.audioFileId, sourceUrl: row.sourceUrl, gloss: parseGloss(row.exampleGloss), mem: row.mem,
@@ -184,16 +191,21 @@ export class ReviewService {
     // Only a learning card can have answers today: a review is answered once a day, and a new card not yet.
     const answersToday = q.learning.find((x) => x.id === row.id)?.answersToday ?? 0;
     return {
-      kind: "card", view: toView(row), counts: this.countsOf(user, read), intervals: this.intervalsOf(row.mem, user, answersToday), feedback, canUndo: feedback != null,
+      kind: "card", view: toView(row, answersToday), counts: this.countsOf(user, read), intervals: this.intervalsOf(row.mem, user, answersToday), feedback, canUndo: feedback != null,
       lead: onCard(user.hintsSeen),
     };
   }
 
-  async grade(user: User, cardId: number, reps: number, rating: Rating): Promise<Screen> {
-    const card = await this.repo.cardForGrade(user.id, cardId, dayWindow(user.tzOffsetMin, this.now).dayStartMs);
+  /**
+   * Grades a card as its button said: `tomorrow` is the flag of a button that said «1 день» for «Снова» or «Трудно»
+   * (spec A3, `CardView.tomorrow`). Without it there is no postponement, whatever the count of today's answers is now,
+   * so a label never differs from what the grade stores, also across the start of the learner's day.
+   */
+  async grade(user: User, cardId: number, reps: number, rating: Rating, tomorrow = false): Promise<Screen> {
+    const card = await this.repo.getCard(user.id, cardId);
     if (!card || card.mem.reps !== reps) return { kind: "stale" };
     const before = card.mem;
-    const after = ladderGrade(before, rating, this.now, card.answersToday);
+    const after = ladderGrade(before, rating, this.now, tomorrow ? DAY_ANSWERS : 0);
     const today = localDay(user.tzOffsetMin, this.now);
     const yesterday = localDay(user.tzOffsetMin, this.now - 86_400_000);
     const streak = user.lastStudyDay === today ? user.streak : user.lastStudyDay === yesterday ? user.streak + 1 : 1;
@@ -232,7 +244,7 @@ export class ReviewService {
     const w = dayWindow(user.tzOffsetMin, this.now);
     const card = await this.repo.cardForGrade(user.id, cardId, w.dayStartMs);
     if (!card || card.mem.reps !== reps) return { kind: "stale" };
-    const view = toView(card);
+    const view = toView(card, card.answersToday);
     if (view.gloss === null) return { kind: "stale" };
     const read = await this.readQueue(user, w);
     return {
@@ -261,6 +273,6 @@ export class ReviewService {
     if (!card) return { kind: "noundo" };
     // The queue is read for the counters alone: nothing of it is stored.
     const read = await this.readQueue(user, w);
-    return { kind: "card", view: toView(card), intervals: this.intervalsOf(card.mem, user, card.answersToday), feedback: null, canUndo: false, counts: this.countsOf(user, read), lead: null };
+    return { kind: "card", view: toView(card, card.answersToday), intervals: this.intervalsOf(card.mem, user, card.answersToday), feedback: null, canUndo: false, counts: this.countsOf(user, read), lead: null };
   }
 }

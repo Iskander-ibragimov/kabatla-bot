@@ -19,7 +19,12 @@ export interface Mem {
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
 
-/** The ten rungs of the ladder in ms; index 0 is rung 1. A new word is rung 0. */
+/**
+ * The ten rungs of the ladder in ms; index 0 is rung 1. A new word is rung 0.
+ * Rungs 1 and 2 (the learning steps) must stay shorter than one day, and so must HARD_BOTTOM_MS: `Repo.dayEnd` and the
+ * queue (`waitsPastToday` in db/sql.ts) take a learning card due a day or more after its last answer for one that
+ * «enough for today» (DAY_ANSWERS, TOMORROW_MS) sent to tomorrow.
+ */
 export const RUNGS: readonly number[] = [1 * MIN, 10 * MIN, 1 * DAY, 3 * DAY, 7 * DAY, 14 * DAY, 30 * DAY, 60 * DAY, 120 * DAY, 180 * DAY];
 export const TOP = 10;
 /** «Трудно» on rung 0 or 1 comes back after this long. */

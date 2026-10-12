@@ -197,9 +197,10 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   /* review */
   c.command("learn", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().nextScreen(ctx.user), "send"); });
   c.callbackQuery("learn", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().nextScreen(ctx.user), "send"); });
-  c.callbackQuery(/^g:(\d+):(\d+):([1-4])$/, async (ctx) => {
-    const [, id, reps, r] = ctx.match;
-    await show(ctx, await reviews().grade(ctx.user, Number(id), Number(reps), Number(r) as Rating), "replace");
+  // `:t`: the button said «1 день» (spec A3); buttons drawn before it have no flag and stay valid.
+  c.callbackQuery(/^g:(\d+):(\d+):([1-4])(:t)?$/, async (ctx) => {
+    const [, id, reps, r, tomorrow] = ctx.match;
+    await show(ctx, await reviews().grade(ctx.user, Number(id), Number(reps), Number(r) as Rating, tomorrow === ":t"), "replace");
   });
   /*
    * «🔎 Разбор» / «🔎 Скрыть разбор»: the same card in the same message, with the breakdown of its example open or

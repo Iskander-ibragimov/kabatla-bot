@@ -352,7 +352,7 @@ describe("what the queue reads (Repo.queue) against a plain read of every note a
         for (let n = 0; n < 60 && s.kind === "card"; n++) {
           await expectQueueMatches(repo, user.id, at);
           at += 5000;
-          s = await new ReviewService(repo, at).grade(await me(), s.view.cardId, s.view.reps, randomGrade(r));
+          s = await new ReviewService(repo, at).grade(await me(), s.view.cardId, s.view.reps, randomGrade(r), s.view.tomorrow);
           const x = r();
           if (x < 0.08) {
             // The grade is taken back; half of the time the learner then presses «Учить» instead of grading the card again.

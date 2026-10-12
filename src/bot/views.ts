@@ -227,7 +227,8 @@ export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, str
   const open = glossOpen && v.gloss !== null;
   const text = fitCard((fit) => cardText(v, c, lang, lead, fit, open), open ? v.gloss!.length : 0);
 
-  const keyboard = gradeRows(intervals, (r) => `g:${v.cardId}:${v.reps}:${r}`, lang);
+  // «Снова» and «Трудно» of a card with «enough for today» carry «:t», so the grade gives what they say (spec A3).
+  const keyboard = gradeRows(intervals, (r) => `g:${v.cardId}:${v.reps}:${r}${v.tomorrow && r <= 2 ? ":t" : ""}`, lang);
   const extra: Button[] = [];
   if (v.hasAudio) extra.push(btn(t.speak, `v:${v.noteId}`));
   if (canUndo) extra.push(btn(t.undo, "u"));
