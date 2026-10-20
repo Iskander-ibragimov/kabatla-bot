@@ -137,10 +137,12 @@ const RATINGS = [1, 2, 3, 4] as const;
 /** Every way through the three words: one button on each, 64 in all. */
 const RUNS = RATINGS.flatMap((a) => RATINGS.flatMap((b) => RATINGS.map((c) => [a, b, c])));
 
+/** The answers after «Уровни» that finish the introduction: «Начать», the reminder at 09:00, the zone of Moscow. */
+const FINISH = ["ob:go", "ob:09:00", "ob:tz:180"];
 /** Goes through the introduction in Russian up to the first card, with the levels as they are checked at first: A1. The practice is skipped. */
 async function introduced(b: ReturnType<typeof bot>) {
   await b.text("/start");
-  for (const answer of ["ob:ru", "ob:n1", "ob:n2", "ob:go"]) await b.press(answer, 100);
+  for (const answer of ["ob:ru", "ob:n1", "ob:n2", ...FINISH]) await b.press(answer, 100);
 }
 /** Goes through the introduction up to the practice card, in the message 100. */
 async function atPractice(b: ReturnType<typeof bot>, lang: "ru" | "tt" = "ru") {
@@ -149,7 +151,7 @@ async function atPractice(b: ReturnType<typeof bot>, lang: "ru" | "tt" = "ru") {
 }
 
 describe("the introduction", () => {
-  it("/start → the language → the screen about the bot → the practice of three words, one button each → «Дальше» → the levels → «Начать»: the first real card, with the intervals the practice showed", async () => {
+  it("/start → the language → the screen about the bot → the practice of three words, one button each → «Дальше» → the levels → «Начать» → the reminder hour → the time zone: «Готово» and the first real card, with the intervals the practice showed", async () => {
     await catalog(env.DB);
     const b = bot();
     const start = await b.text("/start");
@@ -197,19 +199,33 @@ describe("the introduction", () => {
     const final = b.h.tg.lastMessageId();
     const next = await b.press("ob:n2");
     edited(next, final);
-    expect(b.h.lastText()).toBe("Что учить? Отметьте один или несколько уровней. Напоминание — каждый день в 09:00 по Москве, 10 новых слов в день. Всё это меняется в /settings.");
+    expect(b.h.lastText()).toBe("Что учить? Отметьте один или несколько уровней. 10 новых слов в день — это меняется в /settings.");
     expect(buttons(b.h.lastMarkup())).toEqual(LEVELS_RU(true, false));
     expect((b.h.lastMarkup().inline_keyboard ?? []).every((row) => row.length === 1)).toBe(true);
     expect(await b.user()).toMatchObject({ onboardingStep: "levels", levels: 0b1 });
 
+    // «Начать» asks the hour of the daily reminder, in the same message.
     const go = await b.press("ob:go");
-    // The buttons leave the message of the introduction; the card is a message of its own; nothing says «Готово».
-    expect(go.methods).toEqual(["editMessageReplyMarkup", "sendMessage", "answerCallbackQuery"]);
-    expect(go.calls[0]!.payload).toMatchObject({ message_id: final });
-    expect(go.calls[0]!.payload.reply_markup).toBeUndefined();
+    edited(go, final);
+    expect(b.h.lastText()).toBe("Во сколько присылать напоминание?");
+    expect(buttons(b.h.lastMarkup())).toEqual([["08:00", "ob:08:00"], ["09:00", "ob:09:00"], ["12:00", "ob:12:00"], ["19:00", "ob:19:00"], ["21:00", "ob:21:00"]]);
+    expect((b.h.lastMarkup().inline_keyboard ?? []).map((row) => row.length)).toEqual([3, 2]);
+    expect(await b.user()).toMatchObject({ onboardingStep: "reminder" });
+    // Then the time zone, by the time it is now there (06:00 UTC).
+    const hour = await b.press("ob:09:00");
+    edited(hour, final);
+    expect(b.h.lastText()).toBe("Сколько у вас сейчас времени? Так я узнаю часовой пояс.\n<i>Если нет вашего варианта, напишите время, например 14:35.</i>");
+    expect(buttons(b.h.lastMarkup())).toEqual([["08:00", "ob:tz:120"], ["09:00", "ob:tz:180"], ["10:00", "ob:tz:240"], ["11:00", "ob:tz:300"], ["13:00", "ob:tz:420"], ["16:00", "ob:tz:600"]]);
+    expect(await b.user()).toMatchObject({ onboardingStep: "zone", remindAt: "09:00" });
+
+    const zone = await b.press("ob:tz:180");
+    // The message of the introduction says «Готово» and loses its buttons; the card is a message of its own.
+    expect(zone.methods).toEqual(["editMessageText", "sendMessage", "answerCallbackQuery"]);
+    expect(zone.calls[0]!.payload).toMatchObject({ message_id: final, text: "Готово! Каждый день в <b>09:00</b> (МСК) пришлю напоминание, если есть что повторить или ждут новые слова. Время можно поменять в /settings.\n\nПервое слово — ниже ↓" });
+    expect(zone.calls[0]!.payload.reply_markup).toBeUndefined();
     // A card is sent as HTML and never grows a link preview, whatever its source link.
-    expect(go.calls[1]!.payload).toMatchObject({ parse_mode: "HTML", link_preview_options: { is_disabled: true } });
-    expect(go.toast).toBeUndefined();
+    expect(zone.calls[1]!.payload).toMatchObject({ parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+    expect(zone.toast).toBeUndefined();
     expect(b.h.lastText().startsWith(`Вспомните перевод, откройте скрытый текст и оцените себя.\n\n${COUNTERS}\n<b>сәлам</b>\n`)).toBe(true);
     const real = (b.h.lastMarkup() as Markup).inline_keyboard!.flat().slice(0, 4);
     expect(real.map((x) => x.callback_data)).toEqual([expect.stringMatching(/^g:\d+:0:1$/), expect.stringMatching(/:2$/), expect.stringMatching(/:3$/), expect.stringMatching(/:4$/)]);
@@ -221,9 +237,9 @@ describe("the introduction", () => {
       nextDailyAt: nextOccurrence(180, "09:00", T), nextEveningAt: nextOccurrence(180, "20:00", T),
     });
     // D1 calls: the user; the step, and for «Уровни» the counters of the levels; a practice press reads the user and
-    // nothing else; the finish is the user, the guarded write, the user again, the queue, its read positions, the new
-    // card and the session.
-    expect([start.d1, lang.d1, tryIt.d1, ...presses.map((p) => p.d1), next.d1, go.d1]).toEqual([3, 2, 2, 1, 1, 1, 3, 7]);
+    // nothing else; «Начать» and the hour are the user and the guarded write; the finish is the user, the guarded
+    // write, the user again, the queue, its read positions, the new card and the session.
+    expect([start.d1, lang.d1, tryIt.d1, ...presses.map((p) => p.d1), next.d1, go.d1, hour.d1, zone.d1]).toEqual([3, 2, 2, 1, 1, 1, 3, 2, 2, 7]);
   });
 
   it("the levels are checked and unchecked on the step «Уровни», by the rules of the settings, and the first card is of the levels checked", async () => {
@@ -251,12 +267,12 @@ describe("the introduction", () => {
     expect(last.d1).toBe(2);
     expect(await b.user()).toMatchObject({ onboardingStep: "levels", levels: 0b10 });
 
-    await b.press("ob:go");
+    for (const answer of FINISH) await b.press(answer);
     expect(b.h.lastText().startsWith(`${ru.hintFront}\n\n${COUNTERS}\n<b>сәяхәт</b>\n`)).toBe(true);
     expect(await b.user()).toMatchObject({ onboardingStep: null, levels: 0b10 });
   });
 
-  it("is in Tatar for a learner who chose it: the screen about the bot, the practice card, the levels and the hint of the first card", async () => {
+  it("is in Tatar for a learner who chose it: the screen about the bot, the practice card, the levels, the reminder hour, the time zone, «Әзер» and the hint of the first card", async () => {
     await catalog(env.DB);
     const b = bot();
     await b.text("/start");
@@ -295,6 +311,12 @@ describe("the introduction", () => {
       ["☑ A1 · 5 сүз · текстның ≈45 %", "ob:lv:1"], ["☐ A2 · 1 сүз", "ob:lv:2"], ["☐ B1 · тиздән", "ob:lv:3"], ["☐ B2 · тиздән", "ob:lv:4"], ["☐ C1 · тиздән", "ob:lv:5"], ["Башлау", "ob:go"],
     ]);
     await b.press("ob:go");
+    expect(b.h.lastText()).toBe("Сәгать ничәдә искә төшерим?");
+    await b.press("ob:21:00");
+    expect(b.h.lastText()).toBe("Сездә хәзер сәгать ничә? Шулай сәгать поясыгызны белермен.\n<i>Үз вариантыгыз булмаса, вакытны языгыз, мәсәлән 14:35.</i>");
+    const zone = await b.press("ob:tz:300");
+    expect(zone.calls[0]!.payload.text).toBe("Әзер! Кабатлыйсы яки яңа сүзләр булса, көн саен искә төшерермен. Вакыты: <b>21:00</b> (UTC+5). Аны /settings командасы белән үзгәртеп була.\n\nБеренче сүз — астарак ↓");
+    expect(await b.user()).toMatchObject({ onboardingStep: null, remindAt: "21:00", tzOffsetMin: 300 });
     expect(b.h.lastText().startsWith(`${tt.hintFront}\n\n${COUNTERS}\n<b>сәлам</b>\n`)).toBe(true);
     expect(buttons(b.h.lastMarkup()).slice(0, 4).map(([text]) => text)).toEqual(LABELS_TT);
     // A grade says nothing about its button: the next card starts with its counters.
@@ -340,18 +362,22 @@ describe("the introduction", () => {
     expect(await again()).toEqual([CARD_RU(1), keys(LABELS_RU, 1, SKIP_RU)]);
     await b.press("ob:n2", 100);
     expect(await again()).toEqual([ru.obLevels, LEVELS_RU(true, false)]);
-    await b.press("ob:go");
+    await b.press("ob:go", 100);
+    expect(await again()).toEqual([ru.obRemindQ, [["08:00", "ob:08:00"], ["09:00", "ob:09:00"], ["12:00", "ob:12:00"], ["19:00", "ob:19:00"], ["21:00", "ob:21:00"]]]);
+    await b.press("ob:12:00", 100);
+    expect(await again()).toEqual([ru.obTzQ, [["08:00", "ob:tz:120"], ["09:00", "ob:tz:180"], ["10:00", "ob:tz:240"], ["11:00", "ob:tz:300"], ["13:00", "ob:tz:420"], ["16:00", "ob:tz:600"]]]);
+    await b.press("ob:tz:180", 100);
     await b.text("/start");
     expect(b.h.lastText()).toBe(ru.alreadySetUp);
   });
 
-  it("two «Начать» at once finish once: one card, and the other tap is answered as a stale button", async () => {
+  it("two time zones at once finish once: one card, and the other tap is answered as a stale button", async () => {
     await catalog(env.DB);
     const b = bot();
     await b.text("/start");
-    for (const answer of ["ob:ru", "ob:n1", "ob:n2"]) await b.press(answer);
+    for (const answer of ["ob:ru", "ob:n1", "ob:n2", "ob:go", "ob:09:00"]) await b.press(answer);
     const before = b.h.tg.calls.length;
-    await Promise.all([b.h.press("ob:go", 100), b.h.press("ob:go", 100)]);
+    await Promise.all([b.h.press("ob:tz:180", 100), b.h.press("ob:tz:240", 100)]);
     const calls = b.h.tg.calls.slice(before);
     expect(calls.filter((c) => c.method === "sendMessage")).toHaveLength(1);
     expect(calls.filter((c) => c.method === "answerCallbackQuery").map((c) => c.payload.text).sort()).toEqual([ru.staleButton, undefined].sort());
@@ -363,8 +389,9 @@ describe("the introduction", () => {
     await b.text("/start");
     for (const answer of ["ob:ru", "ob:n1", "ob:n2"]) await b.press(answer, 100);
     expect(buttons(b.h.lastMarkup()).map(([text]) => text)).toEqual(["☑ A1 · скоро", "☐ A2 · скоро", "☐ B1 · скоро", "☐ B2 · скоро", "☐ C1 · скоро", "Начать"]);
-    const go = await b.press("ob:go", 100);
-    expect(go.methods).toEqual(["editMessageReplyMarkup", "answerCallbackQuery", "sendMessage"]);
+    for (const answer of ["ob:go", "ob:09:00"]) await b.press(answer, 100);
+    const zone = await b.press("ob:tz:180", 100);
+    expect(zone.methods).toEqual(["editMessageText", "answerCallbackQuery", "sendMessage"]);
     expect(b.h.lastText()).toBe(ru.nothingToLearn);
     expect((await b.user()).onboardingStep).toBeNull();
   });
@@ -379,13 +406,17 @@ describe("the introduction", () => {
       await b.text("/start");
       const repo = new Repo(env.DB);
       // The language step answers with its own screen as a new message: «a learner who has not chosen a language yet» below.
-      const steps: [answer: string, foreign: string[]][] = [["ob:ru", ["ob:ru", "ob:n2", "ob:next", "ob:go", "ob:lv:1"]], ["ob:n1", ["ob:tt", "ob:n1", "ob:next", "ob:go"]], ["ob:n2", ["ob:ru", "ob:n1", "ob:n2", "ob:next", "ob:lv:9"]]];
-      for (const [answer, foreign] of steps) {
+      // On the hour an old button of an hour is an answer, as the buttons of the step are; on the zone even that is not.
+      const steps: [answer: string, foreign: string[], old: string[]][] = [
+        ["ob:ru", ["ob:ru", "ob:n2", "ob:next", "ob:go", "ob:lv:1"], OLD], ["ob:n1", ["ob:tt", "ob:n1", "ob:next", "ob:go"], OLD], ["ob:n2", ["ob:ru", "ob:n1", "ob:n2", "ob:next", "ob:lv:9"], OLD],
+        ["ob:go", ["ob:ru", "ob:n2", "ob:go", "ob:lv:1", "ob:09:30", "ob:tz:240"], ["ob:1", "ob:0", "ob:10", "ob:180"]], ["ob:09:00", ["ob:ru", "ob:go", "ob:lv:1", "ob:21:00", "ob:tz:60", "ob:tz:330"], OLD],
+      ];
+      for (const [answer, foreign, old] of steps) {
         await b.press(answer, 100);
         const user = await b.user();
-        const screen = renderOnboarding(await startOnboarding(repo, user), "ru");
+        const screen = renderOnboarding(await startOnboarding(repo, user, T), "ru");
         // Message 77 is an old message of the introduction, with buttons this step does not have.
-        for (const data of [...OLD, ...foreign]) {
+        for (const data of [...old, ...foreign]) {
           const u = await b.press(data, 77);
           expect(u.methods, `${user.onboardingStep} ${data}`).toEqual(["editMessageText", "answerCallbackQuery"]);
           expect(u.calls[0]!.payload).toMatchObject({ message_id: 77, text: screen.text, reply_markup: { inline_keyboard: screen.keyboard } });
@@ -430,6 +461,25 @@ describe("the introduction", () => {
       expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM cards").first<{ n: number }>())!.n).toBe(0);
     });
 
+    it("on the time-zone step the time typed is the answer: «Готово» and the first card as new messages; any other text sends the step again", async () => {
+      await catalog(env.DB);
+      const b = bot();
+      await b.text("/start");
+      for (const answer of ["ob:ru", "ob:n1", "ob:n2", "ob:go", "ob:19:00"]) await b.press(answer, 100);
+      const user = await b.user();
+      for (const typed of ["рәхмәт", "25:00", "07:00", "/learn"]) {
+        const u = await b.text(typed);
+        expect(u.calls.map((c) => [c.method, c.payload.text]), typed).toEqual([["sendMessage", typed === "/learn" ? ru.chooseAbove : ru.obTzQ]]);
+      }
+      expect(await b.user()).toEqual(user);
+      // 06:00 UTC: 11:00 is UTC+5.
+      const typed = await b.text("11:00");
+      expect(typed.methods).toEqual(["sendMessage", "sendMessage"]);
+      expect(typed.calls[0]!.payload.text).toBe("Готово! Каждый день в <b>19:00</b> (UTC+5) пришлю напоминание, если есть что повторить или ждут новые слова. Время можно поменять в /settings.\n\nПервое слово — ниже ↓");
+      expect(b.h.lastText().startsWith(`${ru.hintFront}\n\n${COUNTERS}\n<b>сәлам</b>\n`)).toBe(true);
+      expect(await b.user()).toMatchObject({ onboardingStep: null, remindAt: "19:00", tzOffsetMin: 300, nextDailyAt: nextOccurrence(300, "19:00", T) });
+    });
+
     it("after the introduction every button of it, old or new, is a stale button and changes nothing", async () => {
       await catalog(env.DB);
       const b = bot();
@@ -444,7 +494,7 @@ describe("the introduction", () => {
       expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM cards").first<{ n: number }>())!.n).toBe(1);
     });
 
-    it("a learner who stood in the middle of the old introduction is on «Уровни»: «Знаю» shows that step, «Начать» gives the first card", async () => {
+    it("a learner who stood on «Уровни» (or in the middle of the old introduction) goes on through the reminder hour and the time zone: «Знаю» shows that step, «Начать» asks the hour", async () => {
       await catalog(env.DB);
       const b = bot();
       await b.text("/start");
@@ -455,10 +505,13 @@ describe("the introduction", () => {
       expect(know.methods).toEqual(["editMessageText", "answerCallbackQuery"]);
       expect(know.calls[0]!.payload).toMatchObject({ message_id: 55, text: tt.obLevels });
       expect(know.toast).toBe(tt.chooseAbove);
-      await b.press("ob:go", 55);
+      edited(await b.press("ob:go", 55), 55);
+      expect(b.h.lastText()).toBe(tt.obRemindQ);
+      await b.press("ob:08:00", 55);
+      await b.press("ob:tz:180", 55);
       expect(b.h.lastText().startsWith(`${tt.hintFront}\n\n${COUNTERS}\n<b>сәлам</b>\n`)).toBe(true);
-      // The step said 09:00 and 10 words a day: that is what the learner has.
-      expect(await b.user()).toMatchObject({ onboardingStep: null, hintsSeen: HINT.update, newPerDay: 10, remindAt: "09:00", tzOffsetMin: 180 });
+      // The step said 10 words a day; the hour and the zone are the ones chosen.
+      expect(await b.user()).toMatchObject({ onboardingStep: null, hintsSeen: HINT.update, newPerDay: 10, remindAt: "08:00", tzOffsetMin: 180 });
     });
 
     it.each(["placement", "goal", "remind", "tz"])("a step of the old introduction left in the row (%s) is the language step: no update fails, and the learner goes on", async (stored) => {
@@ -466,7 +519,7 @@ describe("the introduction", () => {
       const b = bot();
       await b.text("/start");
       await new Repo(env.DB).updateUser((await b.user()).id, { onboardingStep: stored, onboardingData: JSON.stringify({ i: 3, known: 2 }) });
-      for (const data of ["ob:1", "ob:10", "ob:09:00", "ob:180", "ob:n1", "ob:n2", "ob:go"]) {
+      for (const data of ["ob:1", "ob:10", "ob:09:00", "ob:180", "ob:tz:180", "ob:n1", "ob:n2", "ob:go"]) {
         const u = await b.press(data, 100);
         expect(u.methods, data).toEqual(["sendMessage", "answerCallbackQuery"]);
         expect(u.calls[0]!.payload, data).toMatchObject({ text: ru.welcome });
@@ -888,7 +941,7 @@ describe("/howto, «Как это работает»", () => {
     // The message is still the step: a level is checked in it, and «Начать» gives the first card.
     edited(await b.press("ob:lv:2", 100));
     expect(buttons(b.h.lastMarkup())).toEqual(LEVELS_RU(true, true));
-    await b.press("ob:go", 100);
+    for (const answer of FINISH) await b.press(answer, 100);
     expect(b.h.lastText().startsWith(`${ru.hintFront}\n\n${COUNTERS}\n<b>сәлам</b>\n`)).toBe(true);
   });
 
@@ -914,7 +967,7 @@ describe("/howto, «Как это работает»", () => {
       expect(skip.toast).toBe(ru.chooseAbove);
     }
     expect([b.h.lastText(), buttons(b.h.lastMarkup())]).toEqual([ru.obLevels, LEVELS_RU(true, false)]);
-    await b.press("ob:go", 100);
+    for (const answer of FINISH) await b.press(answer, 100);
     expect(b.h.lastText().startsWith(`${ru.hintFront}\n\n${COUNTERS}\n<b>сәлам</b>\n`)).toBe(true);
   });
 
@@ -1088,7 +1141,7 @@ describe("hints", () => {
     const b = bot();
     await atPractice(b);
     for (const data of ["pr:s1:1", "pr:s2:2", "pr:s3:3"]) await b.step(data);
-    for (const answer of ["ob:n2", "ob:go"]) await b.press(answer);
+    for (const answer of ["ob:n2", ...FINISH]) await b.press(answer);
     expect(b.h.lastText().startsWith(`${ru.hintFront}\n\n${COUNTERS}\n<b>сәлам</b>\n`)).toBe(true);
     expect((await b.user()).hintsSeen).toBe(HINT.update);
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM review_log").first<{ n: number }>())!.n).toBe(0);

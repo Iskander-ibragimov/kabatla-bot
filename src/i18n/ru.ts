@@ -86,7 +86,14 @@ export const ru = {
   skipBtn: "Пропустить",
   nextBtn: "Дальше",
   /** The step «Уровни»; under it a button for every level, with its checkbox, and the button that finishes. It names the defaults of users/service.ts. */
-  obLevels: "Что учить? Отметьте один или несколько уровней. Напоминание — каждый день в 09:00 по Москве, 10 новых слов в день. Всё это меняется в /settings.",
+  obLevels: "Что учить? Отметьте один или несколько уровней. 10 новых слов в день — это меняется в /settings.",
+  /** The step of the reminder hour, after «Уровни» (as in bot-anki). */
+  obRemindQ: "Во сколько присылать напоминание?",
+  /** The time-zone step: each button is a zone with the time it is there now. */
+  obTzQ: "Сколько у вас сейчас времени? Так я узнаю часовой пояс.\n<i>Если нет вашего варианта, напишите время, например 14:35.</i>",
+  /** The end of the introduction, before the first card; `tz` is `moscowZone` or «UTC+5». */
+  obFinished: (time: string, tz: string) => `Готово! Каждый день в <b>${time}</b> (${tz}) пришлю напоминание, если есть что повторить или ждут новые слова. Время можно поменять в /settings.\n\nПервое слово — ниже ↓`,
+  moscowZone: "МСК",
   obGoBtn: "Начать",
   /** «400 слов»: the cards a level has, on its button of the step «Уровни». */
   levelWords: (n: number) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? "слово" : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "слова" : "слов"}`,

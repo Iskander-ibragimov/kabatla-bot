@@ -46,6 +46,7 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   genLeft: [[2]],
   genAdded: [["сәяхәт", 20]],
   statsText: [[{ ...STATS, levels: "A1, A2", coverage: 54 }], [{ ...STATS, levels: "A1", coverage: null }], [{ ...STATS, levels: "B1, B2, C1", coverage: 61 }]],
+  obFinished: [["09:00", "UTC+5"]],
   setNew: [[10]],
   setRemind: [["09:00"]],
   setTz: [["UTC+3"], ["UTC+5:30"]],
@@ -97,7 +98,7 @@ describe("i18n dictionaries", () => {
     // Names that stay in Latin script. Everything else Latin is a look-alike or a leftover.
     const LATIN_OK = /AI|Anki|Tatoeba|CC BY 2\.0 FR|corpus\.tatar|speech\.tatar|UTC|A1|A2|B1|B2|C1/g;
     // Tags, commands, emoji (with the variation selector) and symbols that isTatarText does not know.
-    const NOT_TEXT = /<[^>]+>|\/\w+|\p{Extended_Pictographic}|[️\n·≈%№~+→↑<„“]/gu;
+    const NOT_TEXT = /<[^>]+>|\/\w+|\p{Extended_Pictographic}|[️\n·≈%№~+→↑↓<„“]/gu;
     for (const k of KEYS) {
       for (const text of texts(tt, k)) {
         const letters = text.replace(NOT_TEXT, "").replace(LATIN_OK, "");
@@ -188,13 +189,19 @@ describe("i18n dictionaries", () => {
     for (const d of [ru, tt]) for (const key of ["zzz", "toString", "__proto__"]) expect(d.posGroupName(key)).toBe(key);
   });
 
-  it("the screen about the bot and the step of the levels, word for word in Russian, and the buttons of the introduction", () => {
+  it("the screen about the bot, the step of the levels, the reminder hour, the time zone and the finish, word for word in Russian, and the buttons of the introduction", () => {
     expect(ru.intro1).toBe("Кабатла учит татарские слова карточками. Слово возвращается тогда, когда вы начинаете его забывать: сначала через минуты, потом через дни и месяцы. Так оно остаётся в памяти надолго.\n\nСейчас попробуем на трёх словах — это займёт полминуты.");
-    expect(ru.obLevels).toBe("Что учить? Отметьте один или несколько уровней. Напоминание — каждый день в 09:00 по Москве, 10 новых слов в день. Всё это меняется в /settings.");
+    expect(ru.obLevels).toBe("Что учить? Отметьте один или несколько уровней. 10 новых слов в день — это меняется в /settings.");
+    expect([ru.obRemindQ, ru.obTzQ, ru.obFinished("09:00", ru.moscowZone)]).toEqual([
+      "Во сколько присылать напоминание?",
+      "Сколько у вас сейчас времени? Так я узнаю часовой пояс.\n<i>Если нет вашего варианта, напишите время, например 14:35.</i>",
+      "Готово! Каждый день в <b>09:00</b> (МСК) пришлю напоминание, если есть что повторить или ждут новые слова. Время можно поменять в /settings.\n\nПервое слово — ниже ↓",
+    ]);
     expect([ru.tryBtn, ru.skipBtn, ru.nextBtn, ru.obGoBtn]).toEqual(["Попробовать", "Пропустить", "Дальше", "Начать"]);
     expect([tt.tryBtn, tt.skipBtn, tt.nextBtn, tt.obGoBtn]).toEqual(["Сынап карау", "Үткәреп җибәрү", "Алга таба", "Башлау"]);
-    // The Tatar step names the same defaults and the same command.
-    for (const part of ["09:00", "10", "/settings"]) expect(tt.obLevels).toContain(part);
+    // The Tatar steps name the same default, the same hour and the same command.
+    for (const part of ["10", "/settings"]) expect(tt.obLevels).toContain(part);
+    for (const part of ["<b>09:00</b>", "(Мәскәү вакыты)", "/settings"]) expect(tt.obFinished("09:00", tt.moscowZone)).toContain(part);
   });
 
   it("the texts of the three-word practice, word for word: Russian by the practice spec §2, Tatar in the same voice", () => {

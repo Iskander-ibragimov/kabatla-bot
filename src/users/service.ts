@@ -94,15 +94,17 @@ export async function setSetting(repo: Repo, userId: number, key: SettingKey, va
 
 /**
  * What a new learner studies with until it is changed in the settings; the step «Уровни» of the introduction says so,
- * and its finish stores it. The levels are the learner's own choice on that step, A1 to begin with.
+ * and its finish stores it. The levels, the reminder hour and the time zone are the learner's own choice.
  */
-export const DEFAULTS = { newPerDay: 10, remindAt: "09:00", tzOffsetMin: 180 } as const;
+export const DEFAULTS = { newPerDay: 10 } as const;
 
 /**
  * The introduction, `users.onboarding_step`: the language, the screen about the bot, the practice card, the levels to
- * study; NULL once it is finished. Nothing else is asked: the rest is `DEFAULTS`.
+ * study, the hour of the daily reminder, the time zone; NULL once it is finished. Nothing else is asked: the rest is
+ * `DEFAULTS`. The hour and the zone are named `reminder` and `zone`, not `remind` and `tz` as in the introduction that
+ * is gone, so that a learner stored on one of those, who never chose the levels, still starts again from the language.
  */
-const STEPS = ["lang", "intro1", "practice", "levels"] as const;
+const STEPS = ["lang", "intro1", "practice", "levels", "reminder", "zone"] as const;
 type Step = (typeof STEPS)[number];
 /** The second screen about the bot, which the practice card replaced: a learner stored on it stands on the practice. */
 const STEP_BEFORE_PRACTICE = "intro2";
@@ -115,6 +117,44 @@ const stepOf = (user: Pick<User, "onboardingStep">): Step => {
 export const onLanguageStep = (user: Pick<User, "onboardingStep">): boolean => user.onboardingStep != null && stepOf(user) === "lang";
 /** The learner is in the introduction and stands on its practice card. Anyone else who presses a practice button is looking at it again. */
 export const onPracticeStep = (user: Pick<User, "onboardingStep">): boolean => user.onboardingStep != null && stepOf(user) === "practice";
+/** The learner stands on the time-zone step, which also takes the time typed in the chat. */
+export const onZoneStep = (user: Pick<User, "onboardingStep">): boolean => user.onboardingStep != null && stepOf(user) === "zone";
+
+/** The zones the time-zone step offers (as in bot-anki), each on a button with the time it is there now; all are zones of the settings. */
+const ZONE_CHOICES = [120, 180, 240, 300, 420, 600];
+function zoneOptions(now: number) {
+  return ZONE_CHOICES.map((offset) => {
+    const d = new Date(now + offset * MIN);
+    return { offset, label: `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}` };
+  });
+}
+
+/** UTC offset in minutes from the local time the user reports, rounded to the half hour; handles the midnight wrap. */
+export function offsetFromReported(h: number, m: number, now: number): number {
+  const utc = new Date(now);
+  let diff = h * 60 + m - (utc.getUTCHours() * 60 + utc.getUTCMinutes());
+  while (diff <= -720) diff += 1440;
+  while (diff > 840) diff -= 1440;
+  return Math.round(diff / 30) * 30;
+}
+
+/**
+ * The zone of an answer of the time-zone step: `tz:<offset>`, a button's, or `at:<time>`, the time it is now typed in
+ * the chat (14:35 or 14.35); null unless the settings have that zone. The prefixes keep an hour or a zone of an old
+ * message from being read as the time it is now.
+ */
+function zoneOf(answer: string, now: number): number | null {
+  const typed = answer.match(/^at:\s*(\d{1,2})[:.](\d{2})\s*$/);
+  let offset: number | null = null;
+  if (typed) {
+    const h = Number(typed[1]), m = Number(typed[2]);
+    if (h < 24 && m < 60) offset = offsetFromReported(h, m, now);
+  } else {
+    const button = answer.match(/^tz:(\d+)$/);
+    if (button && ZONE_CHOICES.includes(Number(button[1]))) offset = Number(button[1]);
+  }
+  return offset != null && TZ_OFFSETS.includes(offset) ? offset : null;
+}
 
 export type OnboardingScreen =
   | { kind: "lang" }
@@ -124,8 +164,12 @@ export type OnboardingScreen =
   | { kind: "practice" }
   /** The levels of the scale, to check and uncheck. */
   | { kind: "levels"; lines: LevelLine[] }
-  /** The introduction is over: the first card comes next. */
-  | { kind: "finished" }
+  /** The hour of the daily reminder, one of `REMIND_TIMES`. */
+  | { kind: "reminder" }
+  /** The time zone, by the time it is now there. */
+  | { kind: "zone"; options: { label: string; offset: number }[] }
+  /** The introduction is over, with the hour and the zone of the reminder stored: the first card comes next. */
+  | { kind: "finished"; remindAt: string; tzOffsetMin: number }
   /**
    * The step does not take this answer; nothing was written. `why`: the answer was a level that cannot be flipped —
    * `last`, the only one checked; `soon`, one without cards.
@@ -135,11 +179,13 @@ export type OnboardingScreen =
   | { kind: "stale" };
 
 /** The screen of the step the learner stands on (shown on /start, and in place of a screen the introduction no longer has). */
-export async function startOnboarding(repo: Repo, user: User): Promise<OnboardingScreen> {
+export async function startOnboarding(repo: Repo, user: User, now = Date.now()): Promise<OnboardingScreen> {
   switch (stepOf(user)) {
     case "intro1": return { kind: "intro" };
     case "practice": return { kind: "practice" };
     case "levels": return { kind: "levels", lines: await levelLines(repo, user) };
+    case "reminder": return { kind: "reminder" };
+    case "zone": return { kind: "zone", options: zoneOptions(now) };
     default: return { kind: "lang" };
   }
 }
@@ -148,8 +194,11 @@ export async function startOnboarding(repo: Repo, user: User): Promise<Onboardin
  * Applies one answer and returns the next screen. The answers: `ru` / `tt` on the language step; `n1` on the screen
  * about the bot and `n2` on the practice card — each has its own, so a second tap on «Попробовать», which arrives
  * when the learner already stands on the practice, does not pass it; on «Уровни», `lv:<n>` flips the level n and `go`
- * finishes. Any other answer is invalid and keeps the step. The buttons of the practice card itself are no answers of
- * the introduction: they change nothing of the learner (tutorial/practice.ts).
+ * goes on; then an hour of `REMIND_TIMES`, then the zone — `tz:<offset>` or `at:<time typed>` — which finishes. Any
+ * other answer is invalid and keeps the step. «Начать», the hour and the zone are written only while the learner
+ * still stands on their step: of two that arrive together, or one read before the learner went on, the other is
+ * stale. The buttons of the practice card itself are no answers of the introduction: they change nothing of the
+ * learner (tutorial/practice.ts).
  */
 export async function advanceOnboarding(repo: Repo, user: User, answer: string, now: number): Promise<OnboardingScreen> {
   if (user.onboardingStep == null) return { kind: "stale" };
@@ -177,12 +226,20 @@ export async function advanceOnboarding(repo: Repo, user: User, answer: string, 
         return { kind: "levels", lines: await levelLines(repo, (await repo.getUser(user.id))!) };
       }
       if (answer !== "go") return invalid;
-      // Two «Начать» may arrive together, or one after the learner has studied: the write is guarded on the step, so only the first finishes.
-      const finished = await repo.finishOnboarding(user.id, {
-        ...DEFAULTS, onboardingStep: null, onboardingData: null, hintsSeen: HINT.update,
-        nextDailyAt: nextOccurrence(DEFAULTS.tzOffsetMin, DEFAULTS.remindAt, now), nextEveningAt: nextOccurrence(DEFAULTS.tzOffsetMin, EVENING_AT, now),
+      // Two «Начать» may arrive together, or one after the learner has studied: the write is guarded on the step, so only the first goes on.
+      return (await repo.updateOnStep(user.id, "levels", { onboardingStep: "reminder" })) ? { kind: "reminder" } : { kind: "stale" };
+    }
+    case "reminder":
+      if (!REMIND_TIMES.includes(answer as never)) return invalid;
+      return (await repo.updateOnStep(user.id, "reminder", { remindAt: answer, onboardingStep: "zone" })) ? { kind: "zone", options: zoneOptions(now) } : { kind: "stale" };
+    case "zone": {
+      const offset = zoneOf(answer, now);
+      if (offset == null) return invalid;
+      const finished = await repo.updateOnStep(user.id, "zone", {
+        ...DEFAULTS, tzOffsetMin: offset, onboardingStep: null, onboardingData: null, hintsSeen: HINT.update,
+        nextDailyAt: nextOccurrence(offset, user.remindAt, now), nextEveningAt: nextOccurrence(offset, EVENING_AT, now),
       });
-      return finished ? { kind: "finished" } : { kind: "stale" };
+      return finished ? { kind: "finished", remindAt: user.remindAt, tzOffsetMin: offset } : { kind: "stale" };
     }
   }
 }

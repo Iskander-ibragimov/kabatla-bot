@@ -194,7 +194,7 @@ describe("migration 0009: the live catalog becomes A1, the learners start again"
     // The step «Уровни»: A1 with the twelve cards and the coverage it took over; the other levels have no card yet.
     expect((h.lastMarkup().inline_keyboard ?? []).flat().map((b) => b.text)).toEqual(
       ["☑ A1 · 12 слов · ≈45 % текста", "☐ A2 · скоро", "☐ B1 · скоро", "☐ B2 · скоро", "☐ C1 · скоро", "Начать"]);
-    await h.press("ob:go");
+    for (const answer of ["ob:go", "ob:09:00", "ob:tz:180"]) await h.press(answer);
     // The first word of the old level 1, with the voice it had.
     expect(h.lastText()).toContain("\n<b>китап</b>\n");
     const learner = (await new Repo(env.DB).getUserByTg(42))!;

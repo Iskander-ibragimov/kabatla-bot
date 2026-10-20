@@ -237,14 +237,14 @@ export class Repo {
     return (r.meta.changes ?? 0) > 0;
   }
   /**
-   * The write that ends the introduction: the patch is applied only while the user still stands on its last step,
-   * «Уровни». Of answers that arrive together, or after the learner has studied, only the first changes the row;
-   * returns whether this one did.
+   * A write of a step of the introduction that moves the learner on (or ends it): the patch is applied only while the
+   * user still stands on `step`. Of answers that arrive together, or after the learner has gone on or studied, only
+   * the first changes the row; returns whether this one did.
    */
-  async finishOnboarding(userId: number, patch: Partial<Omit<User, "id">>): Promise<boolean> {
+  async updateOnStep(userId: number, step: string, patch: Partial<Omit<User, "id">>): Promise<boolean> {
     const keys = Object.keys(patch);
     const vals = keys.map((k) => { const v = (patch as Record<string, unknown>)[k]; return typeof v === "boolean" ? (v ? 1 : 0) : (v ?? null); });
-    const r = await this.db.prepare(`UPDATE users SET ${keys.map((k) => `${snake(k)} = ?`).join(", ")} WHERE id = ? AND onboarding_step = 'levels'`).bind(...vals, userId).run();
+    const r = await this.db.prepare(`UPDATE users SET ${keys.map((k) => `${snake(k)} = ?`).join(", ")} WHERE id = ? AND onboarding_step = ?`).bind(...vals, userId, step).run();
     return (r.meta.changes ?? 0) > 0;
   }
 

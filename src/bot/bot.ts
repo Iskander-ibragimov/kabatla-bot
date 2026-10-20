@@ -15,7 +15,7 @@ import type { Rating } from "../srs/ladder";
 import { cumulative } from "../stats/service";
 import type { TgApi } from "../tg/client";
 import { parsePress } from "../tutorial/practice";
-import { REMIND_TIMES, TZ_OFFSETS, advanceOnboarding, getOrCreate, langFromTelegram, onLanguageStep, onPracticeStep, setSetting, startOnboarding } from "../users/service";
+import { REMIND_TIMES, TZ_OFFSETS, advanceOnboarding, getOrCreate, langFromTelegram, onLanguageStep, onPracticeStep, onZoneStep, setSetting, startOnboarding } from "../users/service";
 import {
   learnKeyboard, renderAbout, renderGenPreview, renderHub, renderLevelChecks, renderModes, renderOnboarding, renderPosChecks, renderPractice, renderSettings, renderStats,
   renderTimeZones, renderTopics,
@@ -139,8 +139,9 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   });
 
   /*
-   * The introduction: the language, the screen about the bot, the practice card and the levels to study follow one
-   * another in one message; «Начать» takes the buttons off that message and sends the first card.
+   * The introduction: the language, the screen about the bot, the practice card, the levels to study, the reminder
+   * hour and the time zone follow one another in one message; the zone turns that message into «Готово», without
+   * buttons, and sends the first card. The zone may also be typed as the time it is now, and then «Готово» is a new message too.
    */
   const answerOb = async (ctx: Ctx, answer: string) => {
     const t = dict(ctx.user.lang);
@@ -149,12 +150,11 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     if (screen.kind === "stale") return toast(ctx, t.staleButton);
     if (screen.kind === "invalid") {
       if (screen.why) return toast(ctx, screen.why === "last" ? t.needLevel : t.levelEmpty);
-      // A button of a step already passed, or of the introduction that is gone («Знаю», an hour, a time zone): its message becomes the step the learner stands on.
-      return redraw(ctx, renderOnboarding(await startOnboarding(repo, ctx.user), ctx.user.lang), t.chooseAbove);
+      // A button of a step already passed, or of the introduction that is gone («Знаю», the words a day): its message becomes the step the learner stands on.
+      return redraw(ctx, renderOnboarding(await startOnboarding(repo, ctx.user, deps.now()), ctx.user.lang), t.chooseAbove);
     }
     if (screen.kind !== "finished") return redraw(ctx, renderOnboarding(screen, answer === "ru" || answer === "tt" ? answer : ctx.user.lang));
-    const asked = clickedId(ctx);
-    if (asked) await ctx.api.editMessageReplyMarkup(ctx.user.chatId, asked).catch(() => undefined);
+    await editOrSend(ctx, clickedId(ctx), renderOnboarding(screen, ctx.user.lang));
     // The first card is a new message through the same path as /learn (it also answers the tap); the row is read again for what the finish stored.
     ctx.user = (await repo.getUser(ctx.user.id))!;
     await show(ctx, await reviews().nextScreen(ctx.user), "send");
@@ -163,7 +163,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   c.command("start", async (ctx) => {
     const t = dict(ctx.user.lang);
     if (!ctx.user.onboardingStep) { await send(ctx, { text: t.alreadySetUp, keyboard: learnKeyboard(ctx.user.lang) }); return; }
-    await send(ctx, renderOnboarding(await startOnboarding(repo, ctx.user), ctx.user.lang));
+    await send(ctx, renderOnboarding(await startOnboarding(repo, ctx.user, deps.now()), ctx.user.lang));
   });
   c.callbackQuery(/^ob:(.+)$/, async (ctx) => {
     // A button of the introduction pressed after it: there is nothing left to answer.
@@ -199,7 +199,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
    */
   const practice = async (ctx: Ctx, next: 1 | 2 | 3 | 4, last: Rating | null, how: "edit" | "replace") => {
     if (ctx.user.onboardingStep && !onPracticeStep(ctx.user)) {
-      return redraw(ctx, renderOnboarding(await startOnboarding(repo, ctx.user), ctx.user.lang), dict(ctx.user.lang).chooseAbove);
+      return redraw(ctx, renderOnboarding(await startOnboarding(repo, ctx.user, deps.now()), ctx.user.lang), dict(ctx.user.lang).chooseAbove);
     }
     const r = renderPractice(next, last, ctx.user.lang, !ctx.user.onboardingStep);
     await (how === "edit" ? redraw(ctx, r) : replaceClicked(ctx, r));
@@ -432,7 +432,8 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     const text = ctx.message.text;
     const t = dict(ctx.user.lang);
     if (text.startsWith("/")) { await ctx.reply(t.unknownCommand); return; }
-    // No step of the introduction takes a typed answer.
+    // Of the steps of the introduction only the time zone takes a typed answer: the time it is now.
+    if (onZoneStep(ctx.user)) { await answerOb(ctx, `at:${text}`); return; }
     if (ctx.user.onboardingStep) { await ctx.reply(t.chooseAbove); return; }
     const svc = content();
     const pending = svc.pendingKind(ctx.user);

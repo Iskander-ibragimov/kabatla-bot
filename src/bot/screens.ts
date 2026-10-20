@@ -7,7 +7,7 @@ import { type Lang, RUNGS, type Rating } from "../srs/ladder";
 import type { Cumulative } from "../stats/service";
 import { PRACTICE_WORDS, newWordIntervals, practiceData } from "../tutorial/practice";
 import type { OnboardingScreen } from "../users/service";
-import { TZ_OFFSETS } from "../users/service";
+import { REMIND_TIMES, TZ_OFFSETS } from "../users/service";
 import type { Button, Keyboard, PreviewItem, Rendered } from "./views";
 import { esc, fitMessage, gradeRows, previewLines } from "./views";
 
@@ -65,7 +65,7 @@ function levelChoice(l: LevelLine, t: Dict): string {
   return `${head} · ${t.levelWords(l.total)}${l.coveragePct == null ? "" : ` · ${t.levelCoverage(l.coveragePct)}`}`;
 }
 
-/** The screen of a step of the introduction. A screen that is no step (the finish, a refused answer) has nothing to show. */
+/** The screen of a step of the introduction, and the one of its finish. A refused answer has nothing to show. */
 export function renderOnboarding(s: OnboardingScreen, lang: Lang): Rendered {
   const t = dict(lang);
   switch (s.kind) {
@@ -77,6 +77,13 @@ export function renderOnboarding(s: OnboardingScreen, lang: Lang): Rendered {
       return renderPractice(1, null, lang, false);
     case "levels":
       return { text: t.obLevels, keyboard: [...s.lines.map((l) => [btn(levelChoice(l, t), `ob:lv:${l.no}`)]), [btn(t.obGoBtn, "ob:go", "primary")]] };
+    case "reminder":
+      return { text: t.obRemindQ, keyboard: inRows(REMIND_TIMES.map((x) => btn(x, `ob:${x}`)), 3) };
+    case "zone":
+      return { text: t.obTzQ, keyboard: inRows(s.options.map((o) => btn(o.label, `ob:tz:${o.offset}`)), 3) };
+    case "finished":
+      // No button: the first card follows as a message of its own.
+      return { text: t.obFinished(s.remindAt, s.tzOffsetMin === 180 ? t.moscowZone : tzLabel(s.tzOffsetMin)), keyboard: [] };
     default:
       return { text: t.chooseAbove, keyboard: [] };
   }

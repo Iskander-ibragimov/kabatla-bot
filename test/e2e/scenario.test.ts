@@ -30,8 +30,8 @@ describe("first day and next day", () => {
     expect((h.lastMarkup().inline_keyboard ?? []).flat().map((b) => [b.text, b.callback_data])).toEqual([["Дальше", "ob:n2"]]);
     // The practice left nothing behind: no card, no grade.
     expect(await env.DB.prepare("SELECT (SELECT COUNT(*) FROM cards) AS cards, (SELECT COUNT(*) FROM review_log) AS grades").first()).toEqual({ cards: 0, grades: 0 });
-    for (const answer of ["ob:n2", "ob:go"]) await h.press(answer, 100);
-    // «Начать» gives the first card at once, with the hint of the first card; «▶ Учить» shows the same card.
+    for (const answer of ["ob:n2", "ob:go", "ob:09:00", "ob:tz:180"]) await h.press(answer, 100);
+    // After the hour and the zone «Готово» and the first card come at once, with the hint of the first card; «▶ Учить» shows the same card.
     expect(h.lastText().startsWith(`${ru.hintFront}\n\n🔵 10 · 🔴 0 · 🟢 0\n<b>бала</b>\n`)).toBe(true);
     await h.press("learn");
     expect(h.lastText().startsWith(`${ru.hintFront}\n\n🔵 10 · 🔴 0 · 🟢 0\n<b>бала</b>\n`)).toBe(true);
@@ -118,9 +118,13 @@ describe("first day and next day", () => {
     expect(h.lastText()).toBe(tt.obLevels);
     expect((h.lastMarkup().inline_keyboard ?? []).flat().map((b) => b.text)).toEqual(["☑ A1 · 100 сүз · текстның ≈31 %", "☐ A2 · 1 сүз", "☐ B1 · тиздән", "☐ B2 · тиздән", "☐ C1 · тиздән", "Башлау"]);
     await press("ob:go");
-    // The message of the introduction keeps its last text and loses its buttons; nothing else is sent but the card.
-    expect(h.tg.of("editMessageText").at(-1)!.payload.text).toBe(tt.obLevels);
-    expect(h.tg.calls.slice(-3).map((c) => c.method)).toEqual(["editMessageReplyMarkup", "sendMessage", "answerCallbackQuery"]);
+    expect(h.lastText()).toBe(tt.obRemindQ);
+    await press("ob:09:00");
+    expect(h.lastText()).toBe(tt.obTzQ);
+    await press("ob:tz:180");
+    // The message of the introduction says «Әзер» and loses its buttons; nothing else is sent but the card.
+    expect(h.tg.of("editMessageText").at(-1)!.payload.text).toBe(tt.obFinished("09:00", tt.moscowZone));
+    expect(h.tg.calls.slice(-3).map((c) => c.method)).toEqual(["editMessageText", "sendMessage", "answerCallbackQuery"]);
     expect(h.lastText().startsWith(`${tt.hintFront}\n\n🔵 10 · 🔴 0 · 🟢 0\n<b>${words100[0]}</b>\n`)).toBe(true);
 
     for (let i = 0; i < 100; i++) {

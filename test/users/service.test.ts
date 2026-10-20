@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Repo, type User } from "../../src/db/repo";
 import { HINT } from "../../src/tutorial/hints";
-import { advanceOnboarding, getOrCreate, langFromTelegram, nextOccurrence, onLanguageStep, onPracticeStep, setSetting, startOnboarding } from "../../src/users/service";
+import { advanceOnboarding, getOrCreate, langFromTelegram, nextOccurrence, onLanguageStep, onPracticeStep, onZoneStep, setSetting, startOnboarding } from "../../src/users/service";
 import { seedCatalog, seedLearner } from "../helpers/seed";
 
 const T = Date.UTC(2026, 8, 30, 6, 0);
@@ -57,16 +57,18 @@ describe("users", () => {
       const step = async (answer: string, now = T) => { const s = await advanceOnboarding(repo, state.user, answer, now); state.user = (await repo.getUser(state.user.id))!; return s; };
       return { state, step };
     }
-    /** A user on the step «Уровни», with `patch` over the row. */
+    /** A user on the step «Уровни» (or on `onboardingStep` of the patch), with `patch` over the row. */
     async function atLevels(repo: Repo, tgId: number, patch: Partial<User> = {}) {
       const { user } = await getOrCreate(repo, tgId, tgId, "ru", T);
       await repo.updateUser(user.id, { onboardingStep: "levels", ...patch });
       return (await repo.getUser(user.id))!;
     }
+    /** The buttons of the time-zone step at T (06:00 UTC): the time it is now in each zone. */
+    const zones = [{ offset: 120, label: "08:00" }, { offset: 180, label: "09:00" }, { offset: 240, label: "10:00" }, { offset: 300, label: "11:00" }, { offset: 420, label: "13:00" }, { offset: 600, label: "16:00" }];
     const line = (no: number, code: string, checked: boolean, total: number, size: number, coveragePct: number | null = null) => ({ no, code, checked, total, size, started: 0, coveragePct });
     const lines = (a1: boolean, a2: boolean) => [line(1, "A1", a1, 2, 500, 45), line(2, "A2", a2, 1, 850), line(3, "B1", false, 0, 850), line(4, "B2", false, 0, 800), line(5, "C1", false, 0, 850)];
 
-    it("the steps: language, the screen about the bot, the practice card, the levels, and the finish with the defaults stored", async () => {
+    it("the steps: language, the screen about the bot, the practice card, the levels, the reminder hour, the time zone, and the finish", async () => {
       const repo = new Repo(env.DB);
       await catalog();
       const { state, step } = await newcomer(repo, 9);
@@ -88,13 +90,20 @@ describe("users", () => {
       expect(state.user).toMatchObject({ onboardingStep: "levels", levels: 0b11 });
       expect(await step("lv:1")).toEqual({ kind: "levels", lines: lines(false, true) });
       expect(state.user.levels).toBe(0b10);
-      const at1500 = Date.UTC(2026, 8, 30, 12, 0); // 15:00 in Moscow
-      expect(await step("go", at1500)).toEqual({ kind: "finished" });
+      expect(await step("go")).toEqual({ kind: "reminder" });
+      expect(state.user).toMatchObject({ onboardingStep: "reminder", levels: 0b10 });
+      expect(await startOnboarding(repo, state.user, T)).toEqual({ kind: "reminder" });
+      expect(await step("08:00")).toEqual({ kind: "zone", options: zones });
+      expect(state.user).toMatchObject({ onboardingStep: "zone", remindAt: "08:00" });
+      expect([onZoneStep(state.user), onPracticeStep(state.user), onLanguageStep(state.user)]).toEqual([true, false, false]);
+      expect(await startOnboarding(repo, state.user, T)).toEqual({ kind: "zone", options: zones });
+      const at1500 = Date.UTC(2026, 8, 30, 12, 0); // 15:00 in Moscow, 17:00 in Ufa
+      expect(await step("tz:300", at1500)).toEqual({ kind: "finished", remindAt: "08:00", tzOffsetMin: 300 });
       expect(state.user).toMatchObject({
         onboardingStep: null, onboardingData: null, hintsSeen: HINT.update, lang: "tt", levels: 0b10, posGroups: 255, newMode: "guided", topicNo: null,
-        newPerDay: 10, remindAt: "09:00", tzOffsetMin: 180,
-        // The first reminder is the next 09:00 in Moscow, not the moment of the finish; the evening one is today's 20:00.
-        nextDailyAt: Date.UTC(2026, 9, 1, 6, 0), nextEveningAt: Date.UTC(2026, 8, 30, 17, 0),
+        newPerDay: 10, remindAt: "08:00", tzOffsetMin: 300,
+        // The first reminder is the next 08:00 in Ufa, not the moment of the finish; the evening one is today's 20:00.
+        nextDailyAt: Date.UTC(2026, 9, 1, 3, 0), nextEveningAt: Date.UTC(2026, 8, 30, 15, 0),
       });
       // The levels are the checked ones of the row: no deck is subscribed to.
       expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM user_decks").first()).toEqual({ n: 0 });
@@ -118,6 +127,27 @@ describe("users", () => {
       await refused(["ru", "tt", "n1", "next", "go", "lv:1", ...old]);
       await step("n2");
       await refused(["ru", "tt", "n1", "n2", "next", "lv:", "lv:x", "lv:1.5", "lv:12", "lv:0", "lv:6", ...old]);
+      await step("go");
+      await refused(["ru", "n2", "go", "lv:1", "1", "10", "180", "tz:180", "at:09:00", "9:00", "24:00", "09:60", "14:35", ""]);
+      await step("21:00");
+      // A zone the settings do not have is no answer: neither a button that is not offered nor a typed time that gives it.
+      // A button carries `tz:` and a typed time `at:`, so an hour or a zone of an old message is no answer either.
+      await refused(["ru", "go", "lv:1", "21:00", "09:00", "180", "tz:0", "tz:60", "tz:330", "tz:-180", "tz:180.5", "tz:", "at:14:35", "at:14:35:00", "at:25:00", "at:1435", "at:", "at:tz:180", ""]);
+      expect(await step("at:10:00", T)).toMatchObject({ kind: "finished", tzOffsetMin: 240 });
+    });
+
+    it("the time zone may be typed as the time it is now: rounded to the half hour, taken when the settings have that zone", async () => {
+      const repo = new Repo(env.DB);
+      await catalog();
+      // At T it is 06:00 UTC.
+      for (const [i, [typed, offset]] of ([["9:00", 180], ["08.58", 180], ["11:14", 300], ["18:00", 720]] as const).entries()) {
+        const user = await atLevels(repo, 30 + i, { onboardingStep: "zone" });
+        expect(await advanceOnboarding(repo, user, `at:${typed}`, T), typed).toMatchObject({ kind: "finished", tzOffsetMin: offset });
+      }
+      // UTC+1 and UTC+5:30 are not among the zones of the settings.
+      const user = await atLevels(repo, 40, { onboardingStep: "zone" });
+      for (const typed of ["07:00", "11:30"]) expect(await advanceOnboarding(repo, user, `at:${typed}`, T), typed).toEqual({ kind: "invalid", step: "zone" });
+      expect(await repo.getUser(user.id)).toEqual(user);
     });
 
     it("«Попробовать» pressed twice does not pass the practice card: the screen and the card have an answer each", async () => {
@@ -166,32 +196,40 @@ describe("users", () => {
       expect(await repo.getUser(user.id)).toEqual(user);
     });
 
-    it("of two «Начать» at once one finishes; the other is stale", async () => {
+    it("of two «Начать» at once one goes on to the reminder hour, the other is stale; so are two hours and two time zones", async () => {
       const repo = new Repo(env.DB);
       await catalog();
       const user = await atLevels(repo, 12);
-      const screens = await Promise.all([advanceOnboarding(repo, user, "go", T), advanceOnboarding(repo, user, "go", T)]);
-      expect(screens.map((s) => s.kind).sort()).toEqual(["finished", "stale"]);
-      expect(await repo.getUser(user.id)).toMatchObject({ onboardingStep: null, hintsSeen: HINT.update, nextDailyAt: nextOccurrence(180, "09:00", T) });
+      const kinds = async (u: User, a: string, b: string) => (await Promise.all([advanceOnboarding(repo, u, a, T), advanceOnboarding(repo, u, b, T)])).map((s) => s.kind).sort();
+      expect(await kinds(user, "go", "go")).toEqual(["reminder", "stale"]);
+      expect(await kinds((await repo.getUser(user.id))!, "08:00", "08:00")).toEqual(["stale", "zone"]);
+      expect(await kinds((await repo.getUser(user.id))!, "tz:180", "at:09:00")).toEqual(["finished", "stale"]);
+      expect(await repo.getUser(user.id)).toMatchObject({ onboardingStep: null, hintsSeen: HINT.update, nextDailyAt: nextOccurrence(180, "08:00", T) });
     });
 
-    it("«Начать» that arrives with the user row read before the finish changes nothing", async () => {
+    it("an answer that arrives with the user row read before the finish changes nothing: «Начать», an hour or a time zone", async () => {
       const repo = new Repo(env.DB);
       await catalog();
-      const before = await atLevels(repo, 13);
-      expect(await advanceOnboarding(repo, before, "go", T)).toEqual({ kind: "finished" });
-      // The learner has studied and changed the settings since; the late answer brings neither the hints nor the defaults back.
-      await repo.updateUser(before.id, { hintsSeen: 127, newPerDay: 20, remindAt: "19:00", tzOffsetMin: 300, nextDailyAt: 5, nextEveningAt: 6 });
-      const studied = await repo.getUser(before.id);
-      expect(await advanceOnboarding(repo, before, "go", T + 60_000)).toEqual({ kind: "stale" });
-      expect(await repo.getUser(before.id)).toEqual(studied);
+      const onLevels = await atLevels(repo, 13);
+      await advanceOnboarding(repo, onLevels, "go", T);
+      const onReminder = (await repo.getUser(onLevels.id))!;
+      await advanceOnboarding(repo, onReminder, "12:00", T);
+      const onZone = (await repo.getUser(onLevels.id))!;
+      expect(await advanceOnboarding(repo, onZone, "tz:180", T)).toMatchObject({ kind: "finished" });
+      // The learner has studied and changed the settings since; the late answers bring neither the hints, the step nor the defaults back.
+      await repo.updateUser(onLevels.id, { hintsSeen: 127, newPerDay: 20, remindAt: "19:00", tzOffsetMin: 300, nextDailyAt: 5, nextEveningAt: 6 });
+      const studied = await repo.getUser(onLevels.id);
+      for (const [row, answer] of [[onLevels, "go"], [onReminder, "08:00"], [onZone, "tz:240"]] as const) expect(await advanceOnboarding(repo, row, answer, T + 60_000), answer).toEqual({ kind: "stale" });
+      expect(await repo.getUser(onLevels.id)).toEqual(studied);
     });
 
-    it("the finish stores what the step «Уровни» says, also for a learner who had answered the introduction that is gone", async () => {
+    it("the finish stores the hour and the zone chosen and the new words a day the step «Уровни» names, also for a learner who had answered the introduction that is gone", async () => {
       const repo = new Repo(env.DB);
       await catalog();
       const user = await atLevels(repo, 14, { newPerDay: 20, remindAt: "19:00", tzOffsetMin: 300, onboardingData: JSON.stringify({ i: 10, known: 4 }) });
-      expect(await advanceOnboarding(repo, user, "go", T)).toEqual({ kind: "finished" });
+      expect(await advanceOnboarding(repo, user, "go", T)).toEqual({ kind: "reminder" });
+      expect(await advanceOnboarding(repo, (await repo.getUser(user.id))!, "09:00", T)).toMatchObject({ kind: "zone" });
+      expect(await advanceOnboarding(repo, (await repo.getUser(user.id))!, "tz:180", T)).toEqual({ kind: "finished", remindAt: "09:00", tzOffsetMin: 180 });
       expect(await repo.getUser(user.id)).toMatchObject({
         onboardingStep: null, onboardingData: null, newPerDay: 10, remindAt: "09:00", tzOffsetMin: 180, levels: 0b1,
         nextDailyAt: nextOccurrence(180, "09:00", T), nextEveningAt: nextOccurrence(180, "20:00", T),
@@ -213,7 +251,7 @@ describe("users", () => {
       const repo = new Repo(env.DB);
       await catalog();
       const { user } = await seedLearner(env.DB, { now: T, tgId: 16 });
-      for (const answer of ["ru", "next", "lv:2", "go", "1"]) expect(await advanceOnboarding(repo, user, answer, T), answer).toEqual({ kind: "stale" });
+      for (const answer of ["ru", "next", "lv:2", "go", "1", "09:00", "tz:180", "at:09:00"]) expect(await advanceOnboarding(repo, user, answer, T), answer).toEqual({ kind: "stale" });
       expect(await repo.getUser(user.id)).toEqual(user);
     });
   });
