@@ -1,4 +1,8 @@
 /** Russian UI strings. Functions take already-escaped HTML fragments. */
+
+/** The Russian form of a noun after the number n: «1 слово», «2 слова», «5 слов». */
+const plural = (n: number, one: string, few: string, many: string) =>
+  n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? few : many;
 const POS: Record<string, string> = {
   n: "сущ.", v: "гл.", adj: "прил.", adv: "нареч.", pron: "мест.", num: "числ.",
   post: "послелог", conj: "союз", part: "частица", intj: "межд.", phr: "фраза",
@@ -94,9 +98,12 @@ export const ru = {
   /** The end of the introduction, before the first card; `tz` is `moscowZone` or «UTC+5». */
   obFinished: (time: string, tz: string) => `Готово! Каждый день в <b>${time}</b> (${tz}) пришлю напоминание, если есть что повторить или ждут новые слова. Время можно поменять в /settings.\n\nПервое слово — ниже ↓`,
   moscowZone: "МСК",
+  /** Replies to a text typed on the time-zone step: no time in it; a time that gives a zone the bot does not have. */
+  obTimeUnclear: "Не понял время. Напишите, например, 14:35, или выберите кнопку.",
+  obZoneMissing: "Такого часового пояса в боте нет — выберите ближайший кнопкой.",
   obGoBtn: "Начать",
   /** «400 слов»: the cards a level has, on its button of the step «Уровни». */
-  levelWords: (n: number) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? "слово" : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "слова" : "слов"}`,
+  levelWords: (n: number) => `${n} ${plural(n, "слово", "слова", "слов")}`,
   /* Hints: the first lines of a card or of the screen that ends a session (tutorial/hints.ts). This one stands on every card until the first grade. */
   hintFront: "Вспомните перевод, откройте скрытый текст и оцените себя.",
   /** Shown once, above a card, to a learner who knew the bot before the levels A1–C1. */
@@ -152,8 +159,8 @@ export const ru = {
   unknownCommand: "Не знаю такой команды. /help",
   /** The daily push: the reviews due and the new words that wait, apart; with nothing due, a call to learn new words. */
   pushDaily: (due: number, mins: number, fresh: number) => due > 0
-    ? `⏰ <b>Пора повторить</b>\n${due} карточек · ~${mins} мин${fresh > 0 ? `\n🌱 Ждут новых слов: ${fresh}` : ""}`
-    : `⏰ <b>Пора учить новые слова</b>\n🌱 Ждут новых слов: ${fresh}`,
+    ? `⏰ <b>Пора повторить</b>\n${due} ${plural(due, "карточка", "карточки", "карточек")} · ~${mins} мин${fresh > 0 ? `\n🌱 Новых слов на сегодня: ${fresh}` : ""}`
+    : `⏰ <b>Пора учить новые слова</b>\n🌱 Новых слов на сегодня: ${fresh}`,
   pushEvening: (streak: number) => `🔥 Серия <b>${streak} дн.</b> под угрозой. Хватит пары минут.`,
   pushStep: (n: number) => `🧠 Карточек на закреплении: ${n} — это 1 минута.`,
   startBtn: "▶ Начать",

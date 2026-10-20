@@ -69,8 +69,8 @@ describe("reminders tick", () => {
     await repo.updateCardStmt((await repo.getCardByNote(user.id, ids[0]!, "tt_ru"))!.id, { ...gradedMem(local(25, 12, 0)), due: local(31, 7, 0) }).run();
     await run(env.DB, tg, local(31, 9, 1));
     expect(tg.of("sendMessage").map((c) => String(c.payload.text))).toEqual([
-      "⏰ <b>Пора учить новые слова</b>\n🌱 Ждут новых слов: 3",
-      "⏰ <b>Пора повторить</b>\n1 карточек · ~1 мин\n🌱 Ждут новых слов: 3",
+      "⏰ <b>Пора учить новые слова</b>\n🌱 Новых слов на сегодня: 3",
+      "⏰ <b>Пора повторить</b>\n1 карточка · ~1 мин\n🌱 Новых слов на сегодня: 3",
     ]);
   });
 

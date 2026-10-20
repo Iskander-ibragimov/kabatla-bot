@@ -149,6 +149,8 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     // Another update has just finished the introduction and sent the first card.
     if (screen.kind === "stale") return toast(ctx, t.staleButton);
     if (screen.kind === "invalid") {
+      // A text typed on the time-zone step is answered with why it was not taken; the question with its buttons stands above.
+      if (screen.why === "time" || screen.why === "zone") { await ctx.reply(screen.why === "time" ? t.obTimeUnclear : t.obZoneMissing); return; }
       if (screen.why) return toast(ctx, screen.why === "last" ? t.needLevel : t.levelEmpty);
       // A button of a step already passed, or of the introduction that is gone («Знаю», the words a day): its message becomes the step the learner stands on.
       return redraw(ctx, renderOnboarding(await startOnboarding(repo, ctx.user, deps.now()), ctx.user.lang), t.chooseAbove);

@@ -140,20 +140,20 @@ export function offsetFromReported(h: number, m: number, now: number): number {
 
 /**
  * The zone of an answer of the time-zone step: `tz:<offset>`, a button's, or `at:<time>`, the time it is now typed in
- * the chat (14:35 or 14.35); null unless the settings have that zone. The prefixes keep an hour or a zone of an old
- * message from being read as the time it is now.
+ * the chat (14:35 or 14.35). The prefixes keep an hour or a zone of an old message from being read as the time it is
+ * now. A zone the settings do not have is refused: `time`, a typed answer with no time in it; `zone`, a typed time
+ * that gives such a zone; `button`, any other answer.
  */
-function zoneOf(answer: string, now: number): number | null {
-  const typed = answer.match(/^at:\s*(\d{1,2})[:.](\d{2})\s*$/);
-  let offset: number | null = null;
-  if (typed) {
-    const h = Number(typed[1]), m = Number(typed[2]);
-    if (h < 24 && m < 60) offset = offsetFromReported(h, m, now);
-  } else {
-    const button = answer.match(/^tz:(\d+)$/);
-    if (button && ZONE_CHOICES.includes(Number(button[1]))) offset = Number(button[1]);
+function zoneOf(answer: string, now: number): number | "time" | "zone" | "button" {
+  if (answer.startsWith("at:")) {
+    const typed = answer.slice(3).match(/^\s*(\d{1,2})[:.](\d{2})\s*$/);
+    const h = Number(typed?.[1]), m = Number(typed?.[2]);
+    if (!typed || h >= 24 || m >= 60) return "time";
+    const offset = offsetFromReported(h, m, now);
+    return TZ_OFFSETS.includes(offset) ? offset : "zone";
   }
-  return offset != null && TZ_OFFSETS.includes(offset) ? offset : null;
+  const button = answer.match(/^tz:(\d+)$/);
+  return button && ZONE_CHOICES.includes(Number(button[1])) ? Number(button[1]) : "button";
 }
 
 export type OnboardingScreen =
@@ -172,9 +172,10 @@ export type OnboardingScreen =
   | { kind: "finished"; remindAt: string; tzOffsetMin: number }
   /**
    * The step does not take this answer; nothing was written. `why`: the answer was a level that cannot be flipped —
-   * `last`, the only one checked; `soon`, one without cards.
+   * `last`, the only one checked; `soon`, one without cards; or a text typed on the time-zone step — `time`, with no
+   * time in it; `zone`, a time that gives a zone the bot does not have.
    */
-  | { kind: "invalid"; step: string; why?: "last" | "soon" }
+  | { kind: "invalid"; step: string; why?: "last" | "soon" | "time" | "zone" }
   /** The answer came after the introduction was finished; nothing was written. */
   | { kind: "stale" };
 
@@ -234,7 +235,8 @@ export async function advanceOnboarding(repo: Repo, user: User, answer: string, 
       return (await repo.updateOnStep(user.id, "reminder", { remindAt: answer, onboardingStep: "zone" })) ? { kind: "zone", options: zoneOptions(now) } : { kind: "stale" };
     case "zone": {
       const offset = zoneOf(answer, now);
-      if (offset == null) return invalid;
+      if (offset === "button") return invalid;
+      if (typeof offset !== "number") return { ...invalid, why: offset };
       const finished = await repo.updateOnStep(user.id, "zone", {
         ...DEFAULTS, tzOffsetMin: offset, onboardingStep: null, onboardingData: null, hintsSeen: HINT.update,
         nextDailyAt: nextOccurrence(offset, user.remindAt, now), nextEveningAt: nextOccurrence(offset, EVENING_AT, now),

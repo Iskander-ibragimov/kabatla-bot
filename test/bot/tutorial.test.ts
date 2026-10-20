@@ -461,17 +461,29 @@ describe("the introduction", () => {
       expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM cards").first<{ n: number }>())!.n).toBe(0);
     });
 
-    it("on the time-zone step the time typed is the answer: «Готово» and the first card as new messages; any other text sends the step again", async () => {
+    it("on the time-zone step the time typed is the answer: «Готово» and the first card as new messages; other text is answered with why it was not taken, and the question is not sent again", async () => {
       await catalog(env.DB);
       const b = bot();
       await b.text("/start");
       for (const answer of ["ob:ru", "ob:n1", "ob:n2", "ob:go", "ob:19:00"]) await b.press(answer, 100);
       const user = await b.user();
-      for (const typed of ["рәхмәт", "25:00", "07:00", "/learn"]) {
+      // 06:00 UTC: 07:00 is UTC+1 and 01:00 is UTC−5, zones the bot does not have.
+      const answers: [typed: string, reply: string][] = [
+        ["рәхмәт", ru.obTimeUnclear], ["в 14:35", ru.obTimeUnclear], ["25:00", ru.obTimeUnclear], ["UTC+1", ru.obTimeUnclear],
+        ["07:00", ru.obZoneMissing], ["01:00", ru.obZoneMissing], ["/learn", ru.chooseAbove],
+      ];
+      for (const [typed, reply] of answers) {
         const u = await b.text(typed);
-        expect(u.calls.map((c) => [c.method, c.payload.text]), typed).toEqual([["sendMessage", typed === "/learn" ? ru.chooseAbove : ru.obTzQ]]);
+        expect(u.calls.map((c) => [c.method, c.payload.text]), typed).toEqual([["sendMessage", reply]]);
+        expect(u.calls[0]!.payload.reply_markup, typed).toBeUndefined();
       }
       expect(await b.user()).toEqual(user);
+      expect([ru.obTimeUnclear, ru.obZoneMissing]).toEqual(["Не понял время. Напишите, например, 14:35, или выберите кнопку.", "Такого часового пояса в боте нет — выберите ближайший кнопкой."]);
+      // In Tatar the same answers.
+      await new Repo(env.DB).updateUser(user.id, { lang: "tt" });
+      expect((await b.text("рәхмәт")).calls.map((c) => c.payload.text)).toEqual([tt.obTimeUnclear]);
+      expect((await b.text("07:00")).calls.map((c) => c.payload.text)).toEqual([tt.obZoneMissing]);
+      await new Repo(env.DB).updateUser(user.id, { lang: "ru" });
       // 06:00 UTC: 11:00 is UTC+5.
       const typed = await b.text("11:00");
       expect(typed.methods).toEqual(["sendMessage", "sendMessage"]);

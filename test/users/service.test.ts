@@ -132,7 +132,12 @@ describe("users", () => {
       await step("21:00");
       // A zone the settings do not have is no answer: neither a button that is not offered nor a typed time that gives it.
       // A button carries `tz:` and a typed time `at:`, so an hour or a zone of an old message is no answer either.
-      await refused(["ru", "go", "lv:1", "21:00", "09:00", "180", "tz:0", "tz:60", "tz:330", "tz:-180", "tz:180.5", "tz:", "at:14:35", "at:14:35:00", "at:25:00", "at:1435", "at:", "at:tz:180", ""]);
+      await refused(["ru", "go", "lv:1", "21:00", "09:00", "180", "tz:0", "tz:60", "tz:330", "tz:-180", "tz:180.5", "tz:", ""]);
+      // A typed answer that is refused says why: no time could be read, or the time gives a zone the bot does not have.
+      const zoneRow = state.user;
+      for (const typed of ["at:14:35:00", "at:25:00", "at:09:60", "at:1435", "at:", "at:в 14:35", "at:tz:180", "at:UTC-5"]) expect(await step(typed), typed).toEqual({ kind: "invalid", step: "zone", why: "time" });
+      for (const typed of ["at:14:35", "at:07:00", "at:23:00"]) expect(await step(typed), typed).toEqual({ kind: "invalid", step: "zone", why: "zone" });
+      expect(state.user).toEqual(zoneRow);
       expect(await step("at:10:00", T)).toMatchObject({ kind: "finished", tzOffsetMin: 240 });
     });
 
@@ -146,7 +151,7 @@ describe("users", () => {
       }
       // UTC+1 and UTC+5:30 are not among the zones of the settings.
       const user = await atLevels(repo, 40, { onboardingStep: "zone" });
-      for (const typed of ["07:00", "11:30"]) expect(await advanceOnboarding(repo, user, `at:${typed}`, T), typed).toEqual({ kind: "invalid", step: "zone" });
+      for (const typed of ["07:00", "11:30"]) expect(await advanceOnboarding(repo, user, `at:${typed}`, T), typed).toEqual({ kind: "invalid", step: "zone", why: "zone" });
       expect(await repo.getUser(user.id)).toEqual(user);
     });
 
