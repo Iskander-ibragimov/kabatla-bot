@@ -143,7 +143,10 @@ export const ru = {
   helpAdd: "Напишите слово или фразу в чат, например <code>рәхмәт</code>. Можно несколько строк сразу, а ссылку на источник — в том же сообщении.",
   maintenance: "⏳ Технический перерыв до 03:00 МСК: исчерпан дневной лимит бесплатного сервера. Прогресс сохранён.",
   unknownCommand: "Не знаю такой команды. /help",
-  pushDaily: (n: number, mins: number) => `⏰ <b>Пора повторить</b>\n${n} карточек · ~${mins} мин`,
+  /** The daily push: the reviews due and the new words that wait, apart; with nothing due, a call to learn new words. */
+  pushDaily: (due: number, mins: number, fresh: number) => due > 0
+    ? `⏰ <b>Пора повторить</b>\n${due} карточек · ~${mins} мин${fresh > 0 ? `\n🌱 Ждут новых слов: ${fresh}` : ""}`
+    : `⏰ <b>Пора учить новые слова</b>\n🌱 Ждут новых слов: ${fresh}`,
   pushEvening: (streak: number) => `🔥 Серия <b>${streak} дн.</b> под угрозой. Хватит пары минут.`,
   pushStep: (n: number) => `🧠 Карточек на закреплении: ${n} — это 1 минута.`,
   startBtn: "▶ Начать",

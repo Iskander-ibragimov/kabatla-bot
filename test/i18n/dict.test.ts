@@ -51,7 +51,7 @@ const SAMPLE_ARGS: { [K in FnKey]: Parameters<Dict[K]>[] } = {
   setTz: [["UTC+3"], ["UTC+5:30"]],
   setDir: [["tt_ru"], ["ru_tt"], ["both"]],
   setAuto: [[true], [false]],
-  pushDaily: [[12, 3]],
+  pushDaily: [[12, 4, 0], [12, 4, 5], [0, 1, 5]],
   pushEvening: [[5]],
   pushStep: [[4]],
   posName: POS_CODES.map((c): [string] => [c]),

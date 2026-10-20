@@ -58,6 +58,22 @@ describe("reminders tick", () => {
     expect(tg.of("sendMessage")).toHaveLength(0);
   });
 
+  it("the daily push counts the reviews due and the new words apart; with nothing due it calls to learn new words", async () => {
+    const ids = await catalog(5);
+    const { repo, user } = await learner();
+    await start(repo, user.id, ids.slice(0, 2));
+    const tg = fakeTelegram();
+    // Nothing due, three new words wait.
+    await run(env.DB, tg, local(30, 9, 1));
+    // One review is due the next morning, and the three words still wait.
+    await repo.updateCardStmt((await repo.getCardByNote(user.id, ids[0]!, "tt_ru"))!.id, { ...gradedMem(local(25, 12, 0)), due: local(31, 7, 0) }).run();
+    await run(env.DB, tg, local(31, 9, 1));
+    expect(tg.of("sendMessage").map((c) => String(c.payload.text))).toEqual([
+      "⏰ <b>Пора учить новые слова</b>\n🌱 Ждут новых слов: 3",
+      "⏰ <b>Пора повторить</b>\n1 карточек · ~1 мин\n🌱 Ждут новых слов: 3",
+    ]);
+  });
+
   describe("the new words of the daily reminder: an estimate by the counters of the checked levels", () => {
     const pushes = async (now = local(30, 9, 1)) => { const tg = fakeTelegram(); await run(env.DB, tg, now); return tg.of("sendMessage").map((c) => String(c.payload.text)); };
     /** The reminder is due again at 09:00, for a second tick of the same morning. */
@@ -68,16 +84,16 @@ describe("reminders tick", () => {
       const { repo, user } = await learner();
       await start(repo, user.id, notes.slice(0, 10).map((n) => n.id));
       // 390 words are left and ten are allowed today.
-      expect(await pushes()).toEqual([ru.pushDaily(10, 4)]);
+      expect(await pushes()).toEqual([ru.pushDaily(0, 1, 10)]);
       await dueAgain(repo, user.id, { newPerDay: 20 });
-      expect(await pushes(local(30, 9, 2))).toEqual([ru.pushDaily(20, 7)]);
+      expect(await pushes(local(30, 9, 2))).toEqual([ru.pushDaily(0, 1, 20)]);
     });
 
     it("counts no more new words than the checked levels have left", async () => {
       const ids = await catalog(12);
       const { repo, user } = await learner();
       await start(repo, user.id, ids.slice(0, 10));
-      expect(await pushes()).toEqual([ru.pushDaily(2, 1)]);
+      expect(await pushes()).toEqual([ru.pushDaily(0, 1, 2)]);
     });
 
     it("a learner whose checked levels are started whole and who has nothing due gets no push: the bot checks no level by itself", async () => {
@@ -89,7 +105,7 @@ describe("reminders tick", () => {
       expect(await pushes()).toEqual([]);
       // Once the learner checks A2, its words are counted.
       await dueAgain(repo, user.id, { levels: 0b11 });
-      expect(await pushes(local(30, 9, 2))).toEqual([ru.pushDaily(3, 1)]);
+      expect(await pushes(local(30, 9, 2))).toEqual([ru.pushDaily(0, 1, 3)]);
     });
 
     it("counts every checked level and no other", async () => {
@@ -99,7 +115,7 @@ describe("reminders tick", () => {
       const { repo, user } = await learner({ patch: { levels: 0b101, newPerDay: 20 } });
       await start(repo, user.id, a1.slice(0, 1));
       // Two words of A1 and the five of B1; the nine of A2 are not checked.
-      expect(await pushes()).toEqual([ru.pushDaily(7, 3)]);
+      expect(await pushes()).toEqual([ru.pushDaily(0, 1, 7)]);
     });
 
     it("a word started in a level that is not checked is not taken from what the checked levels have left", async () => {
@@ -107,7 +123,7 @@ describe("reminders tick", () => {
       const a2 = await catalog(4, 2);
       const { repo, user } = await learner({ patch: { newPerDay: 20 } });
       await start(repo, user.id, a2);
-      expect(await pushes()).toEqual([ru.pushDaily(2, 1)]);
+      expect(await pushes()).toEqual([ru.pushDaily(0, 1, 2)]);
     });
 
     it("adds the reviews due today to the new words", async () => {
@@ -116,7 +132,7 @@ describe("reminders tick", () => {
       await start(repo, user.id, ids.slice(0, 2));
       await repo.updateCardStmt((await repo.getCardByNote(user.id, ids[0]!, "tt_ru"))!.id, { ...gradedMem(local(25, 12, 0)), due: local(30, 7, 0) }).run();
       // One review and the one word that is left.
-      expect(await pushes()).toEqual([ru.pushDaily(2, 1)]);
+      expect(await pushes()).toEqual([ru.pushDaily(1, 1, 1)]);
     });
 
     it("is reminded of the reviews alone when the checked levels are started whole", async () => {
@@ -124,7 +140,7 @@ describe("reminders tick", () => {
       const { repo, user } = await learner();
       await start(repo, user.id, ids);
       await repo.updateCardStmt((await repo.getCardByNote(user.id, ids[0]!, "tt_ru"))!.id, { ...gradedMem(local(25, 12, 0)), due: local(30, 7, 0) }).run();
-      expect(await pushes()).toEqual([ru.pushDaily(1, 1)]);
+      expect(await pushes()).toEqual([ru.pushDaily(1, 1, 0)]);
     });
 
     it("is not reminded when today's limit of new words is already used up", async () => {
@@ -144,7 +160,7 @@ describe("reminders tick", () => {
       await catalog(3);
       const { repo, user } = await learner({ patch: { newPerDay: 20 } });
       await repo.insertNotes(await repo.customDeck(user.id, local(30, 8, 0)), [note("рәхмәт"), note("зинһар")]);
-      expect(await pushes()).toEqual([ru.pushDaily(5, 2)]);
+      expect(await pushes()).toEqual([ru.pushDaily(0, 1, 5)]);
     });
 
     it("is reminded of own words alone when the checked levels are started whole", async () => {
@@ -152,11 +168,11 @@ describe("reminders tick", () => {
       const { repo, user } = await learner();
       await start(repo, user.id, ids);
       const own = await repo.insertNotes(await repo.customDeck(user.id, local(30, 8, 0)), [note("рәхмәт"), note("зинһар"), note("әйе")]);
-      expect(await pushes()).toEqual([ru.pushDaily(3, 1)]);
+      expect(await pushes()).toEqual([ru.pushDaily(0, 1, 3)]);
       // An own word that is started is no new word.
       await start(repo, user.id, own.slice(0, 2));
       await dueAgain(repo, user.id);
-      expect(await pushes(local(30, 9, 2))).toEqual([ru.pushDaily(1, 1)]);
+      expect(await pushes(local(30, 9, 2))).toEqual([ru.pushDaily(0, 1, 1)]);
       await start(repo, user.id, own.slice(2));
       await dueAgain(repo, user.id);
       expect(await pushes(local(30, 9, 3))).toEqual([]);
@@ -170,7 +186,7 @@ describe("reminders tick", () => {
       for (const id of ids.slice(1)) await repo.insertCard(user.id, id, "ru_tt", gradedMem(local(29, 12, 0)));
       await repo.insertCard(user.id, ids[0]!, "ru_tt", newMem(local(28, 12, 0)), "2026-09-28");
       await start(repo, user.id, ids);
-      expect(await pushes()).toEqual([ru.pushDaily(1, 1)]);
+      expect(await pushes()).toEqual([ru.pushDaily(0, 1, 1)]);
       // A learner who asks for Tatar → Russian only has nothing new: the card that waits is of the other direction.
       await dueAgain(repo, user.id, { direction: "tt_ru" });
       expect(await pushes(local(30, 9, 2))).toEqual([]);
@@ -182,7 +198,7 @@ describe("reminders tick", () => {
       const { repo, user } = await learner({ patch: { direction: "both" } });
       for (const id of ids.slice(0, 2)) await repo.insertCard(user.id, id, "ru_tt", newMem(local(29, 12, 0)), "2026-09-29");
       await start(repo, user.id, ids.slice(0, 2));
-      expect(await pushes()).toEqual([ru.pushDaily(4, 2)]);
+      expect(await pushes()).toEqual([ru.pushDaily(0, 1, 4)]);
     });
 
     it("a catalog word the learner owns a copy of is no new word of its level: with the rest started and the copy started, no push (ruling T6a)", async () => {
@@ -191,7 +207,7 @@ describe("reminders tick", () => {
       await start(repo, user.id, ids.slice(0, 2));
       const [own] = await repo.insertNotes(await repo.customDeck(user.id, local(30, 8, 0)), [note("сүз1х3")]);
       // The copy itself is a new word, once: not once as an own word and once more as a word of A1.
-      expect(await pushes()).toEqual([ru.pushDaily(1, 1)]);
+      expect(await pushes()).toEqual([ru.pushDaily(0, 1, 1)]);
       await start(repo, user.id, [own!]);
       await dueAgain(repo, user.id);
       expect(await pushes(local(30, 9, 2))).toEqual([]);
@@ -204,13 +220,13 @@ describe("reminders tick", () => {
       await start(repo, user.id, [...ids, ...own]);
       expect(await pushes()).toEqual([]);
       await dueAgain(repo, user.id, { direction: "ru_tt" });
-      expect(await pushes(local(30, 9, 2))).toEqual([ru.pushDaily(3, 1)]);
+      expect(await pushes(local(30, 9, 2))).toEqual([ru.pushDaily(0, 1, 3)]);
       await dueAgain(repo, user.id, { direction: "both" });
-      expect(await pushes(local(30, 9, 3))).toEqual([ru.pushDaily(3, 1)]);
+      expect(await pushes(local(30, 9, 3))).toEqual([ru.pushDaily(0, 1, 3)]);
       // The reverse card of one of them exists and waits: it is counted as that card, the other two as words never shown that way.
       await repo.insertCard(user.id, own[0]!, "ru_tt", newMem(local(29, 12, 0)), "2026-09-29");
       await dueAgain(repo, user.id);
-      expect(await pushes(local(30, 9, 4))).toEqual([ru.pushDaily(3, 1)]);
+      expect(await pushes(local(30, 9, 4))).toEqual([ru.pushDaily(0, 1, 3)]);
       // Once every own word is started both ways nothing is new.
       await repo.updateCardStmt((await repo.getCardByNote(user.id, own[0]!, "ru_tt"))!.id, gradedMem(local(29, 12, 0))).run();
       for (const id of own.slice(1)) await repo.insertCard(user.id, id, "ru_tt", gradedMem(local(29, 12, 0)));
@@ -222,7 +238,7 @@ describe("reminders tick", () => {
       await seedCatalog(env.DB, [{ level: 1, word: "китап", topic: 2 }, { level: 1, word: "су", topic: 8 }, { level: 1, word: "юл", topic: 10 }]);
       // Numerals only, and the topic «Еда»: of the three nouns the session would give none.
       await learner({ patch: { posGroups: 1 << 5, newMode: "topic", topicNo: 8 } });
-      expect(await pushes()).toEqual([ru.pushDaily(3, 1)]);
+      expect(await pushes()).toEqual([ru.pushDaily(0, 1, 3)]);
     });
   });
 

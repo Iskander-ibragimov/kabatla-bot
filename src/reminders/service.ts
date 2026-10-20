@@ -52,8 +52,8 @@ const button = (text: string) => ({ inline_keyboard: [[{ text, callback_data: "l
  * Runs every minute. Candidates come from indexed columns (next_daily_at, next_evening_at, last_review_at),
  * so only due users are read. The same first batch deletes previews that can no longer be confirmed and old finished jobs. The reviews due today are counted in the index idx_cards_user_state_due alone, one row
  * per due card: a deck, once open, is never closed, so the deck of a card is not looked up. Users are marked before sending (at-most-once), so a crashed or slow tick never repeats a push.
- * The daily push counts the reviews due today and the new words today's limit still allows, of those that wait
- * (NEW_WAITING). The bot checks no level by itself: a learner whose checked levels are started whole, with nothing
+ * The daily push counts the reviews due today and, apart from them, the new words today's limit still allows, of those
+ * that wait (NEW_WAITING); with no review due and new words waiting it calls to learn them. The bot checks no level by itself: a learner whose checked levels are started whole, with nothing
  * due and no word of their own to learn, gets no push.
  */
 export async function tick(d: TickDeps): Promise<{ sent: number }> {
@@ -85,10 +85,10 @@ export async function tick(d: TickDeps): Promise<{ sent: number }> {
 
   for (const r of daily!.results as { id: number; chat_id: number; lang: Lang; tz_offset_min: number; remind_at: string; due_n: number; new_n: number }[]) {
     marks.push(repo.updateUserStmt(r.id, { nextDailyAt: nextOccurrence(r.tz_offset_min, r.remind_at, now) }));
-    const n = r.due_n + r.new_n;
-    if (n > 0) {
+    // The reviews due and the new words are named apart; the minutes are those of the reviews, as in bot-anki.
+    if (r.due_n + r.new_n > 0) {
       const t = dict(r.lang);
-      plan.push({ userId: r.id, push: { chat_id: r.chat_id, text: t.pushDaily(n, Math.max(1, Math.ceil(n / 3))), reply_markup: button(t.startBtn), parse_mode: "HTML" } });
+      plan.push({ userId: r.id, push: { chat_id: r.chat_id, text: t.pushDaily(r.due_n, Math.max(1, Math.ceil(r.due_n / 3)), r.new_n), reply_markup: button(t.startBtn), parse_mode: "HTML" } });
     }
   }
   for (const r of evening!.results as { id: number; chat_id: number; lang: Lang; tz_offset_min: number; streak: number; last_study_day: string | null }[]) {
