@@ -4,7 +4,7 @@ import { checkUsage } from "./admin/service";
 import { createBot } from "./bot/bot";
 import { Repo } from "./db/repo";
 import { type Env, parseEnv } from "./env";
-import { tick } from "./reminders/service";
+import { recordTickFailure, tick } from "./reminders/service";
 import { TgClient } from "./tg/client";
 
 /** getMe result cached per isolate so each webhook doesn't spend a subrequest on it. */
@@ -34,10 +34,12 @@ export default {
     const tg = new TgClient(config.botToken);
     const now = Date.now();
     try {
-      await tick({ repo, tg, now });
+      await tick({ repo, tg, now, adminTgId: config.adminTgId });
       await checkUsage(repo, tg, config.adminTgId, now);
     } catch (e) {
+      // The invocation still ends «ok»: the error is logged, written to tick_log and sent to the admin (once an hour).
       console.error("tick failed", e);
+      await recordTickFailure(repo, tg, config.adminTgId, now, e).catch((e2) => console.error("tick log failed", e2));
     }
   },
 } satisfies ExportedHandler<Env>;

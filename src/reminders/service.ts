@@ -1,17 +1,57 @@
 import { PREVIEW_TTL_MS } from "../content/service";
-import { type Asked, type Lang, type Repo, deckHasUnshown, newCardRows, unshownInTail } from "../db/repo";
+import { type Asked, type Lang, type Repo, type TickLogRow, deckHasUnshown, newCardRows, unshownInTail } from "../db/repo";
 import { dict } from "../i18n";
 import { claim, completeMany, fail } from "../jobs/queue";
 import { LEVELS } from "../levels/scale";
 import { type TgApi, tgErrorInfo } from "../tg/client";
 import { EVENING_AT, localDay, nextOccurrence } from "../users/service";
 
-export interface TickDeps { repo: Repo; tg: TgApi; now: number }
+/** `adminTgId`: the chat told of failed sends (at most once an hour); without it nobody is told. */
+export interface TickDeps { repo: Repo; tg: TgApi; now: number; adminTgId?: number }
 
 const MAX_SENDS = 35;
 /** A finished job is kept this long (the admin screen counts the failures of the last day), then deleted. */
 const DONE_JOBS_KEPT_MS = 7 * 86_400_000;
 const EVENING_SCAN = 100;
+/** The tick log keeps a week (migration 0012). */
+const TICK_LOG_KEPT_MS = 7 * 86_400_000;
+/** The admin is told of failures at most once in this span. */
+const ALERT_EVERY_MS = 3_600_000;
+const ERROR_MAX = 300;
+
+/**
+ * An error as the tick log and the admin's alert keep it: Telegram's description or the exception's message, cut to
+ * ERROR_MAX characters. A run of six digits or more becomes «…», so no chat id gets into it.
+ */
+export function cleanError(e: unknown): string {
+  const info = tgErrorInfo(e);
+  const raw = info?.description || (e instanceof Error ? e.message : String(e));
+  return raw.replace(/\d{6,}/g, "…").slice(0, ERROR_MAX);
+}
+
+const hhmmUtc = (now: number) => new Date(now).toISOString().slice(11, 16);
+
+/** Tells the admin, unless they were told within the last hour; true when the message went out. Errors are swallowed. */
+async function alertAdmin(repo: Repo, tg: TgApi, adminTgId: number, now: number, text: string): Promise<boolean> {
+  try {
+    if (await repo.tickAlertedSince(now - ALERT_EVERY_MS)) return false;
+    await tg.call("sendMessage", { chat_id: adminTgId, text });
+    return true;
+  } catch (e) {
+    console.error("tick alert failed", cleanError(e));
+    return false;
+  }
+}
+
+/**
+ * The tick threw (the catch of `scheduled`, src/index.ts): a row of the tick log with the message, and the admin is
+ * told, at most once an hour.
+ */
+export async function recordTickFailure(repo: Repo, tg: TgApi, adminTgId: number, now: number, e: unknown): Promise<void> {
+  const firstError = cleanError(e);
+  const alerted = await alertAdmin(repo, tg, adminTgId, now, `⚠️ Тик напоминаний упал (${hhmmUtc(now)} UTC):\n${firstError}`);
+  await repo.tickLogStmt(now, { dailySelected: 0, dailyPlanned: 0, eveningPlanned: 0, stepPlanned: 0, sent: 0, failed: 0, firstError }, alerted).run();
+}
 
 /* SQL fragments; ?1 = now (ms). Local day uses the 04:00 boundary. */
 const NOW = "CAST(?1 AS INTEGER)";
@@ -55,6 +95,8 @@ const button = (text: string) => ({ inline_keyboard: [[{ text, callback_data: "l
  * The daily push counts the reviews due today and, apart from them, the new words today's limit still allows, of those
  * that wait (NEW_WAITING); with no review due and new words waiting it calls to learn them. The bot checks no level by itself: a learner whose checked levels are started whole, with nothing
  * due and no word of their own to learn, gets no push.
+ * A tick that selected, planned or failed anything leaves a row in tick_log, in its last batch; with failed sends the
+ * admin is told (at most once an hour), which costs one D1 call more.
  */
 export async function tick(d: TickDeps): Promise<{ sent: number }> {
   const { repo, tg, now } = d;
@@ -76,12 +118,13 @@ export async function tick(d: TickDeps): Promise<{ sent: number }> {
         AND EXISTS (SELECT 1 FROM cards c WHERE c.user_id = u.id AND c.state IN ('learning','relearning') AND c.due <= ${NOW})
       ORDER BY u.id LIMIT ${MAX_SENDS}`).bind(now),
     // Housekeeping rides in the batch the tick makes anyway: expired previews and old finished jobs go.
-    ...repo.purgeStmts(now - PREVIEW_TTL_MS, now - DONE_JOBS_KEPT_MS),
+    ...repo.purgeStmts(now - PREVIEW_TTL_MS, now - DONE_JOBS_KEPT_MS, now - TICK_LOG_KEPT_MS),
   ]);
 
   const marks: D1PreparedStatement[] = [];
   const plan: Planned[] = [];
   const room = () => MAX_SENDS - plan.length;
+  const log: TickLogRow = { dailySelected: daily!.results.length, dailyPlanned: 0, eveningPlanned: 0, stepPlanned: 0, sent: 0, failed: 0, firstError: null };
 
   for (const r of daily!.results as { id: number; chat_id: number; lang: Lang; tz_offset_min: number; remind_at: string; due_n: number; new_n: number }[]) {
     marks.push(repo.updateUserStmt(r.id, { nextDailyAt: nextOccurrence(r.tz_offset_min, r.remind_at, now) }));
@@ -89,6 +132,7 @@ export async function tick(d: TickDeps): Promise<{ sent: number }> {
     if (r.due_n + r.new_n > 0) {
       const t = dict(r.lang);
       plan.push({ userId: r.id, push: { chat_id: r.chat_id, text: t.pushDaily(r.due_n, Math.max(1, Math.ceil(r.due_n / 3)), r.new_n), reply_markup: button(t.startBtn), parse_mode: "HTML" } });
+      log.dailyPlanned++;
     }
   }
   for (const r of evening!.results as { id: number; chat_id: number; lang: Lang; tz_offset_min: number; streak: number; last_study_day: string | null }[]) {
@@ -98,12 +142,14 @@ export async function tick(d: TickDeps): Promise<{ sent: number }> {
     if (!atRisk) continue;
     const t = dict(r.lang);
     plan.push({ userId: r.id, push: { chat_id: r.chat_id, text: t.pushEvening(r.streak), reply_markup: button(t.saveStreakBtn), parse_mode: "HTML" } });
+    log.eveningPlanned++;
   }
   for (const r of step!.results as { id: number; chat_id: number; lang: Lang; waiting: number }[]) {
     if (room() <= 0) break;
     marks.push(repo.updateUserStmt(r.id, { lastStepPingAt: now }));
     const t = dict(r.lang);
     plan.push({ userId: r.id, push: { chat_id: r.chat_id, text: t.pushStep(r.waiting), reply_markup: button(t.continueBtn), parse_mode: "HTML" } });
+    log.stepPlanned++;
   }
   if (marks.length) await repo.batch(marks);
 
@@ -124,8 +170,14 @@ export async function tick(d: TickDeps): Promise<{ sent: number }> {
         after.push(enqueueStmt(db, p, limitedUntil));
         return "limited";
       }
-      if (info?.code === 403 && userId != null) after.push(repo.updateUserStmt(userId, { active: false }));
-      else console.error("push failed", info ?? String(e));
+      if (info?.code === 403) {
+        if (userId != null) after.push(repo.updateUserStmt(userId, { active: false }));
+        return "error";
+      }
+      // Any other refusal or exception is counted, and the first one kept, for the tick log and the admin.
+      log.failed++;
+      log.firstError ??= cleanError(e);
+      console.error("push failed", info ?? String(e));
       return "error";
     }
   };
@@ -146,6 +198,12 @@ export async function tick(d: TickDeps): Promise<{ sent: number }> {
       }
     }
     await completeMany(db, done, now);
+  }
+  log.sent = sent;
+  if (log.dailySelected + log.dailyPlanned + log.eveningPlanned + log.stepPlanned + log.failed > 0) {
+    const alerted = log.failed > 0 && d.adminTgId != null
+      && await alertAdmin(repo, tg, d.adminTgId, now, `⚠️ Напоминания (${hhmmUtc(now)} UTC): не отправлено ${log.failed}, отправлено ${sent}, в плане ${log.dailyPlanned + log.eveningPlanned + log.stepPlanned}.\nПервая ошибка: ${log.firstError}`);
+    after.push(repo.tickLogStmt(now, log, alerted));
   }
   if (after.length) await repo.batch(after);
   return { sent };

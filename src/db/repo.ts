@@ -54,6 +54,19 @@ export interface User {
   newCursors: string | null;
 }
 
+/** What one tick did (table tick_log): the users selected for the daily reminder, the pushes planned, sent and failed. */
+export interface TickLogRow {
+  dailySelected: number;
+  dailyPlanned: number;
+  eveningPlanned: number;
+  stepPlanned: number;
+  sent: number;
+  /** Sends refused with neither 429 nor 403, or that threw. */
+  failed: number;
+  /** The first failure's description, cleaned (reminders/service.ts `cleanError`). */
+  firstError: string | null;
+}
+
 export type NoteInput = Pick<NoteFields, "word" | "transcription" | "pos" | "translation" | "exampleTt" | "exampleRu"> &
   Partial<Pick<NoteFields, "exampleSrc" | "audioFileId" | "sourceUrl">> & {
     /** Catalog position: only catalog notes have it; own and AI notes leave all three out. */
@@ -271,11 +284,36 @@ export class Repo {
    * confirmed) and finished jobs done before `jobsBefore` are deleted. Each statement goes by an index
    * (idx_previews_created, idx_jobs_pending) and reads only the rows it deletes.
    */
-  purgeStmts(previewsBefore: number, jobsBefore: number): D1PreparedStatement[] {
+  purgeStmts(previewsBefore: number, jobsBefore: number, ticksBefore: number): D1PreparedStatement[] {
     return [
       this.db.prepare("DELETE FROM previews WHERE created_at < ?").bind(previewsBefore),
       this.db.prepare("DELETE FROM jobs WHERE done_at < ?").bind(jobsBefore),
+      this.db.prepare("DELETE FROM tick_log WHERE at < ?").bind(ticksBefore),
     ];
+  }
+
+  /* the tick log (migration 0012) */
+  tickLogStmt(at: number, r: TickLogRow, alerted: boolean): D1PreparedStatement {
+    return this.db.prepare(
+      `INSERT INTO tick_log (at, daily_selected, daily_planned, evening_planned, step_planned, sent, failed, first_error, alerted)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(at, r.dailySelected, r.dailyPlanned, r.eveningPlanned, r.stepPlanned, r.sent, r.failed, r.firstError, alerted ? 1 : 0);
+  }
+  /** Whether the admin was told of a tick after `since`: the alert comes at most once in that span. One D1 call. */
+  async tickAlertedSince(since: number): Promise<boolean> {
+    return (await this.db.prepare("SELECT 1 AS x FROM tick_log WHERE at > ? AND alerted = 1 LIMIT 1").bind(since).first()) != null;
+  }
+  /** The last `limit` rows of the tick log, newest first. */
+  async recentTicks(limit: number): Promise<(TickLogRow & { at: number })[]> {
+    const { results } = await this.db.prepare(
+      `SELECT at, daily_selected, daily_planned, evening_planned, step_planned, sent, failed, first_error
+       FROM tick_log ORDER BY at DESC, id DESC LIMIT ?`,
+    ).bind(limit).all<Record<string, number | string | null>>();
+    return results.map((r) => ({
+      at: r.at as number, dailySelected: r.daily_selected as number, dailyPlanned: r.daily_planned as number,
+      eveningPlanned: r.evening_planned as number, stepPlanned: r.step_planned as number, sent: r.sent as number,
+      failed: r.failed as number, firstError: r.first_error as string | null,
+    }));
   }
 
   /* decks and notes */

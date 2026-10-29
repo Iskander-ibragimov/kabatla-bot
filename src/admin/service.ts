@@ -25,7 +25,23 @@ export async function adminStatsText(repo: Repo, now: number): Promise<string> {
   const complaints = reports.length
     ? `Жалобы ⚑ (последние ${reports.length}):\n${reports.map((x) => `• <b>${esc(x.word)}</b> — ${esc(x.translation)} · ${x.count}`).join("\n")}`
     : "Жалобы ⚑: нет";
-  return `🛠 <b>Админ</b> · ${day} (UTC)\n\nПользователей: ${r!.users}\nАктивных за сутки: ${r!.active}\nНовых за сутки: ${r!.new_users}\nПовторов сегодня: ${r!.reviews}\nЗаписей в D1 (оценка): ${r!.rows} · ${pct}% лимита\nОшибок задач за сутки: ${r!.failed}\n\n${complaints}`;
+  return `🛠 <b>Админ</b> · ${day} (UTC)\n\nПользователей: ${r!.users}\nАктивных за сутки: ${r!.active}\nНовых за сутки: ${r!.new_users}\nПовторов сегодня: ${r!.reviews}\nЗаписей в D1 (оценка): ${r!.rows} · ${pct}% лимита\nОшибок задач за сутки: ${r!.failed}\n\n${await ticksText(repo)}\n\n${complaints}`;
+}
+
+const TICKS_SHOWN = 5;
+
+/**
+ * The last ticks that did something (table tick_log), newest first: the time in UTC, then selected / planned / sent /
+ * failed — the users the daily query selected, the pushes planned (daily, evening, step) — and the first error.
+ */
+async function ticksText(repo: Repo): Promise<string> {
+  const ticks = await repo.recentTicks(TICKS_SHOWN);
+  const title = `Напоминания (последние ${TICKS_SHOWN} тиков с делом)`;
+  if (!ticks.length) return `${title}: нет`;
+  const at = (ms: number) => { const iso = new Date(ms).toISOString(); return `${iso.slice(8, 10)}.${iso.slice(5, 7)} ${iso.slice(11, 16)}`; };
+  const lines = ticks.map((t) =>
+    `• ${at(t.at)} — ${t.dailySelected}/${t.dailyPlanned + t.eveningPlanned + t.stepPlanned}/${t.sent}/${t.failed}${t.firstError ? ` · ${esc(t.firstError)}` : ""}`);
+  return `${title}, UTC · выбрано/в плане/отправлено/ошибок:\n${lines.join("\n")}`;
 }
 
 /** Warns the admin once a day when D1 writes pass 80% of the free limit. */
