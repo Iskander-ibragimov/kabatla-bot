@@ -12,3 +12,7 @@ migrations_dir = "migrations"
 
 [triggers]
 crons = ["* * * * *"]
+
+# Workers Logs: the console output of the worker, in the Cloudflare dashboard (Workers → kabatla-bot → Logs).
+[observability]
+enabled = true
